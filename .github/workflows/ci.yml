@@ -1,0 +1,51 @@
+# Public dev CI — mirror of the private origin's gate (.gitea/workflows/ci.yml;
+# keep the two in sync by hand).  Every job is guarded to GitHub because the
+# private origin also reads .github/workflows/ (its runners would duplicate the
+# gitea CI or queue forever on labels it doesn't have).
+name: ci
+# push is branch-scoped: tag pushes already run the full 4-platform release
+# pipeline (release.yml) — running ci there too would double-build.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  build-and-lint:
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Content-policy lint
+        run: sh scripts/check_tree.sh
+      - name: Commit-message lint
+        run: sh scripts/check_commit_range.sh HEAD
+      - name: Toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake g++ make libsdl2-dev libasound2-dev
+          cmake --version | head -1; g++ --version | head -1
+      - name: Configure
+        run: cmake --preset release -DOLDUVAI_WERROR=ON
+      - name: Build
+        run: cmake --build --preset release --parallel 4 --target all tests
+      - name: Test
+        run: ctest --preset release
+
+  sanitize:
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake g++ make libsdl2-dev libasound2-dev
+      - name: Configure
+        run: cmake --preset asan
+      - name: Build
+        run: cmake --build --preset asan --parallel 4 --target all tests
+      - name: Test
+        run: ctest --preset asan

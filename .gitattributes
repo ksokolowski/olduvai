@@ -1,0 +1,23 @@
+# ── line endings ────────────────────────────────────────────────────────
+# Normalize text to LF in the repo; shell scripts MUST stay LF on checkout
+# (a CRLF .sh breaks MSYS bash on the Windows release job and Windows
+# clones with autocrlf).  Binary assets are marked so autocrlf never
+# touches them.
+* text=auto
+*.sh text eol=lf
+scripts/hooks/* text eol=lf
+*.png binary
+*.ico binary
+*.icns binary
+*.ttf binary
+
+# ── public-export exclusions ────────────────────────────────────────────
+# Paths excluded from any public export (`git archive` / mirror publish):
+# internal docs, the project-local agent config, and the private-origin
+# CI workflows (inert on GitHub, but noise + infra disclosure) — none
+# ship in a public release.
+docs/internal/ export-ignore
+docs/internal/** export-ignore
+CLAUDE.md export-ignore
+.gitea/ export-ignore
+.gitea/** export-ignore
