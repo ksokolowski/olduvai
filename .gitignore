@@ -1,0 +1,16 @@
+# build trees (every flavour lives under build/<preset>)
+build/
+__pycache__/
+*.o
+*.a
+compile_commands.json
+.cache/
+.DS_Store
+
+# the user's game files must never be committed (content policy)
+game_data
+
+# local packaging artifacts (release builds come from CI)
+*.dmg
+*.AppImage
+olduvai-*-windows-x86_64.zip

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Embedded into the BARE CLI binary as a __TEXT,__info_plist section
+     (see CMakeLists).  Without it macOS has no bundle metadata for the
+     process and names the app menu / Dock after the executable file
+     ("olduvai", lowercase).  The .app bundle has its own Info.plist. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Olduvai</string>
+    <key>CFBundleDisplayName</key>
+    <string>Olduvai</string>
+    <key>CFBundleIdentifier</key>
+    <string>dev.olduvai.engine</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@PROJECT_VERSION@</string>
+</dict>
+</plist>

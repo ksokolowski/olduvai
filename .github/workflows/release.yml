@@ -1,0 +1,180 @@
+# Release pipeline (tag-triggered platform builds; see the internal design notes).
+# Tag v* → 4 ctest-gated platform builds → draft GitHub Release with
+# SHA256SUMS.  workflow_dispatch runs the builds without publishing.
+# Unsigned artifacts by decision (README documents the launch workarounds).
+# server_url guards: the private origin reads .github/workflows/ too.
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-22.04   # oldest runner = lowest glibc floor for the AppImage
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake g++ make libsdl2-dev libasound2-dev \
+                                      libfluidsynth3 imagemagick file
+      - name: Configure
+        run: cmake --preset release
+      - name: Build
+        run: cmake --build --preset release --parallel 4 --target all tests
+      - name: Test
+        run: ctest --preset release
+      - name: Package AppImage
+        env:
+          OLDUVAI_REQUIRE_FLUIDSYNTH: "1"   # release must bundle GM music
+        run: |
+          bash packaging/build_appimage_linux.sh
+          ver=$(sed -n 's/^ *VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt | head -1)
+          mv olduvai-x86_64.AppImage "olduvai-${ver}-linux-x86_64.AppImage"
+      - name: Manifest (everything that ships inside)
+        run: |
+          art=$(ls olduvai-*-linux-x86_64.AppImage)
+          "./${art}" --appimage-extract >/dev/null
+          find squashfs-root -type f -o -type l | sort
+          rm -rf squashfs-root
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: olduvai-*-linux-x86_64.AppImage
+          if-no-files-found: error
+
+  # MSVC (the shipped Windows toolchain): /MT static CRT — no VC++
+  # redistributable — with SDL2 from the official VC package (pinned) shipped
+  # as SDL2.dll in the zip.  msvc-dev-cmd loads the VS dev env on the runner.
+  windows:
+    if: github.server_url == 'https://github.com'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Third-party action: pinned by commit (v1.13.0) — a mutable tag in
+      # the release pipeline would be a supply-chain hole.
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with:
+          arch: x64
+      - name: SDL2 (VC devel, pinned)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-devel-2.32.10-VC.zip -OutFile sdl2.zip
+          $h = (Get-FileHash sdl2.zip -Algorithm SHA256).Hash
+          if ($h -ne 'AF347939395A58B365846AAEA27391E69F9EC9D4DD650D6AC40802159B418A6E') { throw "SDL2 VC checksum mismatch: $h" }
+          Expand-Archive sdl2.zip -DestinationPath .
+      - name: Configure
+        shell: cmd
+        run: cmake --preset release -G Ninja -DCMAKE_PREFIX_PATH=%CD%\SDL2-2.32.10\cmake
+      - name: Build
+        shell: cmd
+        run: cmake --build --preset release --parallel 4 --target all tests
+      - name: Test
+        shell: cmd
+        run: ctest --preset release
+      - name: Package zip
+        shell: bash
+        run: sh packaging/package_windows.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: olduvai-*-windows-x86_64.zip
+          if-no-files-found: error
+
+  # ONE universal dmg for every Mac (arm64 + x86_64 fat binary).  SDL2 is
+  # built from source universal (version-pinned; Homebrew bottles are
+  # single-arch).  ctest runs the arm64 slice natively here; the x86_64
+  # slice is gated by the macos-intel-test job below.
+  macos:
+    if: github.server_url == 'https://github.com'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: brew install dylibbundler
+      - name: Package universal dmg
+        run: sh packaging/make_dmg_macos.sh --universal
+      - name: Test (arm64 slice, native)
+        run: |
+          cmake --build build/universal --parallel 3 --target tests
+          ctest --test-dir build/universal --output-on-failure
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: olduvai-*-macos-universal.dmg
+          if-no-files-found: error
+
+  # Pure test gate on real Intel silicon — no artifact.  Native brew SDL2
+  # build; proves the engine on x86_64 hardware (the shipped dmg's x86_64
+  # slice is the same sources at the same flags).
+  macos-intel-test:
+    if: github.server_url == 'https://github.com'
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: brew install sdl2
+      - name: Configure
+        run: cmake --preset release
+      - name: Build
+        run: cmake --build --preset release --parallel 3 --target all tests
+      - name: Test
+        run: ctest --preset release
+
+  release:
+    if: github.server_url == 'https://github.com' && startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, macos, macos-intel-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version gate (tag must match CMake VERSION)
+        run: sh scripts/check_release_version.sh "${GITHUB_REF_NAME}"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Release notes from CHANGELOG
+        run: |
+          base="${GITHUB_REF_NAME#v}"; base="${base%%-*}"
+          awk -v ver="$base" '
+            $0 ~ "^## " ver " " { f=1; next }
+            /^## / { f=0 }
+            f' CHANGELOG.md > body.md
+          if ! grep -q '[^[:space:]]' body.md; then
+            echo "_See CHANGELOG.md for details._" > body.md
+          fi
+          cat >> body.md <<'EOF'
+
+          ---
+          **You need your own copy of the original game** — e.g.
+          [*Prehistorik 1+2* on GOG.com](https://www.gog.com/game/prehistorik_12).
+          Olduvai ships no game content.
+
+          Binaries are **not code-signed**: on macOS right-click the app and
+          choose *Open* on first launch; on Windows SmartScreen click
+          *More info → Run anyway*.  Verify downloads against
+          `SHA256SUMS.txt`.
+
+          Olduvai is GPL-3.0-or-later; the corresponding source for this
+          release is the *Source code* archive attached below.  Bundled
+          third-party components and their licenses: `licenses/` inside
+          each artifact (see `THIRD-PARTY-NOTICES.md`).
+          EOF
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --draft \
+            --title "Olduvai ${GITHUB_REF_NAME}" \
+            --notes-file body.md \
+            dist/*

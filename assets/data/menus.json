@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "_comment": "Canonical menu model shared by both engines. Structure/labels/value-domains are data; actions are native callbacks keyed by `action` id. Cheats/dev keys are session-only (never persisted).",
+  "screens": {
+    "main": {
+      "header": "OLDUVAI",
+      "items": [
+        { "id": "start", "type": "action", "label": "Start Game", "action": "start_game", "key": "menu.start_level", "values": [1, 2, 3, 4, 5, 6, 7], "value_labels": ["Level 1", "Level 2", "Level 3", "Level 4", "Level 5", "Level 6", "Level 7"] },
+        { "id": "continue", "type": "action", "label": "Continue", "action": "continue", "hint": "load save" },
+        { "id": "options", "type": "submenu", "label": "Options", "target": "options" },
+        { "id": "quit", "type": "action", "label": "Quit to Desktop", "action": "quit_desktop" }
+      ]
+    },
+    "bug_report": {
+      "header": "BUG REPORT",
+      "items": [
+        { "id": "tag", "type": "choice", "label": "Tag", "key": "report.tag", "values": ["collision", "visual", "gameplay", "entity", "audio", "crash", "other"] },
+        { "id": "repro", "type": "choice", "label": "Repro", "key": "report.repro", "values": ["every", "sometimes", "once", "unknown"], "value_labels": ["Every", "Sometimes", "Once", "Unknown"] },
+        { "id": "description", "type": "text", "label": "Notes", "key": "report.description" },
+        { "id": "back", "type": "back", "label": "Back" }
+      ]
+    },
+    "options": {
+      "header": "OPTIONS",
+      "items": [
+        { "id": "preset", "type": "choice", "label": "Style", "key": "preset", "values": ["dos", "hd", "hd-43"], "value_labels": ["Classic DOS", "Enhanced HD", "Enhanced 4:3"] },
+        { "id": "audio", "type": "submenu", "label": "Audio", "target": "audio" },
+        { "id": "video", "type": "submenu", "label": "Video", "target": "video" },
+        { "id": "enhancements", "type": "submenu", "label": "Enhancements", "target": "enhancements" },
+        { "id": "back", "type": "back", "label": "Back" }
+      ]
+    },
+    "audio": {
+      "header": "AUDIO",
+      "items": [
+        { "id": "music_device", "type": "choice", "label": "Music device", "key": "music_device", "values": ["auto", "mt32-builtin", "gm-builtin", "gm-host", "opl", "none"], "value_labels": ["Auto", "MT-32", "GM", "GM (host)", "AdLib", "Off"], "hint": "applies now" },
+        { "id": "sfx_backend", "type": "choice", "label": "SFX backend", "key": "sfx_backend", "values": ["auto", "opl", "sb-dac", "mt32-sfx", "gm-sfx", "midi"], "value_labels": ["Auto", "OPL", "SB DAC", "MT-32", "GM", "MIDI"], "hint": "applies now" },
+        { "id": "music_volume", "type": "slider", "label": "Music volume", "key": "music_volume", "min": 0, "max": 100, "step": 5 },
+        { "id": "sfx_volume", "type": "slider", "label": "SFX volume", "key": "sfx_volume", "min": 0, "max": 100, "step": 5 },
+        { "id": "back", "type": "back", "label": "Back" }
+      ]
+    },
+    "video": {
+      "header": "VIDEO",
+      "items": [
+        { "id": "hd_profile", "type": "choice", "label": "HD profile", "key": "hd_profile", "values": ["native", "retro", "smooth", "eagle", "xbr", "mmpx", "omniscale"], "value_labels": ["Native", "Retro", "Smooth", "Eagle", "xBR", "MMPX", "OmniScale"], "hint": "live" },
+        { "id": "aspect", "type": "choice", "label": "Aspect", "key": "aspect", "values": ["keep","4:3","stretch"], "value_labels": ["Keep","4:3","Stretch"], "hint": "live" },
+        { "id": "render_scale", "type": "choice", "label": "Render scale", "key": "render_scale", "values": [2, 4], "restart": true, "hint": "applies now" },
+        { "id": "fullscreen", "type": "toggle", "label": "Fullscreen", "key": "fullscreen" },
+        { "id": "back", "type": "back", "label": "Back" }
+      ]
+    },
+    "enhancements": {
+      "header": "ENHANCEMENTS",
+      "items": [
+        { "id": "all_effects", "type": "action", "label": "All effects", "action": "enhance_all", "hint": "set / clear" },
+        { "id": "smooth_motion", "type": "toggle", "label": "Smooth motion", "key": "enhance.smooth_motion" },
+        { "id": "hd_text", "type": "toggle", "label": "HD text", "key": "enhance.hd_text" },
+        { "id": "hud_overlay", "type": "toggle", "label": "HUD overlay", "key": "enhance.hud_overlay" },
+        { "id": "cave_paintings", "type": "submenu", "label": "Cave Paintings", "target": "cave_paintings", "hint": "4 details" },
+        { "id": "back", "type": "back", "label": "Back" }
+      ]
+    },
+    "cave_paintings": {
+      "header": "CAVE PAINTINGS",
+      "items": [
+        { "id": "all", "type": "action", "label": "All", "action": "cave_paintings_all", "hint": "set / clear" },
+        { "id": "cinematic_cue", "type": "toggle", "label": "Cinematic cue", "key": "enhance.cinematic_cue" },
+        { "id": "fluid_bubbles", "type": "toggle", "label": "Fluid bubbles", "key": "enhance.fluid_bubbles" },
+        { "id": "secret_slide", "type": "toggle", "label": "Secret slide", "key": "enhance.secret_slide" },
+        { "id": "descent_pan", "type": "toggle", "label": "Descent pan", "key": "enhance.descent_pan" },
+        { "id": "back", "type": "back", "label": "Back" }
+      ]
+    },
+    "cheats": {
+      "header": "CHEATS",
+      "items": [
+        { "id": "god", "type": "toggle", "label": "God mode", "key": "cheat.god" },
+        { "id": "autofire", "type": "choice", "label": "Autofire", "key": "autofire", "values": ["off", "slow", "medium", "fast"], "value_labels": ["Off", "Slow", "Medium", "Fast"], "hint": "hold to swing" },
+        { "id": "spawn_bonus", "type": "submenu", "label": "Spawn bonus", "target": "cheat_bonus" },
+        { "id": "refill", "type": "action", "label": "Refill energy", "action": "cheat_refill" },
+        { "id": "start_level", "type": "choice", "label": "Warp to level", "key": "cheat.start_level", "values": [1, 2, 3, 4, 5, 6, 7] },
+        { "id": "warp", "type": "action", "label": "Warp!", "action": "cheat_warp" },
+        { "id": "back", "type": "back", "label": "Back" }
+      ]
+    },
+    "cheat_bonus": {
+      "header": "SPAWN BONUS",
+      "items": [
+        { "id": "b0", "type": "action", "label": "Spring", "action": "cheat_bonus_0" },
+        { "id": "b1", "type": "action", "label": "Bomb", "action": "cheat_bonus_1" },
+        { "id": "b2", "type": "action", "label": "Timer", "action": "cheat_bonus_2" },
+        { "id": "b3", "type": "action", "label": "Extra life", "action": "cheat_bonus_3" },
+        { "id": "b4", "type": "action", "label": "Shield", "action": "cheat_bonus_4" },
+        { "id": "b5", "type": "action", "label": "Axe", "action": "cheat_bonus_5" },
+        { "id": "back", "type": "back", "label": "Back" }
+      ]
+    },
+    "pause": {
+      "header": "PAUSED",
+      "items": [
+        { "id": "resume", "type": "action", "label": "Resume", "action": "resume" },
+        { "id": "save_game", "type": "action", "label": "Save Game", "action": "save_game" },
+        { "id": "load_game", "type": "action", "label": "Load Game", "action": "load_game" },
+        { "id": "options", "type": "submenu", "label": "Options", "target": "options" },
+        { "id": "cheats", "type": "submenu", "label": "Cheats", "target": "cheats" },
+        { "id": "restart_level", "type": "action", "label": "Restart Level", "action": "restart_level" },
+        { "id": "quit_title", "type": "action", "label": "Quit to Title", "action": "quit_title" },
+        { "id": "quit_desktop", "type": "action", "label": "Quit to Desktop", "action": "quit_desktop" }
+      ]
+    },
+    "pause_boss": {
+      "header": "PAUSED",
+      "items": [
+        { "id": "resume", "type": "action", "label": "Resume", "action": "resume" },
+        { "id": "options", "type": "submenu", "label": "Options", "target": "options" },
+        { "id": "restart_level", "type": "action", "label": "Restart Fight", "action": "restart_level" },
+        { "id": "quit_title", "type": "action", "label": "Quit to Title", "action": "quit_title" },
+        { "id": "quit_desktop", "type": "action", "label": "Quit to Desktop", "action": "quit_desktop" }
+      ]
+    },
+    "dev": {
+      "header": "DEV CONSOLE",
+      "items": [
+        { "id": "warp", "type": "action", "label": "Warp", "action": "warp", "hint": "level / screen" },
+        { "id": "replay", "type": "action", "label": "Replay scenario", "action": "replay_scenario" },
+        { "id": "dbg_collision", "type": "toggle", "label": "Collision", "key": "dev.collision" },
+        { "id": "dbg_entities", "type": "toggle", "label": "Entities", "key": "dev.entities" },
+        { "id": "dbg_perf", "type": "toggle", "label": "Perf", "key": "dev.perf" },
+        { "id": "audio_ab", "type": "choice", "label": "Audio backend", "key": "dev.audio_backend", "values": ["mt32-builtin", "gm-builtin", "opl", "off"], "value_labels": ["MT-32", "GM", "AdLib", "Off"] },
+        { "id": "bug_report", "type": "action", "label": "Bug report (F5)", "action": "bug_report" },
+        { "id": "readout", "type": "readout", "label": "seed / lcg / frame / x,y" },
+        { "id": "close", "type": "back", "label": "Close" }
+      ]
+    }
+  }
+}

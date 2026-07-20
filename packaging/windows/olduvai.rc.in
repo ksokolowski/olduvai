@@ -1,0 +1,5 @@
+// Windows resources for olduvai.exe: the project icon (Explorer, taskbar,
+// title bar all pick up icon id 1 automatically).  Template — CMake
+// configure_file fills the absolute icon path (windres resolves relative
+// paths against its own cwd, not this file).  Compiled on MinGW only.
+1 ICON "@OLDUVAI_ICO_PATH@"

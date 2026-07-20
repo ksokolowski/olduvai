@@ -1,0 +1,15 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Krzysztof Sokołowski
+# Reject AI-co-authorship trailers at commit time — sole-human-author
+# policy.  CI backstops this hook (scripts/check_commit_range.sh).
+#
+# Install (once per clone):  git config core.hooksPath scripts/hooks
+
+if grep -qiE 'Co-Authored-By|Generated with.*Claude' "$1"; then
+    echo "commit-msg hook: forbidden AI-attribution line in commit message." >&2
+    echo "No Co-Authored-By / Generated-with trailers (sole-human-author policy)." >&2
+    grep -iE 'Co-Authored-By|Generated with.*Claude' "$1" >&2
+    exit 1
+fi
+exit 0
