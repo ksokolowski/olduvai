@@ -36,6 +36,7 @@
 #include "presentation/l3_end_level.hpp"
 #include "presentation/menu.hpp"
 #include "presentation/menu_model.hpp"
+#include "presentation/menu_nav.hpp"
 #include "presentation/banner_fx.hpp"
 #include "presentation/menu_render.hpp"
 #include "presentation/save_state.hpp"
@@ -70,6 +71,8 @@
 #include "presentation/enhance_flags.hpp"
 #include "presentation/menu_script_util.hpp"
 #include "presentation/settings_apply.hpp"
+#include "presentation/settings_preview.hpp"
+#include "presentation/settings_seed.hpp"
 #include "presentation/settings_flow.hpp"
 #include "presentation/settings_session.hpp"
 #include "enhance/mmpx.hpp"
@@ -87,17 +90,12 @@
 namespace olduvai::presentation {
 namespace {
 
-// File-local copies of run_game's tiny private helpers.
+// File-local copy of run_game's tiny private helper (parse_f/parse_i come
+// from parse_util.hpp — the former local copies collided with it).
 std::vector<std::uint8_t> slurp(const std::filesystem::path& p) {
     std::ifstream in(p, std::ios::binary);
     return {std::istreambuf_iterator<char>(in),
             std::istreambuf_iterator<char>()};
-}
-float parse_f(const std::string& s, float fallback) {
-    try { return std::stof(s); } catch (...) { return fallback; }
-}
-int parse_i(const std::string& s, int fallback) {
-    try { return std::stoi(s); } catch (...) { return fallback; }
 }
 
 }  // namespace
@@ -117,9 +115,8 @@ void run_title_menu(TitleMenuCtx& ctx) {
     auto& rebuild_window = ctx.rebuild_window;
     auto& load_all_sfx = ctx.load_all_sfx;
 
-        SDL_Texture* itex = SDL_CreateTexture(
-            sw.ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
-            320 * hd_scale, 200 * hd_scale);
+        SDL_Texture* itex =
+            create_stream_tex(sw.ren, 320 * hd_scale, 200 * hd_scale);
         // Owner UX 2026-07-05: ESC during the intro is the QUICK PATH to
         // the main menu (it used to quit).  Window-close still quits;
         // quitting now lives in the menu (Quit to Desktop).
@@ -323,14 +320,10 @@ void run_title_menu(TitleMenuCtx& ctx) {
                         const std::string old_val = mem.count(k) ? mem[k] : std::string{};
                         mem[k] = v;
 
-                        // Live preview for cheap keys only — do NOT write rt or persist.
-                        if (k == "fullscreen" && win) {
-                            SDL_SetWindowFullscreen(
-                                win, v == "1" ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
-                        } else if (k == "music_volume" && audio) {
-                            audio->set_mix_balance(enhanced, parse_f(v, 100.0f) / 100.0f, -1.0f);
-                        } else if (k == "sfx_volume" && audio) {
-                            audio->set_mix_balance(enhanced, -1.0f, parse_f(v, 100.0f) / 100.0f);
+                        // Live preview for cheap keys only — do NOT write rt or
+                        // persist (shared: settings_preview.hpp).
+                        if (preview_cheap_key(k, v, audio, win, enhanced)) {
+                            // handled — still stages below
                         } else if (k == "hd_profile") {
                             // Same-scale hd_profile: live-swap the rt field the upscaler reads.
                             const ApplyTier tier = classify_change(k, v, cur);
@@ -349,26 +342,18 @@ void run_title_menu(TitleMenuCtx& ctx) {
                 mbind.enhanced = rt.enhanced; mbind.persist = &opts.persist;
                 mbind.rt = &rt;
                 mbind.session = &main_session;
-                mbind.cur = {rt.enhanced,
-                             rt.hd_profile.empty() ? "native" : rt.hd_profile,
-                             rt.render_scale,
-                             rt.music_device,
-                             rt.sfx_backend};
-                mbind.mem["music_device"] = rt.music_device;
-                mbind.mem["sfx_backend"] = rt.sfx_backend;
-                mbind.mem["hd_profile"] = rt.hd_profile.empty() ? "native" : rt.hd_profile;
-                mbind.mem["render_scale"] = std::to_string(rt.render_scale);
-                mbind.mem["aspect"] = rt.aspect.empty() ? "keep" : rt.aspect;
-                // Master-flag baseline: lets a preset click that matches the
-                // current style net out of the staging diff (and marks the
-                // master as genuinely staged when it does change —
-                // encode_enhance_persist keys off that).
-                mbind.mem["enhanced"] = rt.enhanced ? "true" : "false";
-                // Preset row display seed — derived, not stored: exact HD
-                // shapes label as such, anything else shows Classic.
-                mbind.mem["preset"] =
-                    !rt.enhanced ? "dos"
-                                 : (rt.aspect == "4:3" ? "hd-43" : "hd");
+                SettingsSeed seed;
+                seed.enhanced = rt.enhanced;
+                seed.hd_profile = rt.hd_profile;
+                seed.render_scale = rt.render_scale;
+                seed.music_device = rt.music_device;
+                seed.sfx_backend = rt.sfx_backend;
+                seed.aspect = rt.aspect;
+                seed.fullscreen =
+                    (SDL_GetWindowFlags(sw.win) &
+                     SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+                seed.flags = rt.enhance;
+                seed_settings_mem(mbind, seed);
                 // Tier-1 live Aspect on the title: set rt.aspect (the per-frame
                 // flush dims read it) + SDL_RenderSetLogicalSize for immediacy.
                 mbind.apply_aspect = [&](const std::string& v) {
@@ -376,17 +361,6 @@ void run_title_menu(TitleMenuCtx& ctx) {
                     const LogicalDims ld = aspect_logical(hd_scale, v);
                     SDL_RenderSetLogicalSize(sw.ren, ld.w, ld.h);
                 };
-                mbind.mem["fullscreen"] =
-                    (SDL_GetWindowFlags(sw.win) & SDL_WINDOW_FULLSCREEN_DESKTOP) ? "1" : "0";
-                mbind.mem["music_volume"] = "100";
-                mbind.mem["sfx_volume"] = "100";
-                mbind.mem["enhance.smooth_motion"] = rt.enhance.smooth_motion ? "1" : "0";
-                mbind.mem["enhance.hd_text"] = rt.enhance.hd_text ? "1" : "0";
-                mbind.mem["enhance.hud_overlay"] = rt.enhance.hud_overlay ? "1" : "0";
-                mbind.mem["enhance.cinematic_cue"] = rt.enhance.cinematic_cue ? "1" : "0";
-                mbind.mem["enhance.fluid_bubbles"] = rt.enhance.fluid_bubbles ? "1" : "0";
-                mbind.mem["enhance.secret_slide"] = rt.enhance.secret_slide ? "1" : "0";
-                mbind.mem["enhance.descent_pan"] = rt.enhance.descent_pan ? "1" : "0";
 
                 // Start Game level select (left/right on the Start row) —
                 // session-only, defaults to Level 1 every boot.
@@ -518,10 +492,8 @@ void run_title_menu(TitleMenuCtx& ctx) {
                             return;
                         }
                         SDL_DestroyTexture(itex);
-                        itex = SDL_CreateTexture(sw.ren,
-                                   SDL_PIXELFORMAT_RGBA32,
-                                   SDL_TEXTUREACCESS_STREAMING,
-                                   320 * hd_scale, 200 * hd_scale);
+                        itex = create_stream_tex(sw.ren, 320 * hd_scale,
+                                                 200 * hd_scale);
                         if (!itex) {
                             std::fprintf(stderr,
                                 "settings: title texture recreate failed: %s\n",
@@ -551,19 +523,11 @@ void run_title_menu(TitleMenuCtx& ctx) {
                 // Discard: revert staged changes, undo live previews.
                 main_hooks.revert_change = [&](const StagedChange& ch) {
                     mbind.mem[ch.key] = ch.old_value;
-                    if (ch.key == "fullscreen" && mbind.win) {
-                        SDL_SetWindowFullscreen(
-                            mbind.win,
-                            ch.old_value == "1"
-                                ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
-                    } else if (ch.key == "music_volume" && mbind.audio) {
-                        mbind.audio->set_mix_balance(
-                            mbind.enhanced,
-                            parse_f(ch.old_value, 100.0f) / 100.0f, -1.0f);
-                    } else if (ch.key == "sfx_volume" && mbind.audio) {
-                        mbind.audio->set_mix_balance(
-                            mbind.enhanced, -1.0f,
-                            parse_f(ch.old_value, 100.0f) / 100.0f);
+                    // Cheap live preview at baseline (shared:
+                    // settings_preview.hpp); site-specific live keys follow.
+                    if (preview_cheap_key(ch.key, ch.old_value, mbind.audio,
+                                          mbind.win, mbind.enhanced)) {
+                        // handled
                     } else if (ch.key == "hd_profile" && mbind.rt) {
                         mbind.rt->hd_profile = ch.old_value;
                     } else if (ch.key == "aspect" && mbind.apply_aspect) {
@@ -623,14 +587,11 @@ void run_title_menu(TitleMenuCtx& ctx) {
                                 // Dialog consumed this event.
                             } else {
                                 // ── Normal menu input ────────────────────────
-                                if (sym == SDLK_UP || sym == SDLK_w) menu.move(-1);
-                                else if (sym == SDLK_DOWN || sym == SDLK_s) menu.move(+1);
-                                else if (sym == SDLK_LEFT || sym == SDLK_a) menu.adjust(-1);
-                                else if (sym == SDLK_RIGHT || sym == SDLK_d) menu.adjust(+1);
-                                else if (sym == SDLK_RETURN || sym == SDLK_SPACE) menu.activate();
-                                else if (sym == SDLK_ESCAPE) {
+                                if (sym == SDLK_ESCAPE) {
                                     menu.back();
                                     if (!menu.is_open()) menu.open("main");  // ESC at root stays
+                                } else {
+                                    menu_nav_keydown(menu, sym);
                                 }
                             }
                         }
@@ -744,19 +705,7 @@ void run_title_menu(TitleMenuCtx& ctx) {
                     // Headless verify: read back the composited frame (slab +
                     // vector text) before present.
                     const auto dump_frame = [&](const std::string& path) {
-                        int rw = 0, rh = 0;
-                        SDL_GetRendererOutputSize(sw.ren, &rw, &rh);
-                        std::vector<std::uint8_t> rb(
-                            static_cast<std::size_t>(rw) * rh * 4);
-                        if (SDL_RenderReadPixels(sw.ren, nullptr,
-                                                 SDL_PIXELFORMAT_RGBA32,
-                                                 rb.data(), rw * 4) == 0) {
-                            SDL_Surface* s = SDL_CreateRGBSurfaceWithFormatFrom(
-                                rb.data(), rw, rh, 32, rw * 4,
-                                SDL_PIXELFORMAT_RGBA32);
-                            if (s) { save_surface_image(s, path.c_str());
-                                     SDL_FreeSurface(s); }
-                        }
+                        capture_renderer_output(sw.ren, path);
                     };
                     if (!pending_shot.empty()) {
                         // `shot` token: dump and keep walking.

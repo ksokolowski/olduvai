@@ -17,6 +17,7 @@
 #include "presentation/menu.hpp"            // MenuBindings
 #include "presentation/parse_util.hpp"      // parse_f
 #include "presentation/settings_apply.hpp"  // ApplyTier, classify_change, DisplaySettings
+#include "presentation/settings_preview.hpp"  // preview_cheap_key
 #include "presentation/settings_session.hpp"  // SettingsSession
 
 namespace olduvai::presentation {
@@ -81,14 +82,9 @@ using PersistFn = std::function<void(const std::string&, const std::string&)>;
             // staged only — no reinit until the user confirms.  §8.6.
             const std::string old_val = mem.count(k) ? mem[k] : std::string{};
             mem[k] = v;
-            // Live preview for cheap keys.
-            if (k == "fullscreen" && win) {
-                SDL_SetWindowFullscreen(
-                    win, v == "1" ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
-            } else if (k == "music_volume" && audio) {
-                audio->set_mix_balance(enhanced, parse_f(v, 100.0f) / 100.0f, -1.0f);
-            } else if (k == "sfx_volume" && audio) {
-                audio->set_mix_balance(enhanced, -1.0f, parse_f(v, 100.0f) / 100.0f);
+            // Live preview for cheap keys (shared: settings_preview.hpp).
+            if (preview_cheap_key(k, v, audio, win, enhanced)) {
+                // handled — still stages below
             } else if (k == "hd_profile") {
                 const ApplyTier tier = classify_change(k, v, cur);
                 if (tier == ApplyTier::Live && rt_hd_profile)

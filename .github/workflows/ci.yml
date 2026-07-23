@@ -20,6 +20,8 @@ jobs:
           fetch-depth: 0
       - name: Content-policy lint
         run: sh scripts/check_tree.sh
+      - name: Architecture layering lint
+        run: sh scripts/check_layers.sh
       - name: Commit-message lint
         run: sh scripts/check_commit_range.sh HEAD
       - name: Toolchain

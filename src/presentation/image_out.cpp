@@ -38,4 +38,28 @@ bool save_surface_image(SDL_Surface* surface, const std::string& path) {
     return ok != 0;
 }
 
+bool save_rgba_image(const void* pixels, int w, int h, const std::string& path) {
+    SDL_Surface* s = SDL_CreateRGBSurfaceWithFormatFrom(
+        const_cast<void*>(pixels), w, h, 32, w * 4, SDL_PIXELFORMAT_RGBA32);
+    if (s == nullptr) return false;
+    const bool ok = save_surface_image(s, path);
+    SDL_FreeSurface(s);
+    return ok;
+}
+
+bool capture_renderer_output(SDL_Renderer* ren, const std::string& path) {
+    int ow = 0, oh = 0;
+    SDL_GetRendererOutputSize(ren, &ow, &oh);
+    SDL_Surface* s = SDL_CreateRGBSurfaceWithFormat(
+        0, ow, oh, 32, SDL_PIXELFORMAT_RGBA32);
+    bool ok = false;
+    if (s != nullptr &&
+        SDL_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_RGBA32,
+                             s->pixels, s->pitch) == 0) {
+        ok = save_surface_image(s, path);
+    }
+    if (s != nullptr) SDL_FreeSurface(s);
+    return ok;
+}
+
 }  // namespace olduvai::presentation

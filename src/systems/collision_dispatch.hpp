@@ -15,21 +15,14 @@
 
 #include "systems/collisions.hpp"
 #include "systems/player.hpp"
+#include "systems/score.hpp"
 
 namespace olduvai::systems {
 
 constexpr int kBombFlashFrames = 20;     // B/W palette-cycle duration
-constexpr int kScoreCap = 999999;
-constexpr int kScoreSpriteBase = 33;
-constexpr int kScorePopupFrames = 10;
-constexpr int kScorePopupDy = -4;
 constexpr int kCaveExitOffset = 8;       // cave_exit_x = width - offset
 
 void dispatch_bonus_activate(SystemsState& state, int bt);
-void add_score(SystemsState& state, int amount);
-void add_score_popup(SystemsState& state, int x, int y, int score);
-void update_score_bonuses(SystemsState& state);  // pre-render decrement
-void move_score_bonuses(SystemsState& state);    // post-render y -= 4
 void update_fireball(SystemsState& state);
 // Cave-sign teleport state writes (EXE seg:0da6) — shared by the classic
 // immediate path and the Enhanced #20 deferred completion.

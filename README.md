@@ -4,7 +4,7 @@
 
 <p align="center"><a href="https://github.com/ksokolowski/olduvai/actions/workflows/ci.yml"><img src="https://github.com/ksokolowski/olduvai/actions/workflows/ci.yml/badge.svg" alt="ci"></a> <a href="https://github.com/ksokolowski/olduvai/releases/latest"><img src="https://img.shields.io/github/v/release/ksokolowski/olduvai" alt="latest release"></a> <a href="https://github.com/sponsors/ksokolowski"><img src="https://img.shields.io/badge/Sponsor-%E2%99%A5-ea4aaa?logo=githubsponsors&logoColor=white" alt="sponsor"></a> <a href="https://ko-fi.com/styledconsole"><img src="https://img.shields.io/badge/Ko--fi-support-ff5e5b?logo=ko-fi&logoColor=white" alt="ko-fi"></a></p>
 
-**Prehistorik** (Titus Interactive, 1991) is the DOS platformer many of us
+**Prehistorik** (Titus Interactive, 1991) is the DOS platformer a generation
 grew up with: a club-swinging caveman braving dinosaurs, ice and volcanoes
 to fill his tribe's larder. Thirty-five years on, the floppies are fading
 and the machines that ran them are museum pieces — but the game is too good
@@ -29,12 +29,19 @@ copy of the game: see [Getting the game](#getting-the-game) and
 
 ## Status
 
-**Beta — 0.9.2.** The full game is playable natively: all seven levels,
+**Beta — 0.9.3.** The full game is playable natively: all seven levels,
 the three boss fights, caves, secret rooms, flight sequences and the
 ending. Behaviour is validated frame-by-frame against an independent
 reference implementation — a 12-scenario cross-engine corpus plus a
 300-frame golden trace run in CI, with both engines in shared-RNG
 lockstep, zero tolerance.
+
+Under the hood, some parts are still convoluted — I know, and I'm not
+pretending otherwise. During beta the priority is simple: **keep what
+works.** The engine is being untangled steadily, one small
+behaviour-preserving change at a time — each verified frame-for-frame
+against the same reference before it lands — never a risky rewrite. The
+code gets cleaner; the game stays exactly as it played in 1991.
 
 ## Features
 

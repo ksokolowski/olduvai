@@ -9,7 +9,7 @@ This repository may contain:
   comments referencing evidence (e.g. function/offset identifiers) are
   fine — they are references to evidence, not copies of it.
 - Factual format documentation (archive layout, sprite formats, level
-  formats) written in our own words.
+  formats) written from scratch, in original wording.
 - Synthetic test fixtures: hand-authored byte sequences exercising decoder
   edge cases. **Never bytes taken from the game files.**
 - Bundled third-party libraries (as sources, with their license
@@ -76,6 +76,31 @@ without written permission.
 
 - CI rejects forbidden trailers and denylisted content on every push
   (`scripts/check_tree.sh`, `scripts/check_commit_range.sh`).
+
+## Engineering direction (beta)
+
+The fun is the invariant. The game plays the way the 1991 original did, and
+no cleanup is allowed to change that. Parts of the engine are still
+convoluted — that is acknowledged, not hidden — and the direction through
+beta is to untangle them incrementally, behaviour-first:
+
+- **Byte-identical, gate-verified moves.** A refactor preserves emitted
+  behaviour exactly — same gameplay math, RNG consumption/order,
+  frame-loop order, transition timing (see [docs/FRAME_LOOP.md](docs/FRAME_LOOP.md)).
+  It lands only when the full test suite and the cross-engine trace corpus
+  stay green ([docs/METHOD.md](docs/METHOD.md)).
+- **One seam per commit.** Extract a single cohesive unit at a time behind
+  a small dependency struct, so the moved code reads verbatim — no drive-by
+  behaviour changes riding along in the same change.
+- **No rewrites.** I reshape working code in place; I don't replace it
+  with a "cleaner" version whose behaviour then has to be re-earned.
+- **Gate first where the eyes are the judge.** Anything whose result isn't
+  covered by a test (a visual composite, audio timing) gets a gate — or a
+  playtest — before it's touched, not after. Larger untangling targets are
+  triaged internally and each is checked for a clean, behaviour-preserving
+  seam before any code moves.
+
+When in doubt, favour the play experience over the diff.
 
 ## Code style
 

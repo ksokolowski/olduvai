@@ -35,6 +35,7 @@
 #include "presentation/menu_script_util.hpp"
 #include "presentation/menu_model.hpp"
 #include "presentation/banner_fx.hpp"
+#include "presentation/banners.hpp"
 #include "presentation/menu_render.hpp"
 #include "presentation/save_state.hpp"
 #include "presentation/replay.hpp"
@@ -42,7 +43,8 @@
 #include "presentation/boss_app.hpp"
 #include "presentation/boss_widescreen.hpp"   // boss_ws_margin (shared margin math)
 #include "presentation/bug_capture.hpp"
-#include "presentation/report_templates.hpp"
+#include "presentation/pause_service.hpp"
+#include "presentation/report_form.hpp"
 #include "presentation/text_overlay_edit.hpp"
 #include "presentation/screen_tiles.hpp"
 #include "presentation/screens.hpp"
@@ -287,9 +289,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     // The classic streaming texture stays 320*hd_scale wide for EVERY non-
     // widescreen path (loading / tally / transitions / pause / classic present)
     // — unchanged.  Widescreen present uses the presenter's own WIDE texture.
-    SDL_Texture* tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32,
-                                         SDL_TEXTUREACCESS_STREAMING,
-                                         320 * hd_scale, 200 * hd_scale);
+    SDL_Texture* tex = create_stream_tex(ren, 320 * hd_scale, 200 * hd_scale);
     WidescreenShellCtx wsctx;
     wsctx.ren = ren;
     wsctx.hd = hd;
@@ -490,11 +490,6 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     // sim like the --cheats picker.  v1: dark backdrop behind the slab, god
     // toggle is live; other Options are navigable placeholders (live-apply is
     // the next slice).  Spec: 2026-06-19-re-game-menus-design.md.
-    bool pause_open = false;
-    bool want_quit_program = false;   // Pause → Quit to Desktop
-    bool want_restart = false;        // Pause → Restart Level
-    bool want_load = false;           // Pause → Load Game (out_load is set)
-    int want_warp = 0;                // Pause → Cheats → Warp! (display level 1-7)
     bool want_reinit = false;         // Pause → Settings change needing re-init
     PendingReinit reinit_req;
     std::optional<MenuModel> menu_model_opt = load_pause_menu_model();
@@ -504,76 +499,25 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         std::fprintf(stderr, "menu: no menu model (disk or built-in) - ESC "
                      "falls back to quit-to-title\n");
     }
-    PauseBindings pause_bind;
-    // Batched staging: all Options edits go through session → confirm dialog.
-    // The session is populated by PauseBindings::set; the confirm dialog is
-    // opened when the user leaves the Options subtree with pending changes.
-    SettingsSession pause_session;
-    ConfirmDialog confirm_dlg;
-    PauseBindWireDeps pause_bind_wire{
-        &god_active, &audio, &sw, &opts, &pause_session,
-        &want_reinit, &reinit_req, &logical_w, &logical_h, hd_scale,
-        display_level};
-    configure_pause_bind(pause_bind, pause_bind_wire);
-    // Cheats → Spawn bonus: launch the EXE's own rising-bonus arc (the same
-    // path a clubbed ancestor-ghost drop takes — club_bonus init at
-    // collisions.cpp: mask bit 7 + counter 65 + rise dy/y, then update_bonus
-    // arcs the icon over the player and Bonus_Activate fires on landing).
-    // The menu IS the explicit opt-in, so no --cheats flag needed; replay
-    // stays gated for trace determinism.
-    PauseActionsDeps pause_actions_deps{
-        &g, &replay, &pause_bind, &opts, &out_load,
-        &pause_open, &abort_to_title, &want_quit_program, &want_restart,
-        &want_load, &god_active, &want_warp, display_level};
-    MenuActionTable pause_actions = make_pause_actions(&pause_actions_deps);
-    Menu pause_menu(pause_model, pause_bind, pause_actions);
+    // State + orchestration (bindings, staging session, confirm dialog,
+    // menu, SettingsFlow, exit intents) live in PauseService (CC3 seam 2);
+    // want_reinit/reinit_req stay locals — the REINIT_TEST hook and the
+    // kReinitDisplay outcome mapping below use them directly.  The Cheats →
+    // Spawn bonus actions ride make_pause_actions unchanged (see
+    // pause_flow.cpp).
+    PauseService pause(pause_model, menu_ok,
+                       {&g, &replay, &opts, &audio, &sw, &god_active,
+                        &abort_to_title, &out_load, &want_reinit, &reinit_req,
+                        &logical_w, &logical_h, hd_scale, display_level});
 
     // ── F5 bug-report form ─────────────────────────────────────────────────
     // F5 freezes the sim and opens an in-engine form (tag/repro choice rows +
     // a multi-line description edited in a full-canvas overlay).  Leaving the
     // form opens a Save/Discard confirm (the Options-Apply pattern): Save
     // writes the report WITH the annotations, Discard drops the whole capture.
-    struct ReportBind : MenuBindings {
-        std::map<std::string, std::string> mem;
-        std::string get(const std::string& k) override {
-            auto it = mem.find(k);
-            return it == mem.end() ? std::string{} : it->second;
-        }
-        void set(const std::string& k, const std::string& v) override {
-            mem[k] = v;
-        }
-    } report_bind;
-    Menu report_menu(pause_model, report_bind);
-    ConfirmDialog report_confirm;
-    bool report_open = false, report_edit_open = false;
-    bool report_save_pending = false, report_frame_ready = false;
-    FrameBuffer report_frame{320, 200};
-    EditOverlayState report_edit;
-    auto report_seed = [&]() {
-        report_bind.mem["report.tag"] = "collision";
-        report_bind.mem["report.repro"] = "unknown";
-        report_bind.mem["report.description"] = report_template("collision");
-    };
-    auto report_retemplate_if_untouched = [&]() {
-        // Re-fill the description with the new tag's skeleton ONLY while it is
-        // still an unedited template — once the user types, it is theirs.
-        if (is_report_template(report_bind.get("report.description")))
-            report_bind.set("report.description",
-                            report_template(report_bind.get("report.tag")));
-    };
-    auto open_report_confirm = [&]() {
-        const std::string desc = report_bind.get("report.description");
-        int nlines = 1;
-        for (char c : desc) if (c == '\n') ++nlines;
-        std::vector<StagedChange> rows = {
-            {"report.tag", "Tag", "", report_bind.get("report.tag")},
-            {"report.repro", "Reproducibility", "",
-             report_bind.get("report.repro")},
-            {"report.description", "Description", "",
-             std::to_string(nlines) + (nlines == 1 ? " line" : " lines")},
-        };
-        report_confirm.open("SAVE BUG REPORT?", rows, "");
-    };
+    // State + orchestration live in ReportFormService (CC3 seam 1); the
+    // pause MenuModel carries the form's "bug_report" screen.
+    ReportFormService report_form(pause_model);
 
     // Debug: OLDUVAI_PAUSE_SHOT force-opens the Pause overlay on frame 1 and
     // dumps it to a PNG (see the pause block below) — headless render check.
@@ -581,8 +525,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         // OLDUVAI_PAUSE_SCREEN picks the screen to capture (default "pause")
         // — lets the headless render check reach submenus (Cheats, Options).
         const char* ps = std::getenv("OLDUVAI_PAUSE_SCREEN");
-        pause_menu.open(ps != nullptr ? ps : "pause");
-        pause_open = pause_menu.is_open();   // unknown screen id → no overlay
+        pause.force_open_screen(ps != nullptr ? ps : "pause");
     }
     // HD hybrid font: the Pause menu's text is drawn with the SAME vector font
     // the HUD uses (FreckleFace via hd_text) at output resolution, so it stays
@@ -796,10 +739,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         static int seq = 0;
         char path[512];
         std::snprintf(path, sizeof path, "%s/steady_fb_%04d.bmp", dir, seq++);
-        SDL_Surface* s = SDL_CreateRGBSurfaceWithFormatFrom(
-            fb.px.data(), fb.w, fb.h, 32, fb.w * 4, SDL_PIXELFORMAT_RGBA32);
-        save_surface_image(s, path);
-        SDL_FreeSurface(s);
+        save_rgba_image(fb.px.data(), fb.w, fb.h, path);
     };
 
     // One upload pipeline for every frame this window shows.
@@ -837,73 +777,14 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     // draw sharing this overlay pass keeps its size.  Gates mirror the pre-baked
     // draws: GET-READY counter window [2,17] (FUN_27f7_1277); food gate screen +
     // food < 45 (FUN_263c_09ab).
-    // GET READY rainbow fly-away latch (wall-clock based).  Armed on the
-    // level-start rising edge of get_ready_counter in the run loop below; the
-    // banner draw reads these.  gr_prev_counter inits to a non-0x11 value so the
-    // very first level's arm (counter 0→0x11) is detected.
-    Uint32 gr_anim_start = 0;
-    bool gr_anim_active = false;
-    int gr_prev_counter = 0;
-    // ── Animated enhanced banners (wall-clock driven, so motion is smooth at
-    // any refresh rate and independent of the 18 Hz logic tick) ──────────────
-    // GET READY!       → rainbow; fully visible for HOLD ms, then rockets
-    //                    straight up off the top over FLY ms (quadratic accel),
-    //                    then gone.  Armed on the level-start rising edge of
-    //                    get_ready_counter (load_level sets 0x11); the gr_anim_*
-    //                    latch lives in the run-loop scope (declared above).
-    // NOT ENOUGH FOOD! → fire gradient + a gentle vertical bob in place; a
-    //                    persistent status banner, so it rides the wall clock.
-    // Both are enhanced-only by construction (this runs only on the use_hd_text
-    // overlay path); classic keeps the pre-baked sprites untouched.
-    // Banner colour effects, selectable via OLDUVAI_BANNER_FX (overrides BOTH
-    // banners for experimentation).  DEFAULTS: GET READY = "caveman" (primal
-    // fire-and-blood), NOT ENOUGH FOOD = "fire".  Rainbow stays available but is
-    // no longer the default.  `tsec` is wall-clock seconds → all animation is
-    // refresh-rate-independent.  u spans the word L→R, v spans cap top→bottom.
-    const char* bfx_env = std::getenv("OLDUVAI_BANNER_FX");
-    const std::string gr_effect = bfx_env ? bfx_env : opts.banner_fx;
-    const std::string food_effect = bfx_env ? bfx_env : opts.banner_fx;
+    // Animated enhanced banner substitutes (GET READY / NOT ENOUGH FOOD):
+    // BannerPresenter owns the fly-away latch and the wall-clock animation
+    // (banners.hpp); the shell keeps the enhanced-only gating at the call
+    // sites and the once-per-logic-tick arm_tick() placement below.
+    BannerPresenter banners(hd_text, g.state, opts.banner_fx);
     auto draw_enhanced_banners = [&](std::vector<std::uint8_t>& b,
                                      int ow, int oh) {
-        const int saved_cap = hd_text.cap_px();
-        const Uint32 now = SDL_GetTicks();
-        auto emit = [&](int cap_native, int baseline, const char* text,
-                        const enhance::HdText::ShadeFn& shade) {
-            hd_text.set_cap_px(
-                std::max(1, static_cast<int>(cap_native * oh / 200.0 + 0.5)));
-            draw_centered_overlay_row_styled(b, ow, oh, hd_text, baseline, text,
-                                             shade);
-        };
-
-        // GET READY! — caveman (default), hold then rocket up off the top.
-        if (gr_anim_active) {
-            const long HOLD = 2000, FLY = 450;   // ms
-            const long t = static_cast<long>(now - gr_anim_start);
-            if (t < HOLD + FLY) {
-                float yoff = 0.0f;
-                if (t > HOLD) {
-                    float p = static_cast<float>(t - HOLD) / FLY;
-                    if (p > 1.0f) p = 1.0f;
-                    yoff = -(p * p) * 175.0f;   // quadratic accel, off the top
-                }
-                emit(12, 112 + static_cast<int>(yoff), "GET READY!",
-                     make_banner_shade(gr_effect, t / 1000.0f));
-            } else {
-                gr_anim_active = false;   // animation finished
-            }
-        }
-
-        // NOT ENOUGH FOOD! — fire (default) + gentle vertical bob.
-        const int gate_screen = (g.state.current_level == 3) ? 17 : 18;
-        if ((g.state.current_level == 1 || g.state.current_level == 3 ||
-             g.state.current_level == 5 || g.state.current_level == 7) &&
-            g.state.current_screen == gate_screen && g.state.food_count < 45) {
-            const long ft = static_cast<long>(now);
-            const float bob = 3.0f * std::sin(ft * 0.006f);
-            emit(11, 111 + static_cast<int>(std::lround(bob)),
-                 "NOT ENOUGH FOOD!", make_banner_shade(food_effect, ft / 1000.0f));
-        }
-        hd_text.set_cap_px(saved_cap);
+        banners.draw(b, ow, oh);
     };
     // Banner substitutes are shell-owned (state-driven); the wide HUD-text
     // mapping itself lives in the presenter (wsp.draw_wide_hud_text — CC2d).
@@ -1004,14 +885,16 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         // Menu glyphs follow the HUD's font rule: the cartoony vector font only
         // in enhanced mode (use_hd_text); otherwise the classic bitmap glyphs
         // (drawn into the native pause buffer below, upscaled with the frame).
-        const bool show_menu    = pause_open && use_hd_text && !confirm_dlg.is_open();
-        const bool show_confirm = pause_open && use_hd_text && confirm_dlg.is_open();
+        const bool show_menu =
+            pause.open() && use_hd_text && !pause.confirm().is_open();
+        const bool show_confirm =
+            pause.open() && use_hd_text && pause.confirm().is_open();
         // Save whenever the pause overlay is up — classic mode draws the
         // bitmap menu into the native frame (no vector pass), and the shot
         // must capture that path too.
         const char* show_menu_shot =
             !menu_shot_path.empty() ? menu_shot_path.c_str()
-            : (pause_open ? std::getenv("OLDUVAI_PAUSE_SHOT") : nullptr);
+            : (pause.open() ? std::getenv("OLDUVAI_PAUSE_SHOT") : nullptr);
         if (draw_hud_overlay || show_cheat || show_menu || show_confirm) {
             int ow = 0, oh = 0;
             if (text_overlay.begin(ren, hd_text, ow, oh)) {
@@ -1046,32 +929,31 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                     mfh = oh;
                 }
                 if (show_menu)
-                    draw_menu_vector(b, ow, oh, hd_text, pause_menu, 0.0f, mfx,
-                                     mfy, mfw, mfh);
+                    draw_menu_vector(b, ow, oh, hd_text, pause.menu(), 0.0f,
+                                     mfx, mfy, mfw, mfh);
                 if (show_confirm)
-                    draw_confirm_vector(b, ow, oh, hd_text, confirm_dlg, mfx,
-                                        mfy, mfw, mfh);
+                    draw_confirm_vector(b, ow, oh, hd_text, pause.confirm(),
+                                        mfx, mfy, mfw, mfh);
                 text_overlay.flush(ren, logical_w, logical_h);
             }
         }
         if (show_menu_shot) {
             // Debug: read back the fully-composited frame (scene + slab + vector
             // text) right before present so we can verify the HD overlay.
-            int rw = 0, rh = 0;
-            SDL_GetRendererOutputSize(ren, &rw, &rh);
-            std::vector<std::uint8_t> rb(static_cast<std::size_t>(rw) * rh * 4);
-            if (SDL_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_RGBA32,
-                                     rb.data(), rw * 4) == 0) {
-                SDL_Surface* s = SDL_CreateRGBSurfaceWithFormatFrom(
-                    rb.data(), rw, rh, 32, rw * 4, SDL_PIXELFORMAT_RGBA32);
-                if (s) { save_surface_image(s, show_menu_shot); SDL_FreeSurface(s); }
-            }
+            capture_renderer_output(ren, show_menu_shot);
             menu_shot_path.clear();   // consume a menu-script `shot` request
         }
         // do_present=false leaves the composited frame in the backbuffer for a
         // caller-side RenderReadPixels (Metal reads black AFTER present).
         if (do_present) SDL_RenderPresent(ren);
     };
+    // std::function view of upload_and_show for the services extracted out
+    // of this frame loop (ReportFormService, CC3); the lambda stays the
+    // single implementation — this is a call adapter, not a copy.
+    const std::function<void(FrameBuffer&, bool, bool)> upload_and_show_fn =
+        [&upload_and_show](FrameBuffer& f, bool with_hud, bool do_present) {
+            upload_and_show(f, with_hud, do_present);
+        };
     // ── Widescreen present (§8.7, Option A) — moved to WidescreenPresenter
     // (wsp.present(), OL-B5) together with the Tier-1 margin-monster draw and
     // the club-mechanic advance_state=false discipline documented there. ──
@@ -1315,27 +1197,13 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         }
     }
 
-    // SettingsFlow: the Options staging/confirm/apply controller (OL-B1). The
-    // pause-specific hooks + wiring live in pause_flow.cpp (CC2c) — they capture
-    // pointers into these locals via PauseFlowDeps (which lives on this frame).
-    PauseFlowDeps pause_flow_deps{&pause_menu, &opts, &pause_bind,
-                                  &reinit_req, &want_reinit};
-    SettingsFlow pause_flow = make_pause_flow(pause_model, pause_session,
-                                              confirm_dlg, &pause_flow_deps);
-
-    // Close-without-apply detection: if pause was open last frame and is now
-    // closed (Resume) while the session is dirty, treat it as Discard.
-    // APPLY already clears pause_session, so it will be empty — no
-    // double-revert.  Placed at the TOP of the loop so it fires on the first
-    // iteration after pause closes, before any input that could reopen pause.
-    bool was_pause_open = false;
-
+    // The SettingsFlow (OL-B1) + close-without-apply detection live in
+    // PauseService (CC3 seam 2); begin_frame() runs the dirty-session
+    // Discard at the TOP of the loop so it fires on the first iteration
+    // after pause closes, before any input that could reopen pause.
     while (running) {
         cursor_autohide_frame();   // keyboard game: park the OS arrow
-        // Detect pause closing via Resume with dirty session (§8.6 step 4).
-        if (was_pause_open && !pause_open && !pause_session.empty())
-            pause_flow.discard();
-        was_pause_open = pause_open;
+        pause.begin_frame();
 
         if (frame_stats) {
             fs_present_ms = 0.0;
@@ -1381,7 +1249,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
             reinit_req.music_device = opts.music_device;
             reinit_req.sfx_backend  = opts.sfx_backend;
             want_reinit = true;
-            pause_open = true;
+            pause.set_open(true);
         }
         // Pre-frame snapshot for transition classification: the player
         // position before this frame's movement/teleport (direction
@@ -1445,13 +1313,8 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                     // save/cancel handling there is not needed here.
                     std::string txt = tok.substr(5);
                     for (char& c : txt) if (c == '_') c = ' ';
-                    if (report_open && report_edit_open) {
-                        SDL_Event te{};
-                        te.type = SDL_TEXTINPUT;
-                        std::snprintf(te.text.text, sizeof te.text.text,
-                                      "%s", txt.c_str());
-                        edit_handle_event(report_edit, te);
-                    }
+                    if (report_form.open() && report_form.edit_open())
+                        report_form.inject_text(txt);
                 } else if (tok == "stab" || tok == "ctrlenter") {
                     // Modifier chords the plain key-pusher can't express.
                     const SDL_Keycode ms =
@@ -1491,95 +1354,15 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
             // Finding: esc_quits_to_dos_via_int9_flag.md (intentional-divergence).
             if (ev.type == SDL_QUIT) abort_to_title = true;
             // ── F5 bug-report form owns input while open (before pause) ──
-            if (report_open) {
-                if (report_edit_open) {
-                    const EditResult er = edit_handle_event(report_edit, ev);
-                    if (er == EditResult::kSave) {
-                        report_bind.set("report.description",
-                                        report_edit.editor.text());
-                        SDL_StopTextInput();
-                        report_edit_open = false;
-                    } else if (er == EditResult::kCancel) {
-                        SDL_StopTextInput();
-                        report_edit_open = false;
-                    }
-                    continue;
-                }
-                if (ev.type != SDL_KEYDOWN) continue;
-                const auto rsym = ev.key.keysym.sym;
-                if (report_confirm.is_open()) {
-                    if (rsym == SDLK_LEFT || rsym == SDLK_RIGHT ||
-                        rsym == SDLK_UP || rsym == SDLK_DOWN ||
-                        rsym == SDLK_a || rsym == SDLK_d)
-                        report_confirm.move(1);
-                    else if (rsym == SDLK_ESCAPE)
-                        report_confirm.close();          // back to the form
-                    else if (rsym == SDLK_RETURN || rsym == SDLK_SPACE) {
-                        if (report_confirm.apply_selected())
-                            report_save_pending = true;  // freeze block writes
-                        else
-                            report_open = false;         // Discard
-                        report_confirm.close();
-                    }
-                    continue;
-                }
-                if (rsym == SDLK_UP || rsym == SDLK_w) report_menu.move(-1);
-                else if (rsym == SDLK_DOWN || rsym == SDLK_s) report_menu.move(+1);
-                else if (rsym == SDLK_LEFT || rsym == SDLK_a) {
-                    const std::string tb = report_bind.get("report.tag");
-                    report_menu.adjust(-1);
-                    if (report_bind.get("report.tag") != tb)
-                        report_retemplate_if_untouched();
-                } else if (rsym == SDLK_RIGHT || rsym == SDLK_d) {
-                    const std::string tb = report_bind.get("report.tag");
-                    report_menu.adjust(+1);
-                    if (report_bind.get("report.tag") != tb)
-                        report_retemplate_if_untouched();
-                } else if (rsym == SDLK_RETURN || rsym == SDLK_SPACE) {
-                    const std::string tb = report_bind.get("report.tag");
-                    const std::string a = report_menu.activate();
-                    if (a.rfind("__edit_text:", 0) == 0) {
-                        report_edit.editor.set_text(
-                            report_bind.get("report.description"));
-                        report_edit.title = "Description";
-                        report_edit.focus = EditFocus::kText;
-                        SDL_StartTextInput();
-                        report_edit_open = true;
-                    } else if (!report_menu.is_open()) {
-                        open_report_confirm();           // 'Back' left the form
-                    } else if (report_bind.get("report.tag") != tb) {
-                        report_retemplate_if_untouched();
-                    }
-                } else if (rsym == SDLK_ESCAPE) {
-                    open_report_confirm();
-                }
+            if (report_form.open()) {
+                report_form.handle_event(ev);   // consumes every event
                 continue;
             }
             if (ev.type == SDL_KEYDOWN) {
                 const auto sym = ev.key.keysym.sym;
                 // In-game Pause menu owns input while open; swallow gameplay keys.
-                if (pause_open) {
-                    // Confirm dialog intercepts all input while open (§8.6
-                    // step 4).  SettingsFlow resolves move/apply/discard/
-                    // cancel through the pause hooks above (OL-B1).
-                    if (confirm_dlg.is_open()) {
-                        pause_flow.handle_key(flow_key_from_sym(sym));
-                        continue;
-                    }
-                    if (sym == SDLK_ESCAPE) {
-                        pause_menu.back();
-                        if (!pause_menu.is_open()) pause_open = false;
-                    } else if (sym == SDLK_UP || sym == SDLK_w) {
-                        pause_menu.move(-1);
-                    } else if (sym == SDLK_DOWN || sym == SDLK_s) {
-                        pause_menu.move(+1);
-                    } else if (sym == SDLK_LEFT || sym == SDLK_a) {
-                        pause_menu.adjust(-1);
-                    } else if (sym == SDLK_RIGHT || sym == SDLK_d) {
-                        pause_menu.adjust(+1);
-                    } else if (sym == SDLK_RETURN || sym == SDLK_SPACE) {
-                        pause_menu.activate();
-                    }
+                if (pause.open()) {
+                    pause.handle_keydown(sym);
                     continue;
                 }
                 // --cheats interactive power-up picker (non-EXE-faithful test
@@ -1602,24 +1385,14 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                     continue;   // swallow other keys while the menu is up
                 }
                 if (sym == SDLK_ESCAPE) {
-                    // ESC now opens the Pause overlay (Resume / Options / Cheats
-                    // / Restart / Quit to Title / Quit to Desktop), superseding
-                    // the bare ESC→game-over.  Quit to Title still routes through
-                    // abort_to_title (the game-over→title path).  Falls back to a
-                    // direct title-abort if menus.json failed to load.
-                    if (menu_ok) { pause_open = true; pause_menu.open("pause"); }
-                    else abort_to_title = true;
+                    // ESC opens the Pause overlay (or falls back to a direct
+                    // title-abort — see PauseService::esc_pressed).
+                    pause.esc_pressed();
                 }
                 else if (sym == SDLK_F5) {
-                    // F5 opens the in-engine bug-report form: freeze the sim,
-                    // seed fresh fields, and let the form/editor/confirm own
-                    // input until Save (writes) or Discard.  The screenshot is
-                    // the pre-form frame stashed by the freeze block below.
-                    report_seed();
-                    report_menu.open("bug_report");
-                    report_open = report_menu.is_open();
-                    report_edit_open = false;
-                    report_frame_ready = false;
+                    // F5 opens the in-engine bug-report form (seed + freeze;
+                    // see ReportFormService::open_form).
+                    report_form.open_form();
                 }
                 else if (opts.cheats && !replay.active() && sym == SDLK_F7) {
                     cheat_open = true;
@@ -1629,11 +1402,9 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         }
         // ── Options-exit detection (§8.6 step 2): after input handling,
         // SettingsFlow checks whether the menu just transitioned from inside
-        // the Options subtree (membership derived from menus.json) back to
-        // the pause root, and opens the confirm dialog if changes are
-        // staged.  ──
-        if (pause_open && pause_menu.is_open() && !confirm_dlg.is_open())
-            pause_flow.track_screen(pause_menu.current_screen());
+        // the Options subtree back to the pause root, and opens the confirm
+        // dialog if changes are staged (PauseService::track_options_exit). ──
+        pause.track_options_exit();
 
         // ── Pause overlay: handle exit actions, else freeze the sim and draw
         // the menu (or confirm dialog) over a dark backdrop.  The `continue`
@@ -1642,122 +1413,48 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         // game-over→title path; Quit to Desktop / Restart use new outcomes. ──
         // ── F5 report form: freeze + draw over the frozen scene (before the
         // pause block; the two are mutually exclusive since F5 only fires
-        // outside pause).  Save writes the report from the stashed frame. ──
-        if (report_open) {
-            g.state.god_mode = god_active;
-            FrameBuffer pf{320, 200};
-            compose_frame(pf, g.state, g.render, /*draw_player=*/true);
-            if (!report_frame_ready) {   // clean scene = the screenshot source
-                report_frame = pf;
-                report_frame_ready = true;
-            }
-            if (report_save_pending) {
-                report_save_pending = false;
-                report_open = false;
-                const BugAnnotations ann{report_bind.get("report.tag"),
-                                         report_bind.get("report.repro"),
-                                         report_bind.get("report.description")};
-                const bool want_presented = hd || wsp.present_path();
-                const std::string dir = write_bug_report(
-                    g.state, report_frame, g.render.entity_sprites,
-                    display_level, internal, overlay_scale, ann,
-                    /*has_presented=*/want_presented);
-                // screenshot_presented.png — what the player actually saw: the
-                // scene run through the live present (HD upscale + widescreen
-                // margins), which the native report_frame skips.  Re-render the
-                // (frozen) scene WITHOUT presenting so RenderReadPixels sees the
-                // backbuffer (a post-present read is black on Metal), then read
-                // the output-resolution pixels.  Only meaningful when the
-                // present path transforms the frame (HD or widescreen); classic
-                // 1× is pixel-equal to the native shot.  Empty bubble hook: the
-                // L1-secret cosmetic bubbles are immaterial to a bug shot.
-                if (!dir.empty() && want_presented) {
-                    if (wsp.present_path())
-                        wsp.present(std::function<void(RenderTarget&)>{},
-                                    /*do_present=*/false);
-                    else
-                        upload_and_show(report_frame, /*with_hud=*/true,
-                                        /*do_present=*/false);
-                    int ow = 0, oh = 0;
-                    SDL_GetRendererOutputSize(ren, &ow, &oh);
-                    SDL_Surface* s = SDL_CreateRGBSurfaceWithFormat(
-                        0, ow, oh, 32, SDL_PIXELFORMAT_RGBA32);
-                    if (s != nullptr &&
-                        SDL_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_RGBA32,
-                                             s->pixels, s->pitch) == 0) {
-                        save_surface_image(s, dir + "/screenshot_presented.png");
-                    }
-                    if (s != nullptr) SDL_FreeSurface(s);
+        // outside pause).  Save writes the report from the stashed frame;
+        // the service owns the whole frame when open (ReportFormService,
+        // CC3 seam 1). ──
+        if (report_form.service_freeze(
+                {g, god_active, display_level, internal, overlay_scale,
+                 /*want_presented=*/hd || wsp.present_path(), wsp, ren,
+                 frame_ms, upload_and_show_fn}))
+            continue;
+        {
+            // Freeze + draw live in PauseService (CC3 seam 2); the intent →
+            // LevelOutcome mapping stays here (LevelOutcome is file-local),
+            // in the exact order of the old inline block.
+            const PauseService::FreezeResult pfr = pause.service_freeze(
+                {g, god_active, use_hd_text, frame_ms, upload_and_show_fn});
+            if (pfr == PauseService::FreezeResult::kFroze) continue;
+            if (pfr != PauseService::FreezeResult::kNone) {
+                switch (pfr) {
+                    case PauseService::FreezeResult::kQuitProgram:
+                        outcome = LevelOutcome::kQuitProgram; break;
+                    case PauseService::FreezeResult::kRestartLevel:
+                        outcome = LevelOutcome::kRestartLevel; break;
+                    case PauseService::FreezeResult::kLoadCheckpoint:
+                        outcome = LevelOutcome::kLoadCheckpoint; break;
+                    case PauseService::FreezeResult::kWarpLevel:
+                        out_warp_display = pause.want_warp();
+                        outcome = LevelOutcome::kWarpLevel; break;
+                    case PauseService::FreezeResult::kReinitDisplay:
+                        reinit_req.state = capture_save(g, display_level);
+                        out_reinit = reinit_req;
+                        outcome = LevelOutcome::kReinitDisplay; break;
+                    case PauseService::FreezeResult::kAbortGameOver:
+                        outcome = LevelOutcome::kGameOver; break;
+                    case PauseService::FreezeResult::kShotQuit:
+                        // kQuitProgram is the "Quit to Desktop" outcome
+                        // run_game exits on (pause_shot must not advance the
+                        // sequencer).
+                        outcome = LevelOutcome::kQuitProgram;
+                        running = false; break;
+                    default: break;
                 }
-                continue;
-            }
-            if (report_edit_open) {
-                draw_edit_overlay(pf, g.charset, report_edit);
-            } else if (report_confirm.is_open()) {
-                draw_confirm(pf, report_confirm, g.charset, /*dim=*/true,
-                             /*draw_text=*/true);
-            } else {
-                draw_menu(pf, report_menu, g.charset, /*dim=*/true,
-                          /*draw_text=*/true,
-                          g.render.entity_sprites.size() > 33
-                              ? &g.render.entity_sprites[33]
-                              : nullptr,
-                          &g.render.palette);
-            }
-            upload_and_show(pf, /*with_hud=*/false);
-            SDL_Delay(frame_ms);
-            continue;
-        }
-        if (pause_open) {
-            if (want_quit_program) { outcome = LevelOutcome::kQuitProgram; break; }
-            if (want_restart)      { outcome = LevelOutcome::kRestartLevel; break; }
-            if (want_load)         { outcome = LevelOutcome::kLoadCheckpoint; break; }
-            if (want_warp) {
-                out_warp_display = want_warp;
-                outcome = LevelOutcome::kWarpLevel;
                 break;
             }
-            if (want_reinit) {
-                reinit_req.state = capture_save(g, display_level);
-                out_reinit = reinit_req;
-                outcome = LevelOutcome::kReinitDisplay;
-                break;
-            }
-            if (abort_to_title)    { outcome = LevelOutcome::kGameOver;     break; }
-            g.state.god_mode = god_active;   // keep systems in sync if toggled
-            FrameBuffer pf{320, 200};
-            // Backdrop = the frozen game scene, composed at NATIVE 320×200 (the
-            // classic overload, so it works regardless of --hd-profile), then
-            // dimmed behind the menu slab.  State is frozen, so re-composing
-            // each pause frame is idempotent.
-            compose_frame(pf, g.state, g.render, /*draw_player=*/true);
-            if (confirm_dlg.is_open()) {
-                // Confirm dialog replaces the menu while open (§8.6 step 5).
-                draw_confirm(pf, confirm_dlg, g.charset, /*dim=*/true,
-                             /*draw_text=*/!use_hd_text);
-            } else {
-                // In HD the glyphs are drawn crisply by the vector overlay
-                // (draw_menu_rows_hd in upload_and_show); here draw the slab +
-                // accent only.  In classic, draw the bitmap glyphs too.
-                draw_menu(pf, pause_menu, g.charset, /*dim=*/true,
-                          /*draw_text=*/!use_hd_text,   // bitmap unless enhanced
-                          g.render.entity_sprites.size() > 33
-                              ? &g.render.entity_sprites[33]
-                              : nullptr,    // blank score-bone pointer …
-                          &g.render.palette);   // … in the level's colours
-            }
-            upload_and_show(pf, /*with_hud=*/false);  // also dumps the shot (below)
-            if (std::getenv("OLDUVAI_PAUSE_SHOT")) {
-                // Quit the whole program, not just this level's frame loop —
-                // otherwise the sequencer advances to the next level and never
-                // exits (the pause_shot hung until timeout). kQuitProgram is the
-                // "Quit to Desktop" outcome run_game exits on.
-                outcome = LevelOutcome::kQuitProgram;
-                running = false;
-                break;
-            }
-            SDL_Delay(frame_ms);
-            continue;
         }
         // Frame-counter wrap drives the timer (1 Hz-ish) and food-out
         // death.  The original resets when the PRE-increment value
@@ -2796,14 +2493,9 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
             draw_l3_smoke_tail(rt);
             draw_teleport_fx(rt);
         }
-        // Arm the enhanced GET READY rainbow fly-away on the level-start rising
-        // edge of get_ready_counter (load_level sets it to 0x11).  Wall-clock
-        // start = now, so the hold + rocket-up play smoothly at any refresh rate.
-        if (g.state.get_ready_counter == 0x11 && gr_prev_counter != 0x11) {
-            gr_anim_start = SDL_GetTicks();
-            gr_anim_active = true;
-        }
-        gr_prev_counter = g.state.get_ready_counter;
+        // Arm the enhanced GET READY fly-away on the level-start rising edge
+        // of get_ready_counter (once per logic tick — see banners.hpp).
+        banners.arm_tick();
         // Descent dust tail dissipates once per logic tick (draw sites are
         // per-present; the countdown must not drain faster under smooth-motion).
         if (l3_smoke_tail > 0) --l3_smoke_tail;
@@ -3392,16 +3084,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                     wsp.present(bubble_hook, /*do_present=*/false);
                 else
                     upload_and_show(fb, /*with_hud=*/true, /*do_present=*/false);
-                int ow = 0, oh = 0;
-                SDL_GetRendererOutputSize(ren, &ow, &oh);
-                SDL_Surface* shot = SDL_CreateRGBSurfaceWithFormat(
-                    0, ow, oh, 32, SDL_PIXELFORMAT_RGBA32);
-                if (shot != nullptr &&
-                    SDL_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_RGBA32,
-                                         shot->pixels, shot->pitch) == 0) {
-                    save_surface_image(shot, opts.screenshot);
-                }
-                if (shot != nullptr) SDL_FreeSurface(shot);
+                capture_renderer_output(ren, opts.screenshot);
             } else if (hd) {
                 // HD: the vector HUD text now lives in the output-resolution
                 // overlay (drawn AFTER the scene RenderCopy), not in fb — so
@@ -3428,23 +3111,10 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                         text_overlay.flush(ren, logical_w, logical_h);
                     }
                 }
-                int ow = 0, oh = 0;
-                SDL_GetRendererOutputSize(ren, &ow, &oh);
-                SDL_Surface* shot = SDL_CreateRGBSurfaceWithFormat(
-                    0, ow, oh, 32, SDL_PIXELFORMAT_RGBA32);
-                if (shot != nullptr &&
-                    SDL_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_RGBA32,
-                                         shot->pixels, shot->pitch) == 0) {
-                    save_surface_image(shot, opts.screenshot);
-                }
-                if (shot != nullptr) SDL_FreeSurface(shot);
+                capture_renderer_output(ren, opts.screenshot);
             } else {
                 // Classic: the bitmap HUD is in the 320×200 buffer — save it.
-                SDL_Surface* shot = SDL_CreateRGBSurfaceWithFormatFrom(
-                    fb.px.data(), fb.w, fb.h, 32, fb.w * 4,
-                    SDL_PIXELFORMAT_RGBA32);
-                save_surface_image(shot, opts.screenshot);
-                SDL_FreeSurface(shot);
+                save_rgba_image(fb.px.data(), fb.w, fb.h, opts.screenshot);
             }
             running = false;
         }
@@ -3866,9 +3536,8 @@ int run_game(const GameOptions& opts) {
                 std::fprintf(stderr, "game-over: THEEND.PC1 unexpected width\n");
                 audio_opt->stop_music();
             } else {
-                SDL_Texture* gtex = SDL_CreateTexture(
-                    sw.ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
-                    320 * hd_scale, 200 * hd_scale);
+                SDL_Texture* gtex =
+                    create_stream_tex(sw.ren, 320 * hd_scale, 200 * hd_scale);
                 // MORT.MDI death music over the picture (no celebratory chime).
                 if (audio_opt->music_available()) {
                     const std::vector<std::uint8_t>* md = nullptr;
@@ -3939,9 +3608,8 @@ int run_game(const GameOptions& opts) {
     if (!quit_requested && display > 7 && rc == 0 && !single) {
         formats::CurArchive eva(slurp(opts.game_dir / "FILESA.VGA"));
         formats::CurArchive efa(slurp(opts.game_dir / "FILESA.CUR"));
-        SDL_Texture* etex = SDL_CreateTexture(
-            sw.ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
-            320 * hd_scale, 200 * hd_scale);
+        SDL_Texture* etex =
+            create_stream_tex(sw.ren, 320 * hd_scale, 200 * hd_scale);
         if (audio_opt->music_available() && efa.contains("FIN.MDI")) {
             audio_opt->play_music(efa.get("FIN.MDI").data, formats::mdi_track_id("fin.mdi"));
         }
@@ -4027,19 +3695,7 @@ int run_game(const GameOptions& opts) {
                     // Read back the composited frame before present (the
                     // OLDUVAI_MAINMENU_SHOT pattern), save it, and quit the
                     // session — a one-shot verify must not loop to the title.
-                    int rw = 0, rh = 0;
-                    SDL_GetRendererOutputSize(sw.ren, &rw, &rh);
-                    std::vector<std::uint8_t> rb(
-                        static_cast<std::size_t>(rw) * rh * 4);
-                    if (SDL_RenderReadPixels(sw.ren, nullptr,
-                                             SDL_PIXELFORMAT_RGBA32,
-                                             rb.data(), rw * 4) == 0) {
-                        SDL_Surface* s = SDL_CreateRGBSurfaceWithFormatFrom(
-                            rb.data(), rw, rh, 32, rw * 4,
-                            SDL_PIXELFORMAT_RGBA32);
-                        if (s) { save_surface_image(s, ending_shot);
-                                 SDL_FreeSurface(s); }
-                    }
+                    capture_renderer_output(sw.ren, ending_shot);
                     quit_requested = true;
                     return false;
                 }

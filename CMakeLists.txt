@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.21)
 project(olduvai
-    VERSION 0.9.2
+    VERSION 0.9.3
     DESCRIPTION "Native recreation of the Prehistorik (1991) engine"
     LANGUAGES CXX C)
 
@@ -143,6 +143,7 @@ add_library(olduvai_formats
     src/systems/spawning.cpp
     src/systems/collisions.cpp
     src/systems/collision_dispatch.cpp
+    src/systems/score.cpp
     src/systems/frame_runner.cpp
     src/systems/transitions.cpp
     src/systems/cave_logic.cpp
@@ -196,13 +197,18 @@ if(WIN32 AND OLDUVAI_STATIC_SDL AND TARGET SDL2::SDL2-static)
 endif()
 if(SDL2_FOUND)
     add_library(olduvai_presentation
+        src/presentation/banners.cpp
         src/presentation/viewer.cpp
         src/presentation/gamepad.cpp
         src/presentation/game_render.cpp
+        src/presentation/sprite_blit.cpp
+        src/presentation/bg_compose.cpp
         src/presentation/level_save.cpp
         src/presentation/level_setup.cpp
         src/presentation/pause_flow.cpp
-        src/presentation/tile_patterns.cpp
+        src/presentation/pause_service.cpp
+    src/presentation/report_form.cpp
+    src/presentation/tile_patterns.cpp
         src/presentation/screen_tiles.cpp
         src/presentation/game_app.cpp
         src/presentation/hud_render.cpp
@@ -214,6 +220,7 @@ if(SDL2_FOUND)
         src/presentation/widescreen_presenter.cpp
         src/presentation/window_util.cpp
         src/presentation/boss_app.cpp
+        src/presentation/boss_render.cpp
         src/presentation/audio.cpp
         src/presentation/host_midi.cpp
         src/presentation/opl_sfx.cpp
@@ -359,7 +366,8 @@ else()
 endif()
 
 # ── app ─────────────────────────────────────────────────────────────────────
-add_executable(olduvai src/app/main.cpp src/app/config.cpp)
+add_executable(olduvai src/app/main.cpp src/app/config.cpp
+                       src/app/options_resolve.cpp src/app/cli_args.cpp)
 target_link_libraries(olduvai PRIVATE olduvai_formats)
 target_compile_definitions(olduvai PRIVATE
     OLDUVAI_VERSION="${PROJECT_VERSION}")
@@ -469,6 +477,9 @@ add_executable(olduvai_tests EXCLUDE_FROM_ALL
     tests/test_resample.cpp
     tests/test_wav_io.cpp
     tests/test_opl_music.cpp
+    tests/test_options_resolve.cpp
+    src/app/config.cpp
+    src/app/options_resolve.cpp
     src/presentation/opl_music.cpp
     third_party/nuked_opl3/opl3.c
     src/presentation/mini_json.cpp
@@ -791,7 +802,8 @@ configure_file(${CMAKE_SOURCE_DIR}/assets/fonts/NotoSans-LICENSE.txt
 # ── macOS app bundle (opt-in; `cmake --build --preset release --target olduvai_app`) ──
 if(APPLE AND SDL2_FOUND)
     add_executable(olduvai_app MACOSX_BUNDLE EXCLUDE_FROM_ALL
-        src/app/main.cpp src/app/config.cpp src/app/first_run.cpp)
+        src/app/main.cpp src/app/config.cpp src/app/options_resolve.cpp
+        src/app/cli_args.cpp src/app/first_run.cpp)
     set_target_properties(olduvai_app PROPERTIES
         OUTPUT_NAME "Olduvai"
         MACOSX_BUNDLE_BUNDLE_NAME "Olduvai"

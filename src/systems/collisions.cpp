@@ -488,13 +488,11 @@ void check_chimp_projectile(Entity& e, const CollisionContext& c,
     }
 }
 
-}  // namespace
-
-CollisionResult check_player_collisions(std::vector<Entity>& entities,
-                                        const CollisionContext& ctx) {
-    CollisionResult result;
-    std::set<const Entity*> club_hit;
-
+// check_player_collisions phases, split out so the resolver reads as a
+// three-step pipeline (club hits -> body overlaps -> chimp projectiles).
+// Order is load-bearing: phase 2 skips entities the club already hit.
+void run_club_phase(std::vector<Entity>& entities, const CollisionContext& ctx,
+                    CollisionResult& result, std::set<const Entity*>& club_hit) {
     // ── phase 1: club hits (second swing frame only) ──
     if (ctx.club_flag == 1) {
         for (Entity& e : entities) {
@@ -522,7 +520,11 @@ CollisionResult check_player_collisions(std::vector<Entity>& entities,
             if (hit) club_hit.insert(&e);
         }
     }
+}
 
+void run_body_phase(std::vector<Entity>& entities, const CollisionContext& ctx,
+                    CollisionResult& result,
+                    const std::set<const Entity*>& club_hit) {
     // ── phase 2: body overlaps ──
     for (Entity& e : entities) {
         if (!e.active || club_hit.count(&e)) continue;
@@ -570,11 +572,27 @@ CollisionResult check_player_collisions(std::vector<Entity>& entities,
         if (t == ObjType::ProjectileL3) { check_projectile(e, ctx, result); continue; }
         if (t == ObjType::SnakeL3) { check_snake(e, ctx, result); continue; }
     }
+}
 
+void run_chimp_projectile_phase(std::vector<Entity>& entities,
+                                const CollisionContext& ctx,
+                                CollisionResult& result) {
     // ── phase 3: chimp projectiles ──
     for (Entity& e : entities) {
         if (is_chimp(e.obj_type)) check_chimp_projectile(e, ctx, result);
     }
+}
+
+
+}  // namespace
+
+CollisionResult check_player_collisions(std::vector<Entity>& entities,
+                                        const CollisionContext& ctx) {
+    CollisionResult result;
+    std::set<const Entity*> club_hit;
+    run_club_phase(entities, ctx, result, club_hit);
+    run_body_phase(entities, ctx, result, club_hit);
+    run_chimp_projectile_phase(entities, ctx, result);
     return result;
 }
 

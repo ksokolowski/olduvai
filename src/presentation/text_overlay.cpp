@@ -7,6 +7,7 @@
 
 #include "enhance/hd_text.hpp"
 #include "presentation/screens.hpp"   // HdTextRow (full definition)
+#include "presentation/window_util.hpp"   // create_stream_tex
 
 namespace olduvai::presentation {
 
@@ -27,8 +28,7 @@ void TextOverlay::ensure(SDL_Renderer* ren, int ow, int oh) {
     w_ = ow;
     h_ = oh;
     buf_.assign(static_cast<std::size_t>(ow) * oh * 4, 0);  // transparent
-    tex_ = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32,
-                             SDL_TEXTUREACCESS_STREAMING, ow, oh);
+    tex_ = create_stream_tex(ren, ow, oh);
     if (tex_ != nullptr) {
         SDL_SetTextureBlendMode(tex_, SDL_BLENDMODE_BLEND);
     }

@@ -1,5 +1,41 @@
-// Windows resources for olduvai.exe: the project icon (Explorer, taskbar,
-// title bar all pick up icon id 1 automatically).  Template — CMake
-// configure_file fills the absolute icon path (windres resolves relative
-// paths against its own cwd, not this file).  Compiled on MinGW only.
+// Windows resources for olduvai.exe — template, CMake configure_file fills
+// the @…@ fields (icon path is absolute: windres resolves relative paths
+// against its own cwd, not this file).  Compiled by both toolchains
+// (MinGW windres and MSVC rc via enable_language(RC)).
+//
+// Icon id 1: Explorer, taskbar and title bar pick it up automatically.
 1 ICON "@OLDUVAI_ICO_PATH@"
+
+// Version metadata (Explorer Properties → Details; required by code-signing
+// policies — signed files must carry product name/version attributes).
+// Numeric literals instead of winver.h macros keep the file include-free on
+// both rc compilers.  Strings are deliberately ASCII (rc codepage handling
+// differs between windres and rc.exe).
+1 VERSIONINFO
+FILEVERSION     @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+PRODUCTVERSION  @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          0x40004L    // VOS_NT_WINDOWS32
+FILETYPE        0x1L        // VFT_APP
+FILESUBTYPE     0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"    // en-US, Unicode
+        BEGIN
+            VALUE "ProductName",      "Olduvai"
+            VALUE "FileDescription",  "Olduvai - Prehistorik (1991) engine recreation"
+            VALUE "FileVersion",      "@PROJECT_VERSION@"
+            VALUE "ProductVersion",   "@PROJECT_VERSION@"
+            VALUE "InternalName",     "olduvai"
+            VALUE "OriginalFilename", "olduvai.exe"
+            VALUE "CompanyName",      "Krzysztof Sokolowski"
+            VALUE "LegalCopyright",   "Copyright (C) 2026 Krzysztof Sokolowski. GPL-3.0-or-later."
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

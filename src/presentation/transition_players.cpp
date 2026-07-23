@@ -68,11 +68,7 @@ void play_transition(TransitionShellCtx& ctx, const FrameBuffer& oldf,
         char path[512];
         std::snprintf(path, sizeof path, "%s/trans_k%d_%04d.bmp",
                       dump_dir, kind, seq++);
-        SDL_Surface* s = SDL_CreateRGBSurfaceWithFormatFrom(
-            fr.px.data(), fr.w, fr.h, 32, fr.w * 4,
-            SDL_PIXELFORMAT_RGBA32);
-        save_surface_image(s, path);
-        SDL_FreeSurface(s);
+        save_rgba_image(fr.px.data(), fr.w, fr.h, path);
     };
     // Work buffer: must match the source buffer dimensions (HD or native).
     FrameBuffer work{oldf.w, oldf.h};
@@ -294,10 +290,7 @@ void play_transition_wide(TransitionShellCtx& ctx,
         char path[512];
         std::snprintf(path, sizeof path, "%s/wtrans_k%d_%04d.bmp",
                       dump_dir, kind, wseq++);
-        SDL_Surface* s = SDL_CreateRGBSurfaceWithFormatFrom(
-            fr.data(), Wh, Hh, 32, Wh * 4, SDL_PIXELFORMAT_RGBA32);
-        save_surface_image(s, path);
-        SDL_FreeSurface(s);
+        save_rgba_image(fr.data(), Wh, Hh, path);
     };
     std::vector<std::uint8_t> work(
         static_cast<std::size_t>(Wh) * Hh * 4);   // HD work buffer
@@ -783,10 +776,7 @@ void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
             char path[512];
             std::snprintf(path, sizeof path, "%s/ptrans_%04d.bmp",
                           pan_dump, pseq++);
-            SDL_Surface* s = SDL_CreateRGBSurfaceWithFormatFrom(
-                nat.data(), WN, H, 32, WN * 4, SDL_PIXELFORMAT_RGBA32);
-            save_surface_image(s, path);
-            SDL_FreeSurface(s);
+            save_rgba_image(nat.data(), WN, H, path);
         }
         const int x0h = x0 * ctx.hd_scale;         // HD strip x-offset
         for (int y = 0; y < wHh; ++y)

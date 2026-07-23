@@ -22,6 +22,15 @@ std::int16_t i16(const std::vector<std::uint8_t>& d, std::size_t p) {
     return static_cast<std::int16_t>(u16(d, p));
 }
 
+// Read `count` consecutive little-endian u16 words from file offset `base`
+// into dst[0..count).  The cave/secret/AdLib table readers all repeated this
+// loop; the caller pre-offsets dst (e.g. &out[first]) and base.
+void read_u16le_words(const std::vector<std::uint8_t>& exe, std::size_t base,
+                      int count, int* dst) {
+    for (int i = 0; i < count; ++i)
+        dst[i] = u16(exe, base + static_cast<std::size_t>(i) * 2);
+}
+
 struct TileTableInfo {
     int level;
     std::uint32_t count_ds;
@@ -280,10 +289,8 @@ std::array<int, 53> read_cave_size_table(const std::vector<std::uint8_t>& exe) {
     // fill with the mid-size width so the array has no surprising zeros.
     out.fill(224);
     auto run = [&](std::uint32_t ds, int first, int count) {
-        const std::size_t base = ds_offset_to_file(ds, layout);
-        for (int i = 0; i < count; ++i)
-            out[static_cast<std::size_t>(first + i)] =
-                u16(exe, base + static_cast<std::size_t>(i) * 2);
+        read_u16le_words(exe, ds_offset_to_file(ds, layout), count,
+                         &out[static_cast<std::size_t>(first)]);
     };
     run(0x7CE8, 0, 22);    // L1 caves 0-21
     run(0x7D14, 26, 13);   // L5 caves 26-38
@@ -296,9 +303,7 @@ std::array<int, 10> read_secret_score_table(
     const ExeLayout layout = detect_exe_layout(exe);
     const std::size_t base = ds_offset_to_file(0x8094, layout);
     std::array<int, 10> out{};
-    for (int i = 0; i < 10; ++i)
-        out[static_cast<std::size_t>(i)] =
-            u16(exe, base + static_cast<std::size_t>(i) * 2);
+    read_u16le_words(exe, base, 10, out.data());
     return out;
 }
 
@@ -307,12 +312,8 @@ AdlibSfxVoices read_adlib_sfx_voices(const std::vector<std::uint8_t>& exe) {
     auto voice = [&](std::uint32_t ds) {
         const std::size_t base = ds_offset_to_file(ds, layout);
         AdlibSfxVoice v;
-        for (int i = 0; i < 13; ++i)
-            v.mod[static_cast<std::size_t>(i)] =
-                u16(exe, base + static_cast<std::size_t>(i) * 2);
-        for (int i = 0; i < 13; ++i)
-            v.car[static_cast<std::size_t>(i)] =
-                u16(exe, base + 26 + static_cast<std::size_t>(i) * 2);
+        read_u16le_words(exe, base, 13, v.mod.data());
+        read_u16le_words(exe, base + 26, 13, v.car.data());
         v.mod_wf = u16(exe, base + 52);
         v.car_wf = u16(exe, base + 54);
         return v;

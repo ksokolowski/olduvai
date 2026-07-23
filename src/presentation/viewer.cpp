@@ -157,9 +157,7 @@ int run_viewer(const ViewerOptions& opts) {
         SDL_SetRenderDrawColor(ren, 24, 24, 32, 255);
         SDL_RenderClear(ren);
         if (rgba.w > 0) {
-            SDL_Texture* tex = SDL_CreateTexture(
-                ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
-                rgba.w, rgba.h);
+            SDL_Texture* tex = create_stream_tex(ren, rgba.w, rgba.h);
             SDL_UpdateTexture(tex, nullptr, rgba.px.data(), rgba.w * 4);
             SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
             // Integer-scale, centred.

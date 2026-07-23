@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "presentation/settings_apply.hpp"
+#include "presentation/settings_seed.hpp"
 
 #include <cstdio>
 #include <map>
@@ -194,6 +195,63 @@ int main() {
         REQUIRE(w.size() == 1);
         REQUIRE(w[0].first == "enhance");
         REQUIRE(w[0].second.empty());
+    }
+
+    // seed_settings_mem: the shared Options-baseline seeding (CC3 phase 4,
+    // slice 2).  A minimal bind with the mem/cur field shape is enough —
+    // the template only touches those two members.
+    {
+        struct FakeBind {
+            std::map<std::string, std::string> mem;
+            DisplaySettings cur;
+        };
+
+        // Empty-string runtime values read as their display defaults.
+        FakeBind b;
+        SettingsSeed s;   // all defaults: classic, hd_profile "", aspect ""
+        seed_settings_mem(b, s);
+        REQUIRE(b.cur.enhanced == false);
+        REQUIRE(b.cur.hd_profile == "native");
+        REQUIRE(b.mem["hd_profile"] == "native");
+        REQUIRE(b.mem["aspect"] == "keep");
+        REQUIRE(b.mem["enhanced"] == "false");
+        REQUIRE(b.mem["preset"] == "dos");
+        REQUIRE(b.mem["fullscreen"] == "0");
+        REQUIRE(b.mem["music_volume"] == "100");
+        REQUIRE(b.mem["sfx_volume"] == "100");
+        REQUIRE(b.mem["enhance.smooth_motion"] == "0");
+
+        // Enhanced widescreen session: preset derives to "hd", flags map 1:1.
+        FakeBind b2;
+        SettingsSeed s2;
+        s2.enhanced = true;
+        s2.hd_profile = "smooth";
+        s2.render_scale = 2;
+        s2.music_device = "mt32-builtin";
+        s2.sfx_backend = "opl";
+        s2.aspect = "widescreen";
+        s2.fullscreen = true;
+        s2.flags = EnhanceFlags::all();
+        seed_settings_mem(b2, s2);
+        REQUIRE(b2.cur.enhanced == true);
+        REQUIRE(b2.cur.hd_profile == "smooth");
+        REQUIRE(b2.cur.render_scale == 2);
+        REQUIRE(b2.cur.music_device == "mt32-builtin");
+        REQUIRE(b2.cur.sfx_backend == "opl");
+        REQUIRE(b2.mem["render_scale"] == "2");
+        REQUIRE(b2.mem["aspect"] == "widescreen");
+        REQUIRE(b2.mem["preset"] == "hd");
+        REQUIRE(b2.mem["fullscreen"] == "1");
+        REQUIRE(b2.mem["enhance.hd_text"] == "1");
+        REQUIRE(b2.mem["enhance.descent_pan"] == "1");
+
+        // 4:3 enhanced derives the hd-43 preset row.
+        FakeBind b3;
+        SettingsSeed s3;
+        s3.enhanced = true;
+        s3.aspect = "4:3";
+        seed_settings_mem(b3, s3);
+        REQUIRE(b3.mem["preset"] == "hd-43");
     }
 
     return 0;

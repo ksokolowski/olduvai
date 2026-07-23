@@ -5,6 +5,27 @@ lands; 0.x releases are beta.
 
 ## Unreleased
 
+## 0.9.3 — 2026-07-23
+
+- Terminal launches now print a one-line style hint when no Classic /
+  Enhanced choice has been made yet (`pick a style with --profile dos|hd`).
+  The one-time question is GUI-only, so a plain `olduvai --play` from a
+  shell used to start classic DOS with no sign that a choice existed.
+- Internal: substantial engine cleanup with **no change to how the game
+  plays.** The largest source files were untangled into focused units —
+  sprite blitting, boss-arena rendering, static-background compose, the
+  score subsystem, the collision resolver's phases, and the CLI argument
+  parser — each moved behaviour-preserving and verified frame-for-frame
+  against the reference. The code is cleaner; play is byte-identical to
+  0.9.2.
+- Windows: the executable now carries version metadata (Explorer →
+  Properties → Details: product name, version, description, copyright) —
+  embedded from the CMake project version on both the MinGW and MSVC
+  builds.
+- Added a code-signing policy ([SIGNING.md](SIGNING.md)). Windows binaries
+  remain unsigned for now (SignPath Foundation application pending) —
+  verify downloads against each release's `SHA256SUMS.txt`.
+
 ## 0.9.2 — 2026-07-19
 
 - The Windows zip and the Linux AppImage now ship `data/menus.json`
@@ -161,7 +182,7 @@ lands; 0.x releases are beta.
   engine's own menu-title code — HdText/Freckle Face + the caveman
   fire-and-blood shade — via the new `olduvai_logo` dev tool) with the bone
   beneath, plus transparent bone variants. All graphics consolidated under
-  `assets/` with a provenance README (the only images we ship; all original
+  `assets/` with a provenance README (the only images shipped; all original
   creative work, enforced by check_tree); README header now shows the logo.
 - The app presents as "Olduvai" (capital O) everywhere: an Info.plist
   section embedded in the bare CLI binary names the macOS app menu / Dock

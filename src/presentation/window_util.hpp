@@ -34,6 +34,15 @@ struct ScaledWindow {
     SDL_Renderer* ren = nullptr;
 };
 
+// A streaming RGBA32 texture of size w×h on `ren` — the pixel format and
+// access every scene / overlay / intro / pause texture uses.  Blend mode is
+// left at the SDL default; callers that need SDL_BLENDMODE_BLEND (overlays)
+// set it themselves after.
+inline SDL_Texture* create_stream_tex(SDL_Renderer* ren, int w, int h) {
+    return SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32,
+                             SDL_TEXTUREACCESS_STREAMING, w, h);
+}
+
 // Set the project icon (the embedded bone logo) on a window.  Launchers get
 // the icon from .desktop/.ico/.icns; this covers the RUNNING window — Linux
 // window managers (alt-tab, taskbar) take it from the window itself, and on

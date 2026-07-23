@@ -18,6 +18,8 @@
 #include "presentation/level_save.hpp"      // capture_save
 #include "presentation/parse_util.hpp"      // parse_i, parse_f
 #include "presentation/settings_apply.hpp"  // classify_change, ApplyTier, StagedChange
+#include "presentation/settings_preview.hpp"  // preview_cheap_key
+#include "presentation/settings_seed.hpp"
 
 namespace olduvai::presentation {
 
@@ -143,19 +145,11 @@ SettingsFlow make_pause_flow(MenuModel& model, SettingsSession& session,
     // Discard/revert: restore each staged Options preview to its baseline value.
     h.revert_change = [d](const StagedChange& ch) {
         d->bind->mem[ch.key] = ch.old_value;
-        // Re-apply the cheap live preview at baseline.
-        if (ch.key == "fullscreen" && d->bind->win) {
-            SDL_SetWindowFullscreen(
-                d->bind->win,
-                ch.old_value == "1" ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
-        } else if (ch.key == "music_volume" && d->bind->audio) {
-            d->bind->audio->set_mix_balance(
-                d->bind->enhanced,
-                parse_f(ch.old_value, 100.0f) / 100.0f, -1.0f);
-        } else if (ch.key == "sfx_volume" && d->bind->audio) {
-            d->bind->audio->set_mix_balance(
-                d->bind->enhanced, -1.0f,
-                parse_f(ch.old_value, 100.0f) / 100.0f);
+        // Re-apply the cheap live preview at baseline (shared:
+        // settings_preview.hpp); the site-specific live keys follow.
+        if (preview_cheap_key(ch.key, ch.old_value, d->bind->audio,
+                              d->bind->win, d->bind->enhanced)) {
+            // handled
         } else if (ch.key == "hd_profile" && d->bind->rt_hd_profile) {
             *d->bind->rt_hd_profile = ch.old_value;
         } else if (ch.key == "aspect" && d->bind->apply_aspect) {
@@ -237,23 +231,17 @@ void configure_pause_bind(PauseBindings& bind, const PauseBindWireDeps& d) {
     bind.want_reinit = d.want_reinit;
     bind.reinit_req = d.reinit_req;
     bind.rt_hd_profile = &d.opts->hd_profile;   // opts == run_game's rt
-    bind.cur = {d.opts->enhanced,
-                d.opts->hd_profile.empty() ? "native" : d.opts->hd_profile,
-                d.opts->render_scale, d.opts->music_device, d.opts->sfx_backend};
-    bind.mem["music_device"] = d.opts->music_device;
-    bind.mem["sfx_backend"] = d.opts->sfx_backend;
-    bind.mem["hd_profile"] =
-        d.opts->hd_profile.empty() ? "native" : d.opts->hd_profile;
-    bind.mem["render_scale"] = std::to_string(d.opts->render_scale);
-    bind.mem["aspect"] = d.opts->aspect.empty() ? "keep" : d.opts->aspect;
-    // Master-flag baseline: lets a preset click that matches the current
-    // style net out of the staging diff (and marks the master as genuinely
-    // staged when it does change — encode_enhance_persist keys off that).
-    bind.mem["enhanced"] = d.opts->enhanced ? "true" : "false";
-    // Preset row display seed — derived, not stored.
-    bind.mem["preset"] =
-        !d.opts->enhanced ? "dos"
-                          : (bind.mem["aspect"] == "4:3" ? "hd-43" : "hd");
+    SettingsSeed seed;
+    seed.enhanced = d.opts->enhanced;
+    seed.hd_profile = d.opts->hd_profile;
+    seed.render_scale = d.opts->render_scale;
+    seed.music_device = d.opts->music_device;
+    seed.sfx_backend = d.opts->sfx_backend;
+    seed.aspect = d.opts->aspect;
+    seed.fullscreen = (SDL_GetWindowFlags(d.sw->win) &
+                       SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+    seed.flags = d.opts->enhance;
+    seed_settings_mem(bind, seed);
     // Tier-1 live Aspect: SDL_RenderSetLogicalSize + update run-loop logical_w/h
     // + rt.aspect. No window/audio rebuild, no reload.
     bind.apply_aspect = [opts = d.opts, lw = d.logical_w, lh = d.logical_h,
@@ -265,18 +253,6 @@ void configure_pause_bind(PauseBindings& bind, const PauseBindWireDeps& d) {
         *lh = ld.h;
         SDL_RenderSetLogicalSize(ren, ld.w, ld.h);
     };
-    bind.mem["fullscreen"] =
-        (SDL_GetWindowFlags(d.sw->win) & SDL_WINDOW_FULLSCREEN_DESKTOP) ? "1"
-                                                                        : "0";
-    bind.mem["music_volume"] = "100";
-    bind.mem["sfx_volume"] = "100";
-    bind.mem["enhance.smooth_motion"] = d.opts->enhance.smooth_motion ? "1" : "0";
-    bind.mem["enhance.hd_text"] = d.opts->enhance.hd_text ? "1" : "0";
-    bind.mem["enhance.hud_overlay"] = d.opts->enhance.hud_overlay ? "1" : "0";
-    bind.mem["enhance.cinematic_cue"] = d.opts->enhance.cinematic_cue ? "1" : "0";
-    bind.mem["enhance.fluid_bubbles"] = d.opts->enhance.fluid_bubbles ? "1" : "0";
-    bind.mem["enhance.secret_slide"] = d.opts->enhance.secret_slide ? "1" : "0";
-    bind.mem["enhance.descent_pan"] = d.opts->enhance.descent_pan ? "1" : "0";
     bind.mem["cheat.start_level"] = std::to_string(d.display_level);
 }
 

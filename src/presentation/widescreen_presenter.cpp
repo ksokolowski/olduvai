@@ -19,6 +19,7 @@
 #include "enhance/upscale.hpp"
 #include "presentation/boss_widescreen.hpp"   // boss_ws_margin (shared margin math)
 #include "presentation/image_out.hpp"
+#include "presentation/window_util.hpp"   // create_stream_tex
 #include "presentation/tile_patterns.hpp"
 #include "presentation/widescreen.hpp"
 #include "systems/player.hpp"
@@ -37,11 +38,7 @@ void dump_steady_wide(const std::uint8_t* px, int w, int h) {
     static int seq = 0;
     char path[512];
     std::snprintf(path, sizeof path, "%s/steady_ws_%04d.bmp", dir, seq++);
-    SDL_Surface* s = SDL_CreateRGBSurfaceWithFormatFrom(
-        const_cast<std::uint8_t*>(px), w, h, 32, w * 4,
-        SDL_PIXELFORMAT_RGBA32);
-    save_surface_image(s, path);
-    SDL_FreeSurface(s);
+    save_rgba_image(px, w, h, path);
 }
 }  // namespace
 
@@ -96,9 +93,7 @@ WidescreenPresenter::WidescreenPresenter(WidescreenShellCtx ctx)
     // wide for EVERY non-widescreen path — unchanged.  Widescreen present
     // uses its own WIDE texture wtex_.
     if (active_) {
-        wtex_ = SDL_CreateTexture(ctx_.ren, SDL_PIXELFORMAT_RGBA32,
-                                  SDL_TEXTUREACCESS_STREAMING,
-                                  native_w_ * ctx_.hd_scale,
+        wtex_ = create_stream_tex(ctx_.ren, native_w_ * ctx_.hd_scale,
                                   200 * ctx_.hd_scale);
     }
 }
@@ -176,9 +171,7 @@ void WidescreenPresenter::rebuild_if_resized() {
         native_w_ = 320 + 2 * margin_;
         if (wtex_ != nullptr) { SDL_DestroyTexture(wtex_); wtex_ = nullptr; }
         if (margin_ > 0)
-            wtex_ = SDL_CreateTexture(ctx_.ren, SDL_PIXELFORMAT_RGBA32,
-                                      SDL_TEXTUREACCESS_STREAMING,
-                                      native_w_ * ctx_.hd_scale,
+            wtex_ = create_stream_tex(ctx_.ren, native_w_ * ctx_.hd_scale,
                                       200 * ctx_.hd_scale);
     }
     active_ = (*ctx_.aspect == "widescreen") && ctx_.hd && margin_ > 0;

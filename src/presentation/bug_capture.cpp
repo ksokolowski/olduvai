@@ -118,13 +118,7 @@ std::string timestamp_iso() {
 
 // Save a FrameBuffer (RGBA32, w*4 pitch) as PNG.
 bool save_fb_png(const FrameBuffer& fb, const std::string& path) {
-    SDL_Surface* s = SDL_CreateRGBSurfaceWithFormatFrom(
-        const_cast<std::uint8_t*>(fb.px.data()), fb.w, fb.h, 32, fb.w * 4,
-        SDL_PIXELFORMAT_RGBA32);
-    if (s == nullptr) return false;
-    const bool ok = save_surface_image(s, path);
-    SDL_FreeSurface(s);
-    return ok;
+    return save_rgba_image(fb.px.data(), fb.w, fb.h, path);
 }
 
 // Active entities, sorted deterministically by (obj_type, init_x, init_y, x, y)
