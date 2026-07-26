@@ -682,6 +682,17 @@ if(SDL2_FOUND)
     # SoundFont), so the whole test skips (77) on a runner without them.
     # SDL_AUDIODRIVER=dummy: the offline render opens no device, but SDL audio
     # init still needs a driver on a headless runner.
+    # Windows cannot exec a #! script directly — run the .sh wrappers through
+    # sh (present in MSYS2 and Git for Windows).  Empty prefix elsewhere.
+    # MUST be defined BEFORE the first add_test that uses it: it used to sit
+    # further down, so audio_render — the first .sh test — expanded an EMPTY
+    # prefix and ctest tried to exec the script directly.  On Windows that is
+    # BAD_COMMAND ("inappropriate file type or format"), reported as *Not Run*,
+    # which ctest counts as a FAILURE and which failed the v0.9.4 release job.
+    if(WIN32)
+        find_program(OLDUVAI_TEST_SH NAMES sh bash)
+    endif()
+
     add_test(NAME audio_render
         COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/audio_render.sh"
                 "$<TARGET_FILE:olduvai>")
@@ -695,11 +706,6 @@ if(SDL2_FOUND)
     # window size is 1280×800 and player position is preserved across the
     # rebuild.  The shell wrapper skips (exit 77) when game data is absent so
     # CI without assets stays green.
-    # Windows cannot exec a #! script directly — run the .sh wrappers through
-    # sh (present in MSYS2 and Git for Windows).  Empty prefix elsewhere.
-    if(WIN32)
-        find_program(OLDUVAI_TEST_SH NAMES sh bash)
-    endif()
     add_test(NAME first_run
         COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/first_run.sh"
                 "${CMAKE_SOURCE_DIR}/game_data"
