@@ -27,6 +27,10 @@
 
 #include <string>
 
+namespace olduvai::presentation {
+struct GameOptions;   // (game_app.hpp) — for init_from_options
+}
+
 namespace olduvai::presentation::gamepad {
 
 struct Config {
@@ -42,6 +46,9 @@ struct Config {
 // already-connected controller.  Safe to call once per process (after
 // SDL_Init); idempotent.
 void init(const Config& cfg);
+// Build a Config from a GameOptions' pad_* keys (button_from_string with the
+// per-button defaults) and init().  The session's gamepad-setup one-liner.
+void init_from_options(const GameOptions& opts);
 void shutdown();
 
 bool connected();

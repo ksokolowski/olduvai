@@ -5,23 +5,12 @@
 #include <cmath>
 #include <cstring>
 
+#include "formats/byteorder.hpp"
 #include "formats/packbits.hpp"
 
 namespace olduvai::formats {
 
 namespace {
-
-std::uint32_t read_u32be(const std::vector<std::uint8_t>& d, std::size_t p) {
-    return (static_cast<std::uint32_t>(d[p]) << 24) |
-           (static_cast<std::uint32_t>(d[p + 1]) << 16) |
-           (static_cast<std::uint32_t>(d[p + 2]) << 8) |
-           static_cast<std::uint32_t>(d[p + 3]);
-}
-
-std::uint16_t read_u16be(const std::vector<std::uint8_t>& d, std::size_t p) {
-    return static_cast<std::uint16_t>(
-        (static_cast<std::uint16_t>(d[p]) << 8) | d[p + 1]);
-}
 
 bool tag_is(const std::vector<std::uint8_t>& d, std::size_t p, const char* t) {
     return p + 4 <= d.size() && std::memcmp(d.data() + p, t, 4) == 0;

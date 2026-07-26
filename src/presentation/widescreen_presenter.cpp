@@ -303,20 +303,45 @@ void WidescreenPresenter::build_backdrop() {
 // edge-clamps both margins to the room's own background (self-tile, §8.7).
 // widescreen_neighbors returns {-1,-1} here so left_ok_/right_ok_ are
 // already false — no neighbor compose needed.  Caves/bosses stay pillarbox.
+const FrameBuffer* WidescreenPresenter::ws_backdrop() const {
+    return (backdrop_ok_ && ctx_.render->visual_background) ? &backdrop_
+                                                            : nullptr;
+}
+
 bool WidescreenPresenter::secret_selftile() const {
     return active_ && ctx_.state->secret_flag != 0 &&
            ctx_.state->current_screen >= 100;
 }
 
-// ONE authoritative present-path predicate: widescreen runs (peek OR
-// secret self-tile).  Selects present() (composes its own wide
-// buffer with the entity-overflow pass) over upload_and_show, so secret
-// rooms get the same overflow + single-advance guarantee as the neighbour-
-// peek path.  This SAME predicate gates every present call site, so the
-// "is the overflow pass running this frame?" decision cannot diverge between
-// sites — and the main fb compose always advances club_flag exactly once.
+// A SURFACE screen on a peek level with NO live neighbour on EITHER side still
+// has a meaningful wide fill (compose_static_wide_bg_native extends the
+// backdrop/floor rows + spills a wide level-end tile into the bezel), so it must
+// take the wide present rather than the black pillarbox.  The only such screen
+// is the L3 level-end trunk screen 18: 17→18 is a vertical trunk-descent (no
+// horizontal neighbour) AND it is the last screen (no screen 19), so both
+// left_ok_/right_ok_ are false — which excluded it from present_path() and
+// dropped its custom no-neighbour fill (feat c02c782) back to black bars.
+// Caves/secrets (current_screen >= 100) and bosses (level_supports_peek false)
+// stay pillarbox.  Screens with a neighbour are already covered by left_ok_/
+// right_ok_; this only adds the both-no-neighbour surface case.
+bool WidescreenPresenter::surface_selffill() const {
+    return active_ && !left_ok_ && !right_ok_ &&
+           ctx_.state->secret_flag == 0 && !ctx_.state->cave_flag &&
+           ctx_.state->current_screen < 100 &&
+           presentation::level_supports_peek(ctx_.internal_level_id);
+}
+
+// ONE authoritative present-path predicate: widescreen runs (peek, secret
+// self-tile, OR a no-neighbour surface fill).  Selects present() (composes its
+// own wide buffer with the entity-overflow pass) over upload_and_show, so secret
+// rooms AND the L3 level-end screen get the same overflow + single-advance
+// guarantee as the neighbour-peek path.  This SAME predicate gates every present
+// call site, so the "is the overflow pass running this frame?" decision cannot
+// diverge between sites — and the main fb compose always advances club_flag
+// exactly once.
 bool WidescreenPresenter::present_path() const {
-    return active_ && (left_ok_ || right_ok_ || secret_selftile());
+    return active_ &&
+           (left_ok_ || right_ok_ || secret_selftile() || surface_selffill());
 }
 
 // Tier-1 living margins: cycle the peek monsters' walk sprites IN
@@ -423,9 +448,7 @@ void WidescreenPresenter::present(
     // back on top so the bubbles stay BEHIND it (pixel-identical to the
     // slow base→bubbles→tiles order).  HD only (scale>1).
     if (ctx_.hd && ctx_.hd_scale > 1 && wtex_ != nullptr) {
-        const FrameBuffer* ws_bd =
-            (backdrop_ok_ && ctx_.render->visual_background) ? &backdrop_
-                                                             : nullptr;
+        const FrameBuffer* ws_bd = ws_backdrop();
         const std::vector<std::uint8_t>& bg_hd =
             presentation::get_static_wide_bg_hd(
                 *ctx_.state, *ctx_.render, ctx_.hd_scale, *ctx_.hd_profile,
@@ -567,9 +590,7 @@ void WidescreenPresenter::present(
     // visual_background stops the stale surface mountains bleeding into
     // the secret-room margins; a null backdrop falls back to the
     // self-tile fill the enclosed room wants.
-    const FrameBuffer* ws_bd =
-        (backdrop_ok_ && ctx_.render->visual_background) ? &backdrop_
-                                                         : nullptr;
+    const FrameBuffer* ws_bd = ws_backdrop();
     presentation::compose_widescreen(
         wide, margin_, center,
         left_ok_ ? &left_ : nullptr,
@@ -757,9 +778,7 @@ void WidescreenPresenter::present_transition(std::vector<std::uint8_t>& wide,
 // No state mutation, no RNG.
 void WidescreenPresenter::wrap_wide(const FrameBuffer& center,
                                     std::vector<std::uint8_t>& out) {
-    const FrameBuffer* ws_bd =
-        (backdrop_ok_ && ctx_.render->visual_background) ? &backdrop_
-                                                         : nullptr;
+    const FrameBuffer* ws_bd = ws_backdrop();
     presentation::compose_widescreen(
         out, margin_, center,
         left_ok_ ? &left_ : nullptr,
@@ -870,9 +889,7 @@ void WidescreenPresenter::reapply_seam_bands(std::vector<std::uint8_t>& wide) {
 // and it carries the same layer-extension the steady view uses.
 void WidescreenPresenter::wrap_wide_static(const FrameBuffer& center,
                                            std::vector<std::uint8_t>& out) {
-    const FrameBuffer* ws_bd =
-        (backdrop_ok_ && ctx_.render->visual_background) ? &backdrop_
-                                                         : nullptr;
+    const FrameBuffer* ws_bd = ws_backdrop();
     presentation::compose_static_wide_bg_native(
         *ctx_.state, *ctx_.render, margin_, left_ok_ ? &left_ : nullptr,
         right_ok_ ? &right_ : nullptr, ws_bd, out, left_seam_,
@@ -902,9 +919,7 @@ void WidescreenPresenter::wrap_wide_static(const FrameBuffer& center,
 // margins-builder over the presenter-owned cache.)
 void WidescreenPresenter::compose_static_wide_bg(
     std::vector<std::uint8_t>& out) {
-    const FrameBuffer* ws_bd =
-        (backdrop_ok_ && ctx_.render->visual_background) ? &backdrop_
-                                                         : nullptr;
+    const FrameBuffer* ws_bd = ws_backdrop();
     presentation::compose_static_wide_bg_native(
         *ctx_.state, *ctx_.render, margin_,
         left_ok_ ? &left_ : nullptr,

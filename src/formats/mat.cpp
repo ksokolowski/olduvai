@@ -5,16 +5,12 @@
 #include <algorithm>
 #include <cctype>
 
+#include "formats/byteorder.hpp"
 #include "formats/packbits.hpp"
 
 namespace olduvai::formats {
 
 namespace {
-
-std::uint16_t read_u16be(const std::vector<std::uint8_t>& d, std::size_t p) {
-    return static_cast<std::uint16_t>(
-        (static_cast<std::uint16_t>(d[p]) << 8) | d[p + 1]);
-}
 
 bool is_monochrome_name(const std::string& name) {
     std::string upper = name;

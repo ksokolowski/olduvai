@@ -51,6 +51,13 @@ struct PeekNeighbors {
 PeekNeighbors widescreen_neighbors(int internal_level, int current_screen,
                                    bool secret_flag, int surface_screen_count);
 
+// True for the four surface (non-boss) platform levels whose widescreen margins
+// are filled — internal 1 (jungle), 5 (icy), 3 (dark woods), 7 (volcanic).  A
+// no-neighbour surface screen on one of these still gets the static wide fill
+// (backdrop/floor extension) rather than the black pillarbox, so the present
+// path predicate uses this to include e.g. the L3 level-end trunk screen 18.
+bool level_supports_peek(int internal_level);
+
 // Assemble a wide RGBA buffer (width = 320 + 2*margin, height = 200) from a
 // center 320×200 frame and optional left/right 320×200 neighbor frames.
 //   * Left margin  = the right `margin` columns of `left`.

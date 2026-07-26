@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "systems/collisions.hpp"
 
+#include "systems/sprite_ids.hpp"
+
 #include "core/game_tables.hpp"
 
 #include <cstdlib>
@@ -16,7 +18,6 @@ using core::ObjType;
 
 namespace {
 
-constexpr int kSprBirdKo = 43;
 
 // Per-monster X-right damage bound (data-table word 5).
 int monster_x_right(ObjType t) {
@@ -53,17 +54,6 @@ int monster_ko_score(ObjType t) {
     }
 }
 
-bool is_monster(ObjType t) {
-    switch (t) {
-        case ObjType::RedDino: case ObjType::YellowFuzz:
-        case ObjType::BrownBear: case ObjType::GreenDino:
-        case ObjType::MonsterL3A: case ObjType::MonsterL3B:
-        case ObjType::MonsterL5A: case ObjType::MonsterL5B:
-        case ObjType::MonsterL7A: case ObjType::MonsterL7B:
-            return true;
-        default: return false;
-    }
-}
 
 bool is_chimp(ObjType t) {
     return t == ObjType::Chimp || t == ObjType::ChimpL5;

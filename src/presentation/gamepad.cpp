@@ -4,6 +4,8 @@
 
 #include <cstdio>
 
+#include "presentation/game_app.hpp"   // GameOptions
+
 namespace olduvai::presentation::gamepad {
 
 namespace {
@@ -104,6 +106,17 @@ void init(const Config& cfg) {
     SDL_AddEventWatch(gamepad_event_watch, nullptr);
     open_first_available();
     g_inited = true;
+}
+
+void init_from_options(const GameOptions& opts) {
+    Config pcfg;
+    pcfg.jump = button_from_string(opts.pad_jump, SDL_CONTROLLER_BUTTON_A);
+    pcfg.attack = button_from_string(opts.pad_attack, SDL_CONTROLLER_BUTTON_X);
+    pcfg.pause = button_from_string(opts.pad_pause, SDL_CONTROLLER_BUTTON_START);
+    pcfg.confirm = button_from_string(opts.pad_confirm, SDL_CONTROLLER_BUTTON_A);
+    pcfg.back = button_from_string(opts.pad_back, SDL_CONTROLLER_BUTTON_B);
+    pcfg.deadzone = opts.pad_deadzone;
+    init(pcfg);
 }
 
 void shutdown() {

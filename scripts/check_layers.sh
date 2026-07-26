@@ -32,7 +32,11 @@ rank() {
     esac
 }
 
-for f in $(git ls-files 'src/*/*.cpp' 'src/*/*.hpp'); do
+# NOTE the '**' patterns: 'src/*/*.cpp' alone matches only ONE level, so the
+# moment a layer grows subdirectories (presentation/ is 120 files and wants
+# them) every moved file would silently stop being checked while this script
+# still printed OK.  Keep both forms.
+for f in $(git ls-files 'src/*/*.cpp' 'src/*/*.hpp' 'src/*/**/*.cpp' 'src/*/**/*.hpp' | sort -u); do
     layer=$(echo "$f" | cut -d/ -f2)
     r=$(rank "$layer")
     incs=$(grep -oE '#include "(formats|prepare|core|systems|enhance|presentation|app)/' "$f" \

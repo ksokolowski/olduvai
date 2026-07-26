@@ -3,6 +3,8 @@
 #include "presentation/image_out.hpp"
 
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 // Vendored single-header: silence its own warnings under -Werror.
@@ -60,6 +62,15 @@ bool capture_renderer_output(SDL_Renderer* ren, const std::string& path) {
     }
     if (s != nullptr) SDL_FreeSurface(s);
     return ok;
+}
+
+void maybe_dump_steady(const void* pixels, int w, int h) {
+    const char* dir = std::getenv("OLDUVAI_DUMP_STEADY");
+    if (dir == nullptr) return;
+    static int seq = 0;
+    char path[512];
+    std::snprintf(path, sizeof path, "%s/steady_fb_%04d.bmp", dir, seq++);
+    save_rgba_image(pixels, w, h, path);
 }
 
 }  // namespace olduvai::presentation

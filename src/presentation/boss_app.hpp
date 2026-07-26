@@ -9,6 +9,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 
 #include "presentation/enhance_flags.hpp"
@@ -18,6 +19,22 @@ namespace olduvai::presentation { class SdlAudio; }
 
 namespace olduvai::presentation {
 
+// Reinit-class display/audio Options the player Applied in the boss pause menu.
+// The boss has no mid-fight reinit path, so these are handed back to run_game,
+// which applies them to rt and rebuilds the display/audio pipeline when the
+// fight ends — the next level (or a Restart Fight) uses them ("after the
+// fight").  Seeded from the fight-entry settings; Applied changes override.
+// Meaningful mainly in enhanced/HD sessions: in classic mode hd_profile /
+// render_scale are inert (scale stays 1) so no rebuild results.
+struct BossReinit {
+    bool enhanced = false;
+    int render_scale = 2;
+    std::string hd_profile = "native";
+    std::string music_device = "auto";
+    std::string sfx_backend = "auto";
+    std::string aspect = "keep";
+};
+
 struct BossRunResult {
     bool survived = false;
     int lives = 3;
@@ -25,6 +42,9 @@ struct BossRunResult {
     bool quit = false;
     bool restart = false;        // Pause -> Restart Fight (redo this level)
     bool quit_program = false;   // Pause -> Quit to Desktop
+    // Set iff a reinit-class display/audio Option (or aspect) was Applied in
+    // the boss pause; run_game applies it after the fight (see above).
+    std::optional<BossReinit> reinit;
 };
 
 // Run a boss fight (display levels 2/4/6 → internal 2/4/6).

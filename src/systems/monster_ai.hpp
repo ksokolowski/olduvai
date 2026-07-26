@@ -16,13 +16,9 @@
 
 #include "core/collision_bitmap.hpp"
 #include "core/types.hpp"
+#include "systems/sprite_ids.hpp"   // kSprFishUp/Down, kSprEgg, kSprRock, …
 
 namespace olduvai::systems {
-
-constexpr int kSprFishUp = 83;
-constexpr int kSprFishDown = 84;
-constexpr int kSprEgg = 125;
-constexpr int kSprRock = 143;
 
 struct UpdateEntitiesResult {
     int l3a_phase_counter = 0;

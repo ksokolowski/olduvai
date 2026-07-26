@@ -26,7 +26,8 @@ void draw_centered(FrameBuffer& fb,
 
 // Wait up to `frames` at 18 Hz, returning early on a fresh SPACE/RETURN
 // KEYDOWN event (edge-triggered — held keys from gameplay do NOT fire).
-// Returns false on QUIT/ESC (abort), true otherwise.
+// Returns false only on QUIT (window close); ESC skips like SPACE/RETURN — a
+// post-win tally must never abort (the boss caller turned that into game-over).
 // Mirrors the reference's _wait_skippable (FUN_1847_0670 fire-key polling):
 // the EXE's polled loop is calibrated-delay; we translate to event edges so
 // a key held when the tally begins does not blow through the pause instantly.
@@ -37,7 +38,7 @@ bool tally_pause(const PresentFn& present, const FrameBuffer& fb,
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_QUIT) return false;
             if (ev.type == SDL_KEYDOWN) {
-                if (ev.key.keysym.sym == SDLK_ESCAPE) return false;
+                if (ev.key.keysym.sym == SDLK_ESCAPE) return true;  // post-win: skip, never abort
                 // Alt+Enter belongs to the fullscreen chord, not the skip
                 // (enter_skip_allowed convention); requeue so the present
                 // path's poll sees and handles the toggle.
@@ -339,7 +340,7 @@ bool show_score_tally(int& lives, long& score, int display_level,
             while (SDL_PollEvent(&ev)) {
                 if (ev.type == SDL_QUIT) return false;
                 if (ev.type == SDL_KEYDOWN) {
-                    if (ev.key.keysym.sym == SDLK_ESCAPE) return false;
+                    if (ev.key.keysym.sym == SDLK_ESCAPE) return true;  // post-win: skip, never abort
                     if ((ev.key.keysym.sym == SDLK_RETURN ||
                          ev.key.keysym.sym == SDLK_KP_ENTER) &&
                         (ev.key.keysym.mod & KMOD_ALT) != 0) {
@@ -365,13 +366,14 @@ bool show_score_tally(int& lives, long& score, int display_level,
     // per-step arithmetic (identical final score), then falls into the
     // post-tally pause.  The EXE cannot skip the rolls (FUN_270a_01b4
     // 0x0303-0x03bd are vsync-only loops, no input poll — catalog #06).
-    // QUIT/ESC aborts mid-roll (consistent with the pause handling above).
+    // QUIT (window close) aborts mid-roll; ESC skips like SPACE/RETURN — a
+    // post-win tally must never abort (consistent with the pause handling above).
     auto roll_keys = [&]() -> int {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_QUIT) return -1;
             if (ev.type == SDL_KEYDOWN) {
-                if (ev.key.keysym.sym == SDLK_ESCAPE) return -1;
+                if (ev.key.keysym.sym == SDLK_ESCAPE) return 1;  // post-win: skip, never abort
                 if ((ev.key.keysym.sym == SDLK_RETURN ||
                      ev.key.keysym.sym == SDLK_KP_ENTER) &&
                     (ev.key.keysym.mod & KMOD_ALT) != 0) {

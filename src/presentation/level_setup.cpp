@@ -193,6 +193,20 @@ ScreenTileContext screen_tile_ctx(
     return ctx;
 }
 
+void setup_enhanced_glider_water(Loaded& g, bool enhanced, int internal) {
+    if (!enhanced || internal != 5) return;
+    constexpr int kFlightStart = 9, kWaterSpr = 7;
+    if (kFlightStart < static_cast<int>(g.tiles.screens.size())) {
+        int maxy = -1;
+        for (const auto& tp : g.tiles.screens[kFlightStart].tiles)
+            if (tp.sprite_idx == kWaterSpr) maxy = std::max(maxy, tp.y);
+        g.glider_water_y = maxy;   // -1 if screen 9 has no water (disabled)
+    }
+    if (g.glider_water_y >= 0 && g.state.current_screen >= 9 &&
+        g.state.current_screen <= core::kLastScreen)
+        normalize_glider_water(g.render.tiles, g.glider_water_y);
+}
+
 void bind_screen(Loaded& g, int screen) {
     if (screen >= 100 && g.state.secret_flag) {   // secret room
         systems::setup_secret_collision(g.state);

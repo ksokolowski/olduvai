@@ -29,7 +29,7 @@ copy of the game: see [Getting the game](#getting-the-game) and
 
 ## Status
 
-**Beta — 0.9.3.** The full game is playable natively: all seven levels,
+**Beta — 0.9.4.** The full game is playable natively: all seven levels,
 the three boss fights, caves, secret rooms, flight sequences and the
 ending. Behaviour is validated frame-by-frame against an independent
 reference implementation — a 12-scenario cross-engine corpus plus a

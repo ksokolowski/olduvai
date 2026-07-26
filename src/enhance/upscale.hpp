@@ -21,6 +21,18 @@ const std::vector<std::string>& supported_hd_profiles();
 // True iff `profile` is one of supported_hd_profiles().
 bool is_supported_hd_profile(const std::string& profile);
 
+// True iff `profile`'s scaler copies whole source pixels (palette / binary
+// alpha preserved), so a sprite's transparency must be re-stamped as a NEAREST
+// upscale of the source mask.  False for blending scalers (omniscale, xbr),
+// whose anti-aliased alpha edge is kept.  This is the SINGLE SOURCE OF TRUTH
+// for the per-scaler alpha treatment the HD asset cache applies — adding a
+// scaler forces the choice here.  It is correctness-affecting and NOT covered
+// by the gameplay trace: a palette-preserving scaler omitted from this list
+// silently emits a partial-alpha halo instead of the reference's crisp
+// silhouette (audit A4).  Unknown profile => false (safe default: keep whatever
+// alpha the pipeline already produced).
+bool profile_preserves_palette(const std::string& profile);
+
 // RGBA in (w×h), RGBA out (w*scale × h*scale).  Dispatches by profile:
 //   native        identity (HD disabled upstream; returns input)
 //   retro         nearest-neighbour (crisp blocky pixels)

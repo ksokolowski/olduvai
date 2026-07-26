@@ -5,6 +5,44 @@ lands; 0.x releases are beta.
 
 ## Unreleased
 
+## 0.9.4 — 2026-07-26
+
+- **Pause overlay in Enhanced widescreen** now shows the game properly
+  behind it. The menu used to black out the widescreen side margins and
+  drop the HUD entirely; on boss arenas the frozen fight also fell back to
+  unfiltered classic pixels while the menu above it stayed sharp. The
+  paused frame now keeps its margin scenery, its HUD, and its HD
+  filtering, and the boss HUD is drawn across the wide band as it is
+  during play.
+- Pausing mid-swing no longer eats the club. The frozen frame was still
+  advancing the swing counter once per rendered frame, so holding the
+  menu open — or opening the F5 report form — made the club vanish.
+- **Dark Woods (L5) end screen** had black widescreen bars instead of
+  forest and floor. It is the one surface screen with no neighbour on
+  either side, and it fell out of the widescreen path entirely.
+- Leaving a **cave** briefly painted widescreen scenery onto the cave
+  screen itself for the length of the fade. Affected every regular cave,
+  L1 through L7.
+- Changing the **HD profile** from Options now applies everywhere at once.
+  The pause overlay, loading and tally screens kept upscaling with the
+  previous profile until the next level.
+- `--god` now applies to boss fights (99 lives), and toggling god from the
+  pause Cheats menu survives a level change instead of silently reverting
+  at the next level.
+- **The HD cache on disk is roughly 40x smaller.** The upscaled bake stored
+  16-colour artwork as uncompressed 32-bit pixels; it is now compressed
+  (~2% of the former size — a 400 MB cache becomes ~10 MB). Existing
+  caches stay readable and shrink as entries are rewritten; no re-prepare
+  is needed.
+- Problems reading gameplay tables from the game executable are now
+  reported instead of being swallowed, so a corrupt file says so rather
+  than surfacing later as a confusing loader error.
+- Internal: the Dark Woods trunk-descent sequence moved into its own unit
+  and shared helpers replaced several copied ones — behaviour-preserving
+  and verified frame-for-frame. New regression gates cover the boss arena,
+  the HD/widescreen pause frames, the cave transitions and the trunk
+  descent; the tree also gained a clang-tidy configuration.
+
 ## 0.9.3 — 2026-07-23
 
 - Terminal launches now print a one-line style hint when no Classic /

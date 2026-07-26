@@ -29,7 +29,6 @@ constexpr int kBossTurnSpr = 28;
 constexpr int kBossAirSpr = 3;
 constexpr int kBossStandSpr = 0;
 constexpr int kBossDeathRiseSpr = 16;    // + (dead_counter & 1)
-constexpr int kBossHaloSprBase = 26;     // invuln flash sprites 26/27
 
 struct BossPlayerState {
     int x = 60;
@@ -61,6 +60,16 @@ struct BossPlayerState {
 };
 
 BossPlayerState init_boss_player(int lives = 3, long score = 0);
+
+// Clamp a boss-arena player X to [lo, hi], the per-fight floor limits.  Unifies
+// the divergent spellings across the fights (audit C1); integer-exact, matching
+// the EXE move-handler clamp.  NOTE: the L4 victory ride uses a DIFFERENT range
+// ([20,220], FUN_24cc_02f2) and deliberately stays separate.
+inline int clamp_boss_x(int x, int lo, int hi) {
+    if (x < lo) return lo;
+    if (x > hi) return hi;
+    return x;
+}
 
 void update_boss_player(BossPlayerState& p, bool key_left, bool key_right,
                         bool key_jump, bool key_fire);

@@ -30,6 +30,15 @@ bool is_supported_hd_profile(const std::string& profile) {
     return false;
 }
 
+bool profile_preserves_palette(const std::string& profile) {
+    // Nearest / whole-pixel scalers: the upscaled sprite carries only source
+    // colours, so its binary alpha mask is re-stamped as a nearest upscale of
+    // the source (crisp silhouette).  The blenders (omniscale, xbr) invent an
+    // anti-aliased alpha edge from the binary input mask, which is kept.
+    return profile == "native" || profile == "retro" || profile == "smooth" ||
+           profile == "eagle" || profile == "mmpx";
+}
+
 std::vector<std::uint8_t> upscale_rgba(const std::vector<std::uint8_t>& px,
                                        int w, int h, int scale,
                                        const std::string& profile) {

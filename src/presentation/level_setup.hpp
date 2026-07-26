@@ -38,6 +38,13 @@ void refresh_secret_tiles(Loaded& g, bool draw_scatter);
 
 void bind_screen(Loaded& g, int screen);
 
+// Enhanced icy-glider (internal level 5): flatten the decorative water (sprite
+// 7, no collision) to the flight-start (screen 9) sea level across the flight
+// screens so it reads as one continuous body during the glider.  Visual-only;
+// a no-op unless `enhanced` and `internal == 5`.  bind_screen applies this per
+// screen; call once at level entry for the already-bound entry screen.
+void setup_enhanced_glider_water(Loaded& g, bool enhanced, int internal);
+
 void build_surface_screen_assets(const Loaded& g, int screen,
                                  presentation::LevelRenderAssets& ra,
                                  systems::SystemsState& st);

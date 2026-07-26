@@ -55,7 +55,6 @@ struct Mt32Api {
     Mt32RenderFn render = nullptr;
     Mt32FreeFn free_ctx = nullptr;
 };
-Mt32Api g_mt32;
 
 // Silent libmt32emu report handler.  Passing NULL to mt32emu_create_context
 // installs libmt32emu's default handler, which routes printDebug() to stderr
@@ -122,12 +121,12 @@ void* load_mt32emu() {
 // ROM discovery: rom_dir arg -> $OLDUVAI_MT32_ROMS ->
 // ~/.config/olduvai/mt32-roms -> ./mt32-roms.  Accepts the MT-32 or
 // CM-32L control+PCM pair in either letter case.
-bool add_rom_pair(void* ctx, const std::string& dir) {
+bool add_rom_pair(const Mt32Api& api, void* ctx, const std::string& dir) {
     auto try_pair = [&](const char* ctl, const char* pcm) {
         const std::string a = dir + "/" + ctl;
         const std::string b = dir + "/" + pcm;
-        if (g_mt32.add_rom(ctx, a.c_str()) >= 0 &&
-            g_mt32.add_rom(ctx, b.c_str()) >= 0) {
+        if (api.add_rom(ctx, a.c_str()) >= 0 &&
+            api.add_rom(ctx, b.c_str()) >= 0) {
             return true;
         }
         return false;
@@ -180,7 +179,6 @@ struct FsApi {
     FsDelSynthFn del_synth = nullptr;
     FsDelSettingsFn del_settings = nullptr;
 };
-FsApi g_fs;
 
 void* load_fluidsynth() {
 #ifdef __APPLE__
@@ -230,6 +228,184 @@ std::string find_soundfont(const std::string& override_path) {
     return select_soundfont(config_dir, system_dirs, names, exists);
 }
 
+// ---- Melodic synth backends (PcmMidiSynth impls) -------------------------
+// Each owns its dlopen handle + backend objects and the bound C-API subset;
+// create() runs the whole probe and returns null on any failure so the caller
+// just checks the pointer.  send()/render() are the only live entry points —
+// see the PcmMidiSynth doc in audio.hpp.
+
+// libmt32emu (Roland MT-32 / CM-32L): send() forwards a raw packed MIDI message
+// (libmt32emu parses the bytes itself); render() pulls stereo s16.
+class Mt32Synth final : public PcmMidiSynth {
+public:
+    static std::unique_ptr<Mt32Synth> create(const std::string& rom_dir,
+                                              int rate) {
+        void* lib = load_mt32emu();
+        if (lib == nullptr) return nullptr;
+        Mt32Api api;
+        api.create = reinterpret_cast<Mt32CreateFn>(
+            dyn_sym(lib, "mt32emu_create_context"));
+        api.add_rom = reinterpret_cast<Mt32AddRomFn>(
+            dyn_sym(lib, "mt32emu_add_rom_file"));
+        api.open = reinterpret_cast<Mt32OpenFn>(
+            dyn_sym(lib, "mt32emu_open_synth"));
+        api.set_rate = reinterpret_cast<Mt32RateFn>(
+            dyn_sym(lib, "mt32emu_set_stereo_output_samplerate"));
+        api.play_msg = reinterpret_cast<Mt32PlayMsgFn>(
+            dyn_sym(lib, "mt32emu_play_msg"));
+        api.render = reinterpret_cast<Mt32RenderFn>(
+            dyn_sym(lib, "mt32emu_render_bit16s"));
+        api.free_ctx = reinterpret_cast<Mt32FreeFn>(
+            dyn_sym(lib, "mt32emu_free_context"));
+        if (api.create != nullptr && api.add_rom != nullptr &&
+            api.open != nullptr && api.play_msg != nullptr &&
+            api.render != nullptr) {
+            void* ctx = api.create(
+                const_cast<Mt32ReportHandlerV0*>(&kSilentReportHandler),
+                nullptr);
+            bool roms_ok = false;
+            for (const auto& dir : rom_search_dirs(rom_dir)) {
+                if (add_rom_pair(api, ctx, dir)) {
+                    roms_ok = true;
+                    break;
+                }
+            }
+            if (roms_ok) {
+                if (api.set_rate != nullptr) api.set_rate(ctx, rate);
+                if (api.open(ctx) == 0) {
+                    return std::unique_ptr<Mt32Synth>(
+                        new Mt32Synth(lib, ctx, api));
+                }
+            }
+            if (api.free_ctx != nullptr) api.free_ctx(ctx);
+        }
+        dyn_close(lib);
+        return nullptr;
+    }
+    ~Mt32Synth() override {
+        if (ctx_ != nullptr && api_.free_ctx != nullptr) api_.free_ctx(ctx_);
+        if (lib_ != nullptr) dyn_close(lib_);
+    }
+    void send(std::uint8_t st, std::uint8_t d1, std::uint8_t d2) override {
+        api_.play_msg(ctx_, static_cast<std::uint32_t>(st) |
+                                (static_cast<std::uint32_t>(d1) << 8) |
+                                (static_cast<std::uint32_t>(d2) << 16));
+    }
+    void render(int frames, std::int16_t* out) override {
+        api_.render(ctx_, out, static_cast<std::uint32_t>(frames));
+    }
+
+private:
+    Mt32Synth(void* lib, void* ctx, const Mt32Api& api)
+        : lib_(lib), ctx_(ctx), api_(api) {}
+    void* lib_ = nullptr;
+    void* ctx_ = nullptr;
+    Mt32Api api_;
+};
+
+// libfluidsynth (General MIDI + a SoundFont): send() demuxes a channel-voice
+// message into the typed fluid_synth_* calls (each guarded — an older
+// libfluidsynth may not export every one); render() pulls stereo s16.
+class FluidSynth final : public PcmMidiSynth {
+public:
+    static std::unique_ptr<FluidSynth> create(const std::string& soundfont,
+                                              int rate) {
+        void* lib = load_fluidsynth();
+        if (lib == nullptr) return nullptr;
+        FsApi api;
+        api.new_settings = reinterpret_cast<FsNewSettingsFn>(
+            dyn_sym(lib, "new_fluid_settings"));
+        api.setnum = reinterpret_cast<FsSetNumFn>(
+            dyn_sym(lib, "fluid_settings_setnum"));
+        api.new_synth = reinterpret_cast<FsNewSynthFn>(
+            dyn_sym(lib, "new_fluid_synth"));
+        api.sfload = reinterpret_cast<FsSfLoadFn>(
+            dyn_sym(lib, "fluid_synth_sfload"));
+        api.noteon = reinterpret_cast<FsNoteOnFn>(
+            dyn_sym(lib, "fluid_synth_noteon"));
+        api.noteoff = reinterpret_cast<FsNoteOffFn>(
+            dyn_sym(lib, "fluid_synth_noteoff"));
+        api.program = reinterpret_cast<FsProgFn>(
+            dyn_sym(lib, "fluid_synth_program_change"));
+        api.cc = reinterpret_cast<FsCcFn>(
+            dyn_sym(lib, "fluid_synth_cc"));
+        api.bend = reinterpret_cast<FsBendFn>(
+            dyn_sym(lib, "fluid_synth_pitch_bend"));
+        api.write_s16 = reinterpret_cast<FsWriteFn>(
+            dyn_sym(lib, "fluid_synth_write_s16"));
+        api.del_synth = reinterpret_cast<FsDelSynthFn>(
+            dyn_sym(lib, "delete_fluid_synth"));
+        api.del_settings = reinterpret_cast<FsDelSettingsFn>(
+            dyn_sym(lib, "delete_fluid_settings"));
+        if (api.new_settings == nullptr || api.new_synth == nullptr ||
+            api.sfload == nullptr || api.write_s16 == nullptr) {
+            dyn_close(lib);
+            return nullptr;
+        }
+        void* settings = api.new_settings();
+        if (api.setnum != nullptr) {
+            api.setnum(settings, "synth.sample-rate", rate);
+        }
+        void* synth = api.new_synth(settings);
+        if (synth != nullptr && api.sfload(synth, soundfont.c_str(), 1) >= 0) {
+            return std::unique_ptr<FluidSynth>(
+                new FluidSynth(lib, settings, synth, api));
+        }
+        // Failure: tear down whatever was built while the lib is still open
+        // (calling into an already-dlclose'd lib would be UB).
+        if (synth != nullptr && api.del_synth != nullptr) api.del_synth(synth);
+        if (settings != nullptr && api.del_settings != nullptr) {
+            api.del_settings(settings);
+        }
+        dyn_close(lib);
+        return nullptr;
+    }
+    ~FluidSynth() override {
+        if (synth_ != nullptr && api_.del_synth != nullptr) {
+            api_.del_synth(synth_);
+        }
+        if (settings_ != nullptr && api_.del_settings != nullptr) {
+            api_.del_settings(settings_);
+        }
+        if (lib_ != nullptr) dyn_close(lib_);
+    }
+    void send(std::uint8_t st, std::uint8_t d1, std::uint8_t d2) override {
+        const int chn = st & 0x0F;
+        switch (st & 0xF0) {
+            case 0x90:
+                if (api_.noteon != nullptr) api_.noteon(synth_, chn, d1, d2);
+                break;
+            case 0x80:
+                if (api_.noteoff != nullptr) api_.noteoff(synth_, chn, d1);
+                break;
+            case 0xC0:
+                if (api_.program != nullptr) api_.program(synth_, chn, d1);
+                break;
+            case 0xB0:
+                if (api_.cc != nullptr) api_.cc(synth_, chn, d1, d2);
+                break;
+            case 0xE0:
+                if (api_.bend != nullptr) {
+                    api_.bend(synth_, chn, (d2 << 7) | d1);
+                }
+                break;
+            default:
+                break;
+        }
+    }
+    void render(int frames, std::int16_t* out) override {
+        api_.write_s16(synth_, frames, out, 0, 2, out, 1, 2);
+    }
+
+private:
+    FluidSynth(void* lib, void* settings, void* synth, const FsApi& api)
+        : lib_(lib), settings_(settings), synth_(synth), api_(api) {}
+    void* lib_ = nullptr;
+    void* settings_ = nullptr;
+    void* synth_ = nullptr;
+    FsApi api_;
+};
+
 void sdl_callback(void* userdata, Uint8* stream, int len) {
     auto* self = static_cast<SdlAudio*>(userdata);
     self->mix(reinterpret_cast<std::int16_t*>(stream), len / 4);
@@ -253,7 +429,7 @@ SdlAudio::SdlAudio(const std::string& music_device,
                    const std::string& soundfont,
                    const std::string& sfx_backend,
                    int audio_rate, int audio_buffer,
-                   const std::string& midi_port) {
+                   const std::string& midi_port, bool offline) {
     // SFX backend flags are resolved AFTER the music backend loads (below),
     // so "auto" can pair to the music device the way Python's
     // _resolve_sfx_backend does.
@@ -282,27 +458,32 @@ SdlAudio::SdlAudio(const std::string& music_device,
     want.userdata = this;
     SDL_AudioSpec have{};
     device_samples_ = want_samples;
-    device_ = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
-    if (device_ == 0) {
-        std::fprintf(stderr,
-                     "audio: could not open an audio device (%s) — running silent\n",
-                     SDL_GetError());
-        return;
+    // Offline (render harness): keep the negotiated device_rate_ (from
+    // audio_rate) and set up the synths below, but open NO device and install
+    // no unplug watch — mix() is driven by hand via render_offline().
+    if (!offline) {
+        device_ = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
+        if (device_ == 0) {
+            std::fprintf(stderr,
+                         "audio: could not open an audio device (%s) — running silent\n",
+                         SDL_GetError());
+            return;
+        }
+        device_rate_ = have.freq;
+        // Device-unplug recovery: an SDL event watch sees SDL_AUDIODEVICEREMOVED
+        // no matter which loop (surface / boss / menu) is pumping events, so
+        // pulling the headphones mid-game reopens the default output instead of
+        // permanent silence.  The watch runs on the pumping (main) thread.
+        SDL_AddEventWatch(audio_device_watch, this);
+        event_watch_installed_ = true;
     }
-    device_rate_ = have.freq;
-    // Device-unplug recovery: an SDL event watch sees SDL_AUDIODEVICEREMOVED
-    // no matter which loop (surface / boss / menu) is pumping events, so
-    // pulling the headphones mid-game reopens the default output instead of
-    // permanent silence.  The watch runs on the pumping (main) thread.
-    SDL_AddEventWatch(audio_device_watch, this);
-    event_watch_installed_ = true;
 
 
     // ── Host-MIDI music path (opt-in) ───────────────────────────────────────
     // "host-midi" (and the Python back-compat alias "mt32") route MDI music to
     // a real MIDI OUT port via RtMidi instead of rendering audio.  When it
     // opens a port we mark host_midi_active_ and SKIP every synth-music setup
-    // block below (none of mt32_/fs_synth_/opl_music_ ever bind), so the music
+    // block below (neither synth_ nor opl_music_ ever binds), so the music
     // backend is "host-midi" and the SDL device only ever renders SFX.  If no
     // port opens (no device, RtMidi absent), we fall through to the regular
     // synth selection so the user still gets sound.  Note: bare "mt32" only
@@ -345,109 +526,18 @@ SdlAudio::SdlAudio(const std::string& music_device,
     if (!host_midi_active_ &&
         (music_device_eff == "auto" || music_device_eff == "mt32-builtin" ||
          music_device_eff == "mt32")) {
-        mt32_lib_ = load_mt32emu();
-        if (mt32_lib_ != nullptr) {
-            g_mt32.create = reinterpret_cast<Mt32CreateFn>(
-                dyn_sym(mt32_lib_, "mt32emu_create_context"));
-            g_mt32.add_rom = reinterpret_cast<Mt32AddRomFn>(
-                dyn_sym(mt32_lib_, "mt32emu_add_rom_file"));
-            g_mt32.open = reinterpret_cast<Mt32OpenFn>(
-                dyn_sym(mt32_lib_, "mt32emu_open_synth"));
-            g_mt32.set_rate = reinterpret_cast<Mt32RateFn>(
-                dyn_sym(mt32_lib_, "mt32emu_set_stereo_output_samplerate"));
-            g_mt32.play_msg = reinterpret_cast<Mt32PlayMsgFn>(
-                dyn_sym(mt32_lib_, "mt32emu_play_msg"));
-            g_mt32.render = reinterpret_cast<Mt32RenderFn>(
-                dyn_sym(mt32_lib_, "mt32emu_render_bit16s"));
-            g_mt32.free_ctx = reinterpret_cast<Mt32FreeFn>(
-                dyn_sym(mt32_lib_, "mt32emu_free_context"));
-            if (g_mt32.create != nullptr && g_mt32.add_rom != nullptr &&
-                g_mt32.open != nullptr && g_mt32.play_msg != nullptr &&
-                g_mt32.render != nullptr) {
-                void* ctx = g_mt32.create(
-                    const_cast<Mt32ReportHandlerV0*>(&kSilentReportHandler),
-                    nullptr);
-                bool roms_ok = false;
-                for (const auto& dir : rom_search_dirs(rom_dir)) {
-                    if (add_rom_pair(ctx, dir)) {
-                        roms_ok = true;
-                        break;
-                    }
-                }
-                if (roms_ok) {
-                    if (g_mt32.set_rate != nullptr) {
-                        g_mt32.set_rate(ctx, device_rate_);
-                    }
-                    if (g_mt32.open(ctx) == 0) {
-                        mt32_ = ctx;
-                        music_backend_ = "mt32-builtin";
-                    }
-                }
-                if (mt32_ == nullptr && g_mt32.free_ctx != nullptr) {
-                    g_mt32.free_ctx(ctx);
-                }
-            }
-            if (mt32_ == nullptr) {
-                dyn_close(mt32_lib_);
-                mt32_lib_ = nullptr;
-            }
-        }
+        synth_ = Mt32Synth::create(rom_dir, device_rate_);
+        if (synth_ != nullptr) music_backend_ = "mt32-builtin";
     }
     // GM (FluidSynth + SoundFont) next in the auto chain.
-    if (!host_midi_active_ && mt32_ == nullptr &&
+    if (!host_midi_active_ && synth_ == nullptr &&
         (music_device_eff == "auto" || music_device_eff == "gm-builtin" ||
          music_device_eff == "gm")) {
         const std::string sf = find_soundfont(soundfont);
         if (!sf.empty()) {
             std::fprintf(stderr, "gm-builtin: soundfont = %s\n", sf.c_str());
-            fs_lib_ = load_fluidsynth();
-            if (fs_lib_ != nullptr) {
-                g_fs.new_settings = reinterpret_cast<FsNewSettingsFn>(
-                    dyn_sym(fs_lib_, "new_fluid_settings"));
-                g_fs.setnum = reinterpret_cast<FsSetNumFn>(
-                    dyn_sym(fs_lib_, "fluid_settings_setnum"));
-                g_fs.new_synth = reinterpret_cast<FsNewSynthFn>(
-                    dyn_sym(fs_lib_, "new_fluid_synth"));
-                g_fs.sfload = reinterpret_cast<FsSfLoadFn>(
-                    dyn_sym(fs_lib_, "fluid_synth_sfload"));
-                g_fs.noteon = reinterpret_cast<FsNoteOnFn>(
-                    dyn_sym(fs_lib_, "fluid_synth_noteon"));
-                g_fs.noteoff = reinterpret_cast<FsNoteOffFn>(
-                    dyn_sym(fs_lib_, "fluid_synth_noteoff"));
-                g_fs.program = reinterpret_cast<FsProgFn>(
-                    dyn_sym(fs_lib_, "fluid_synth_program_change"));
-                g_fs.cc = reinterpret_cast<FsCcFn>(
-                    dyn_sym(fs_lib_, "fluid_synth_cc"));
-                g_fs.bend = reinterpret_cast<FsBendFn>(
-                    dyn_sym(fs_lib_, "fluid_synth_pitch_bend"));
-                g_fs.write_s16 = reinterpret_cast<FsWriteFn>(
-                    dyn_sym(fs_lib_, "fluid_synth_write_s16"));
-                g_fs.del_synth = reinterpret_cast<FsDelSynthFn>(
-                    dyn_sym(fs_lib_, "delete_fluid_synth"));
-                g_fs.del_settings = reinterpret_cast<FsDelSettingsFn>(
-                    dyn_sym(fs_lib_, "delete_fluid_settings"));
-                if (g_fs.new_settings != nullptr &&
-                    g_fs.new_synth != nullptr && g_fs.sfload != nullptr &&
-                    g_fs.write_s16 != nullptr) {
-                    fs_settings_ = g_fs.new_settings();
-                    if (g_fs.setnum != nullptr) {
-                        g_fs.setnum(fs_settings_, "synth.sample-rate",
-                                    device_rate_);
-                    }
-                    fs_synth_ = g_fs.new_synth(fs_settings_);
-                    if (fs_synth_ != nullptr &&
-                        g_fs.sfload(fs_synth_, sf.c_str(), 1) >= 0) {
-                        music_backend_ = "gm-builtin";
-                    } else if (fs_synth_ != nullptr) {
-                        g_fs.del_synth(fs_synth_);
-                        fs_synth_ = nullptr;
-                    }
-                }
-            }
-            if (fs_synth_ == nullptr && fs_lib_ != nullptr) {
-                dyn_close(fs_lib_);
-                fs_lib_ = nullptr;
-            }
+            synth_ = FluidSynth::create(sf, device_rate_);
+            if (synth_ != nullptr) music_backend_ = "gm-builtin";
         }
     }
 #ifdef _WIN32
@@ -458,7 +548,7 @@ SdlAudio::SdlAudio(const std::string& music_device,
     // The port picker prefers MT-32/MUNT ports; when it lands on one, send
     // RAW MT-32 (host-midi) — a MUNT user gets the authentic device with
     // no flags at all.  GM translation is only for GM synths like the GS.
-    if (!host_midi_active_ && mt32_ == nullptr && fs_synth_ == nullptr &&
+    if (!host_midi_active_ && synth_ == nullptr &&
         music_device_eff == "auto" && host_midi_.open(midi_port)) {
         host_midi_active_ = true;
         const std::string& pn = host_midi_.port_name();
@@ -479,8 +569,7 @@ SdlAudio::SdlAudio(const std::string& music_device,
     const bool want_opl =
         !host_midi_active_ &&
         (music_device_eff == "opl" ||
-         ((music_device_eff == "auto") && mt32_ == nullptr &&
-          fs_synth_ == nullptr));
+         ((music_device_eff == "auto") && synth_ == nullptr));
     if (want_opl) {
         // Authentic AdLib: the EXE-faithful driver on the vendored
         // Nuked-OPL3 core (same emulator as the OPL SFX path — required for
@@ -511,8 +600,10 @@ SdlAudio::SdlAudio(const std::string& music_device,
     // card).  Explicit choices pass through unchanged.
     std::string sfxb = sfx_backend;
     if (sfxb == "auto") {
-        if (mt32_ != nullptr) sfxb = "mt32-sfx";
-        else if (fs_synth_ != nullptr) sfxb = "gm-sfx";
+        // music_backend_ tracks which synth (if any) create() installed:
+        // mt32-builtin => MT-32 SFX, gm-builtin => GM SFX, else SB-DAC VOC.
+        if (music_backend_ == "mt32-builtin") sfxb = "mt32-sfx";
+        else if (music_backend_ == "gm-builtin") sfxb = "gm-sfx";
         else sfxb = "sb-dac";
     }
     midi_sfx_ = (sfxb == "midi" || sfxb == "mt32-sfx" || sfxb == "gm-sfx");
@@ -539,61 +630,23 @@ SdlAudio::SdlAudio(const std::string& music_device,
     // pygame.mixer.Sound.  Stored in sfx_ and played as independent polyphonic
     // waves via the voice pool, NEVER injected live into the music synth (so
     // they never steal music voices and get their own balance gain).
-    if (midi_sfx_ && (mt32_ != nullptr || fs_synth_ != nullptr) &&
-        device_ != 0) {
+    if (midi_sfx_ && synth_ != nullptr && device_ != 0) {
         const int tail_frames = 100 * device_rate_ / 1000;  // Python tail_ms=100
         for (const auto& s : kMidiSfx) {
             const int gate_frames = std::max(1, s.ms * device_rate_ / 1000);
             const int total = gate_frames + tail_frames;
             std::vector<std::int16_t> stereo(
                 static_cast<std::size_t>(total) * 2, 0);
-            if (mt32_ != nullptr) {
-                if (s.prog >= 0) {
-                    g_mt32.play_msg(mt32_,
-                        static_cast<std::uint32_t>(0xC0 | s.ch) |
-                        (static_cast<std::uint32_t>(s.prog) << 8));
-                }
-                g_mt32.play_msg(mt32_,
-                    static_cast<std::uint32_t>(0x90 | s.ch) |
-                    (static_cast<std::uint32_t>(s.note) << 8) |
-                    (static_cast<std::uint32_t>(s.vel) << 16));
-                if (s.note2 >= 0) {
-                    g_mt32.play_msg(mt32_,
-                        static_cast<std::uint32_t>(0x90 | s.ch) |
-                        (static_cast<std::uint32_t>(s.note2) << 8) |
-                        (static_cast<std::uint32_t>(s.vel) << 16));
-                }
-                g_mt32.render(mt32_, stereo.data(),
-                              static_cast<std::uint32_t>(gate_frames));
-                g_mt32.play_msg(mt32_,
-                    static_cast<std::uint32_t>(0x80 | s.ch) |
-                    (static_cast<std::uint32_t>(s.note) << 8));
-                if (s.note2 >= 0) {
-                    g_mt32.play_msg(mt32_,
-                        static_cast<std::uint32_t>(0x80 | s.ch) |
-                        (static_cast<std::uint32_t>(s.note2) << 8));
-                }
-                g_mt32.render(mt32_, stereo.data() + gate_frames * 2,
-                              static_cast<std::uint32_t>(tail_frames));
-            } else {  // fs_synth_ (gm-sfx)
-                if (s.prog >= 0 && g_fs.program != nullptr) {
-                    g_fs.program(fs_synth_, s.ch, s.prog);
-                }
-                if (g_fs.noteon != nullptr) {
-                    g_fs.noteon(fs_synth_, s.ch, s.note, s.vel);
-                    if (s.note2 >= 0)
-                        g_fs.noteon(fs_synth_, s.ch, s.note2, s.vel);
-                }
-                g_fs.write_s16(fs_synth_, gate_frames, stereo.data(), 0, 2,
-                               stereo.data(), 1, 2);
-                if (g_fs.noteoff != nullptr) {
-                    g_fs.noteoff(fs_synth_, s.ch, s.note);
-                    if (s.note2 >= 0) g_fs.noteoff(fs_synth_, s.ch, s.note2);
-                }
-                g_fs.write_s16(fs_synth_, tail_frames,
-                               stereo.data() + gate_frames * 2, 0, 2,
-                               stereo.data() + gate_frames * 2, 1, 2);
-            }
+            // Gate the note through the active synth, then render its tail:
+            // the synth demuxes each channel-voice message exactly as live
+            // music does (MT-32 packs it raw; GM routes to the typed calls).
+            if (s.prog >= 0) synth_->send(0xC0 | s.ch, s.prog, 0);
+            synth_->send(0x90 | s.ch, s.note, s.vel);
+            if (s.note2 >= 0) synth_->send(0x90 | s.ch, s.note2, s.vel);
+            synth_->render(gate_frames, stereo.data());
+            synth_->send(0x80 | s.ch, s.note, 0);
+            if (s.note2 >= 0) synth_->send(0x80 | s.ch, s.note2, 0);
+            synth_->render(tail_frames, stereo.data() + gate_frames * 2);
             // Down-mix to mono by AVERAGING both channels (the voice pool
             // duplicates the result to both output channels).  Taking only the
             // left channel loses hard-panned MT-32 patches: SFX_GENERIC's
@@ -627,7 +680,24 @@ SdlAudio::SdlAudio(const std::string& music_device,
             sfx_[s.id] = std::move(mono);
         }
     }
-    SDL_PauseAudioDevice(device_, 0);
+    if (device_ != 0) SDL_PauseAudioDevice(device_, 0);   // offline: no device
+}
+
+std::vector<std::int16_t> SdlAudio::render_offline(
+    const std::vector<std::uint8_t>& midi_stream, int frames) {
+    if (frames < 0) frames = 0;
+    // Sequencer-backed synths (mt32-builtin / gm) render from seq_; OPL plays
+    // raw game-MDI via opl_music_ and is out of scope here.
+    seq_.load(midi_stream);
+    std::vector<std::int16_t> out(static_cast<std::size_t>(frames) * 2, 0);
+    // Render in fixed chunks so the per-buffer event quantisation matches real
+    // playback (mix() dispatches a whole chunk's due events, then renders it).
+    constexpr int kChunk = 1024;
+    for (int done = 0; done < frames; done += kChunk) {
+        const int n = std::min(kChunk, frames - done);
+        mix(out.data() + static_cast<std::size_t>(done) * 2, n);
+    }
+    return out;
 }
 
 void SdlAudio::reopen_device() {
@@ -687,17 +757,8 @@ SdlAudio::~SdlAudio() {
             cb_worst_wait_ns_.load(std::memory_order_relaxed) / 1e6,
             budget_ms);
     }
-    if (mt32_ != nullptr && g_mt32.free_ctx != nullptr) {
-        g_mt32.free_ctx(mt32_);
-    }
-    if (mt32_lib_ != nullptr) dyn_close(mt32_lib_);
-    if (fs_synth_ != nullptr && g_fs.del_synth != nullptr) {
-        g_fs.del_synth(fs_synth_);
-    }
-    if (fs_settings_ != nullptr && g_fs.del_settings != nullptr) {
-        g_fs.del_settings(fs_settings_);
-    }
-    if (fs_lib_ != nullptr) dyn_close(fs_lib_);
+    // The melodic synth (its context/handles + dlopen'd lib) tears itself
+    // down when synth_ destructs, after the SDL device is closed above.
 }
 
 void SdlAudio::load_sfx(const std::string& id,
@@ -800,9 +861,9 @@ void SdlAudio::play_music(const std::vector<std::uint8_t>& raw_mdi,
                                                wants_gm_translation()));
         return;
     }
-    // mt32_/fs_synth_ are created in the ctor and only torn down with the
-    // object (main thread owns both ends) — safe to branch on unlocked.
-    if (mt32_ != nullptr || fs_synth_ != nullptr) {
+    // synth_ is created in the ctor and only torn down with the object (main
+    // thread owns both ends) — safe to branch on unlocked.
+    if (synth_ != nullptr) {
         // Convert + parse the new track BEFORE taking the callback's lock: the
         // GM conversion allocates and the sequencer parse walks every event —
         // holding mu_ through that blocks the audio callback for the duration
@@ -821,15 +882,8 @@ void SdlAudio::play_music(const std::vector<std::uint8_t>& raw_mdi,
         // note" heard at level transitions on GM).  Same CC-123 treatment as
         // stop_music and the sequencer's own loop seam; the EXE equivalent is
         // the MIDI driver re-init silencing at track start after MDI_FadeStop.
-        if (fs_synth_ != nullptr && g_fs.cc != nullptr) {
-            for (int chn = 0; chn < 16; ++chn) {
-                g_fs.cc(fs_synth_, chn, 123, 0);   // all notes off
-            }
-        } else if (mt32_ != nullptr) {
-            for (int chn = 0; chn < 16; ++chn) {
-                g_mt32.play_msg(mt32_, static_cast<std::uint32_t>(
-                                           0xB0 | chn) | (123 << 8));
-            }
+        for (int chn = 0; chn < 16; ++chn) {
+            synth_->send(0xB0 | chn, 123, 0);   // all notes off
         }
         seq_ = std::move(next);
         return;
@@ -873,20 +927,10 @@ void SdlAudio::stop_music() {
         return;
     }
     std::lock_guard<std::mutex> lock(mu_);
-    if (fs_synth_ != nullptr) {
-        if (g_fs.cc != nullptr) {
-            for (int chn = 0; chn < 16; ++chn) {
-                g_fs.cc(fs_synth_, chn, 123, 0);   // all notes off
-            }
-        }
-        seq_ = MidiSequencer();
-        return;
-    }
-    if (mt32_ != nullptr) {
+    if (synth_ != nullptr) {
         // Release everything: all-notes-off on every channel.
         for (int chn = 0; chn < 16; ++chn) {
-            g_mt32.play_msg(mt32_, static_cast<std::uint32_t>(
-                                       0xB0 | chn) | (123 << 8));
+            synth_->send(0xB0 | chn, 123, 0);
         }
         seq_ = MidiSequencer();
         return;
@@ -903,71 +947,19 @@ void SdlAudio::mix(std::int16_t* out, int frames) {
     std::unique_lock<std::mutex> lock(mu_, std::try_to_lock);
     if (!lock.owns_lock()) lock.lock();
     const std::uint64_t t_locked = SDL_GetPerformanceCounter();
-    // Release MIDI effect notes that came due BEFORE this window (the
-    // clock advances after the render, so a fresh note always sounds
-    // for at least the current buffer).
-    for (auto it = note_offs_.begin(); it != note_offs_.end();) {
-        if (it->at <= sample_clock_) {
-            if (mt32_ != nullptr) {
-                g_mt32.play_msg(mt32_,
-                                static_cast<std::uint32_t>(0x80 | it->channel) |
-                                    (static_cast<std::uint32_t>(it->note)
-                                     << 8));
-            } else if (fs_synth_ != nullptr && g_fs.noteoff != nullptr) {
-                g_fs.noteoff(fs_synth_, it->channel, it->note);
-            }
-            it = note_offs_.erase(it);
-        } else {
-            ++it;
-        }
-    }
-    sample_clock_ += frames;
     // Synth base layer (music + MIDI effects) or silence.  The synth
     // renders whenever it exists — effects must sound with no music.
-    if (fs_synth_ != nullptr) {
-        if (seq_.loaded()) seq_.advance(frames, device_rate_,
-                     [&](std::uint8_t st, std::uint8_t d1, std::uint8_t d2) {
-                         const int chn = st & 0x0F;
-                         switch (st & 0xF0) {
-                             case 0x90:
-                                 if (g_fs.noteon != nullptr) {
-                                     g_fs.noteon(fs_synth_, chn, d1, d2);
-                                 }
-                                 break;
-                             case 0x80:
-                                 if (g_fs.noteoff != nullptr) {
-                                     g_fs.noteoff(fs_synth_, chn, d1);
-                                 }
-                                 break;
-                             case 0xC0:
-                                 if (g_fs.program != nullptr) {
-                                     g_fs.program(fs_synth_, chn, d1);
-                                 }
-                                 break;
-                             case 0xB0:
-                                 if (g_fs.cc != nullptr) {
-                                     g_fs.cc(fs_synth_, chn, d1, d2);
-                                 }
-                                 break;
-                             case 0xE0:
-                                 if (g_fs.bend != nullptr) {
-                                     g_fs.bend(fs_synth_, chn,
-                                               (d2 << 7) | d1);
-                                 }
-                                 break;
-                             default: break;
-                         }
-                     });
-        g_fs.write_s16(fs_synth_, frames, out, 0, 2, out, 1, 2);
-    } else if (mt32_ != nullptr) {
-        if (seq_.loaded()) seq_.advance(frames, device_rate_,
-                     [&](std::uint8_t st, std::uint8_t d1, std::uint8_t d2) {
-                         g_mt32.play_msg(
-                             mt32_, static_cast<std::uint32_t>(st) |
-                                        (static_cast<std::uint32_t>(d1) << 8) |
-                                        (static_cast<std::uint32_t>(d2) << 16));
-                     });
-        g_mt32.render(mt32_, out, static_cast<std::uint32_t>(frames));
+    if (synth_ != nullptr) {
+        // One event pump for both melodic backends: the sequencer emits parsed
+        // channel-voice messages, the active synth demuxes each (MT-32 raw, GM
+        // typed).  Effects still sound with no music (seq_ not loaded).
+        if (seq_.loaded()) {
+            seq_.advance(frames, device_rate_,
+                         [&](std::uint8_t st, std::uint8_t d1, std::uint8_t d2) {
+                             synth_->send(st, d1, d2);
+                         });
+        }
+        synth_->render(frames, out);
     } else if (opl_music_ != nullptr) {
         opl_music_->render(frames, out);   // zero-fills past a stopped track
     } else {

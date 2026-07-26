@@ -25,6 +25,12 @@
 #include "presentation/parse_util.hpp"
 #include "presentation/pause_bindings.hpp"
 #include "presentation/pause_flow.hpp"
+#include "presentation/draw_log.hpp"
+#include "presentation/end_sequence.hpp"
+#include "presentation/frame_input.hpp"
+#include "presentation/frame_presenter.hpp"
+#include "presentation/lerp_snapshot.hpp"
+#include "presentation/reinit_test_hook.hpp"
 #include "presentation/level_setup.hpp"
 #include "presentation/level_state.hpp"
 #include "presentation/tile_patterns.hpp"
@@ -179,25 +185,9 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                      opts.game_dir.string().c_str());
         return LevelOutcome::kQuit;
     }
-    // Enhanced icy-glider sea-level normalisation: the icy level (internal 5)
-    // authors its decorative water (sprite 7, no collision) at a Y that rises
-    // mid-flight and drops back at the landing.  Under --enhanced, flatten it to
-    // the flight-START (screen 9) sea level across the flight screens so it reads
-    // as one continuous body during the glider.  Visual-only (water has no
-    // collision; death is the fixed y>180 fall).  bind_screen applies it per
-    // screen; apply it once here too for the already-bound entry screen.
-    if (opts.enhanced && internal == 5) {
-        constexpr int kFlightStart = 9, kWaterSpr = 7;
-        if (kFlightStart < static_cast<int>(g.tiles.screens.size())) {
-            int maxy = -1;
-            for (const auto& tp : g.tiles.screens[kFlightStart].tiles)
-                if (tp.sprite_idx == kWaterSpr) maxy = std::max(maxy, tp.y);
-            g.glider_water_y = maxy;   // -1 if screen 9 has no water (disabled)
-        }
-        if (g.glider_water_y >= 0 && g.state.current_screen >= 9 &&
-            g.state.current_screen <= core::kLastScreen)
-            normalize_glider_water(g.render.tiles, g.glider_water_y);
-    }
+    // Enhanced icy-glider sea-level normalisation (level_setup.hpp): flatten the
+    // decorative water to one continuous body during the glider (L5, enhanced).
+    setup_enhanced_glider_water(g, opts.enhanced, internal);
     g.state.player.lives = carry.lives;
     g.state.score = carry.score;
     // --god: 99 lives / 999 energy / no death (debug).  Off during replay so
@@ -582,22 +572,9 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     // Logic is untouched so this is cosmetic-only.  Override for tuning:
     // OLDUVAI_SMOOTH_SUBFRAMES=<n> (e.g. on a light profile a 120 Hz panel can
     // afford 6-7).
-    int smooth_N = 3;
-    {
-        int refresh_hz = 60;
-        SDL_DisplayMode dm;
-        const int di = win != nullptr ? SDL_GetWindowDisplayIndex(win) : 0;
-        if (di >= 0 && SDL_GetCurrentDisplayMode(di, &dm) == 0 &&
-            dm.refresh_rate > 0) {
-            refresh_hz = dm.refresh_rate;
-        }
-        smooth_N = std::clamp(
-            static_cast<int>(std::lround(refresh_hz / 18.0)), 4, 5);
-        if (const char* ov = std::getenv("OLDUVAI_SMOOTH_SUBFRAMES")) {
-            const int n = std::atoi(ov);
-            if (n >= 1 && n <= 12) smooth_N = n;
-        }
-    }
+    // Refresh-adaptive sub-frame count — the SAME helper boss_app uses
+    // (smooth_present.hpp), so the two render loops can't drift.
+    const int smooth_N = smooth_subframe_count(win);
 
     // Enhanced smooth-motion presents via vsync-locked render interpolation:
     // logic stays a fixed 18 Hz, but the tick's wall-time is filled with
@@ -608,11 +585,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     // requested at runtime (SDL>=2.0.18); if the driver refuses, vsync_active
     // stays false and the loop falls back to the discrete smooth_N pacing.
     // OLDUVAI_NO_VSYNC=1 forces the discrete fallback (for A/B testing).
-    bool vsync_active = false;
-    if (opts.enhance.smooth_motion && ren != nullptr &&
-        std::getenv("OLDUVAI_NO_VSYNC") == nullptr) {
-        vsync_active = (SDL_RenderSetVSync(ren, 1) == 0);
-    }
+    bool vsync_active = smooth_try_enable_vsync(ren, opts.enhance.smooth_motion);
     // Carryover (ms) of render-fill overshoot beyond one tick — subtracted from
     // the next tick's render budget so the long-term logic cadence stays 18 Hz
     // even though an integer number of vsync frames rarely divides the 55 ms
@@ -714,34 +687,8 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         draw_log = std::fopen(dl, "w");
     }
     auto log_draw = [&](int sub) {
-        if (draw_log == nullptr) return;
-        std::fprintf(draw_log,
-                     "{\"f\":%d,\"sub\":%d,\"px\":%d,\"py\":%d,\"ps\":%d,"
-                     "\"e\":[",
-                     frame, sub, g.state.player.x, g.state.player.y,
-                     g.state.player.sprite);
-        bool first = true;
-        for (const auto& e : g.state.entities) {
-            if (!e.active) continue;
-            std::fprintf(draw_log, "%s[%d,%d,%d,%d,%d]", first ? "" : ",",
-                         static_cast<int>(e.obj_type), e.sprite, e.x, e.y,
-                         e.visible ? 1 : 0);
-            first = false;
-        }
-        std::fprintf(draw_log, "]}\n");
+        write_draw_log(draw_log, frame, sub, g.state);
     };
-    // Debug aid: OLDUVAI_DUMP_STEADY=<dir> — windowed sibling of the
-    // widescreen presenter's steady dump: saves the native fb on each
-    // non-widescreen steady present (steady_fb_NNNN.bmp).
-    auto dump_steady_fb = [&]() {
-        const char* dir = std::getenv("OLDUVAI_DUMP_STEADY");
-        if (dir == nullptr) return;
-        static int seq = 0;
-        char path[512];
-        std::snprintf(path, sizeof path, "%s/steady_fb_%04d.bmp", dir, seq++);
-        save_rgba_image(fb.px.data(), fb.w, fb.h, path);
-    };
-
     // One upload pipeline for every frame this window shows.
     //
     // `with_hud=true`: draw the enhanced vector HUD over the frame (gameplay +
@@ -814,138 +761,32 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     if (const char* d = std::getenv("OLDUVAI_MENU_SCRIPT_DIR"))
         menu_script_dir = d;
 
+    // The per-frame upload/composite/present pipeline now lives in
+    // FramePresenter (frame_presenter.cpp); wire it to the live run-loop state.
+    // The FsPresentTimer stays here so it still brackets the whole present.
+    FramePresenter fp;
+    fp.wsp = &wsp;
+    fp.ren = ren;
+    fp.tex = tex;
+    fp.hd_text = &hd_text;
+    fp.text_overlay = &text_overlay;
+    fp.pause = &pause;
+    fp.state = &g.state;
+    fp.logical_w = &logical_w;
+    fp.logical_h = &logical_h;
+    fp.cheat_open = &cheat_open;
+    fp.menu_shot_path = &menu_shot_path;
+    fp.hd = hd;
+    fp.use_hd_text = use_hd_text;
+    fp.hd_scale = hd_scale;
+    fp.hd_profile = &opts.hd_profile;   // live: Options can change it mid-level
+    fp.draw_cheat_rows_native = draw_cheat_rows_native;
+    fp.draw_cheat_rows = draw_cheat_rows;
+    fp.draw_enhanced_banners = draw_enhanced_banners;
     auto upload_and_show = [&](FrameBuffer& f, bool with_hud = true,
                                bool do_present = true) {
         FsPresentTimer fs_pt(&fs_present_ms, fs_perf_ms, frame_stats);
-        wsp.rebuild_if_resized();   // Alt+Enter / resize: recompute wide state
-        // The vector HUD TEXT is no longer drawn into the HD compose buffer —
-        // it is rendered at OUTPUT resolution into text_overlay after the scene
-        // is RenderCopy'd, so it stays crisp at any window scale.  Only the
-        // NON-text HUD (gauge boxes, food fill, energy pips) goes in the buffer.
-        const bool draw_hud_overlay = hd && with_hud && use_hd_text;
-        enhance::EnhancedHudLayout hud_layout;
-        if (draw_hud_overlay) {
-            hud_layout = enhance::compute_enhanced_hud_layout(hd_text, g.state);
-        }
-        if (hd) {
-            if (f.w == 320 * hd_scale) {
-                // Already-HD gameplay buffer: no upscale needed.
-                if (draw_hud_overlay) {
-                    enhance::draw_enhanced_hud_bars(f.px, f.w, f.h, hd_scale,
-                                                    hud_layout);
-                }
-                SDL_UpdateTexture(tex, nullptr, f.px.data(), f.w * 4);
-            } else {
-                // Native-320 buffer (loading/tally/PC1): upscale whole-frame.
-                // Single fullscreen opaque image — per-asset and whole-frame
-                // produce identical output, so whole-frame upscale is fine here.
-                std::vector<std::uint8_t> up =
-                    enhance::upscale_rgba(f.px, 320, 200, hd_scale,
-                                          opts.hd_profile);
-                if (draw_hud_overlay) {
-                    enhance::draw_enhanced_hud_bars(up, 320 * hd_scale,
-                                                    200 * hd_scale, hd_scale,
-                                                    hud_layout);
-                }
-                SDL_UpdateTexture(tex, nullptr, up.data(),
-                                  320 * hd_scale * 4);
-            }
-        } else {
-            // Classic (320×200): draw the cheat picker with the bitmap font
-            // straight into the native buffer (recomposed clean each frame).
-            if (cheat_open) draw_cheat_rows_native(f);
-            SDL_UpdateTexture(tex, nullptr, f.px.data(), 320 * 4);
-        }
-        SDL_RenderClear(ren);
-        if (wsp.active()) {
-            // Widescreen but using the 320-wide `tex` (transitions / loading /
-            // tally / pause — peek is disabled there per §8.7 v1): pillarbox the
-            // center into the wide logical canvas with a PURE-BLACK bezel.  Pure
-            // black (not the old 12,12,16) so the bars vanish against black-
-            // background screens (caves, the score tally, the level-end fade) —
-            // a dark-gray bezel reads as visibly grayish next to a cave's true-
-            // black tiles.  Against coloured screens (L3/L7/boss) a bar is visible
-            // either way; black is the cleaner, conventional letterbox.
-            SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-            SDL_RenderFillRect(ren, nullptr);
-            SDL_Rect dst{wsp.margin() * hd_scale, 0, 320 * hd_scale,
-                         200 * hd_scale};
-            SDL_RenderCopy(ren, tex, nullptr, &dst);
-        } else {
-            SDL_RenderCopy(ren, tex, nullptr, nullptr);
-        }
-        // Output-resolution vector-HUD text overlay (crisp at the window size).
-        // One vector-text overlay pass for the HUD text and/or the --cheats
-        // power-up picker (a second begin/flush in the same frame would not
-        // composite, so both share one pass).
-        // Gate on hd_text.ok() (fonts loaded) rather than use_hd_text so the
-        // picker shows in HD even when the hd-text/hud-overlay enhance flags
-        // are off — fonts load whenever hd is on.
-        const bool show_cheat = cheat_open && hd && hd_text.ok();
-        // Menu glyphs follow the HUD's font rule: the cartoony vector font only
-        // in enhanced mode (use_hd_text); otherwise the classic bitmap glyphs
-        // (drawn into the native pause buffer below, upscaled with the frame).
-        const bool show_menu =
-            pause.open() && use_hd_text && !pause.confirm().is_open();
-        const bool show_confirm =
-            pause.open() && use_hd_text && pause.confirm().is_open();
-        // Save whenever the pause overlay is up — classic mode draws the
-        // bitmap menu into the native frame (no vector pass), and the shot
-        // must capture that path too.
-        const char* show_menu_shot =
-            !menu_shot_path.empty() ? menu_shot_path.c_str()
-            : (pause.open() ? std::getenv("OLDUVAI_PAUSE_SHOT") : nullptr);
-        if (draw_hud_overlay || show_cheat || show_menu || show_confirm) {
-            int ow = 0, oh = 0;
-            if (text_overlay.begin(ren, hd_text, ow, oh)) {
-                auto& b = text_overlay.buffer();
-                if (draw_hud_overlay) {
-                    if (wsp.active()) {
-                        // Pillarboxed widescreen frame: the centre 320 sits at
-                        // the margin, so the HUD text must use the wide mapping
-                        // (matches wsp.present() / the wide transitions) —
-                        // otherwise it floats relative to the bars.  Restore the
-                        // cap so a pause menu in this same pass keeps its size.
-                        const int saved_cap = hd_text.cap_px();
-                        wsp.draw_wide_hud_text(b, ow, oh, hud_layout);
-                        hd_text.set_cap_px(saved_cap);
-                    } else {
-                        enhance::draw_enhanced_hud_text(b, ow, oh, hd_text,
-                                                        hud_layout);
-                        // Non-WS banner substitutes (the WS branch gets them via
-                        // draw_wide_hud_text, so only the else-branch adds here).
-                        draw_enhanced_banners(b, ow, oh);
-                    }
-                }
-                if (show_cheat) draw_cheat_rows(b, ow, oh);
-                // Widescreen: the pause frame is PILLARBOXED at the margin
-                // (the dst rect above) — pass that frame rect so the glyphs
-                // land on the slab instead of stretching across the bars.
-                int mfx = -1, mfy = -1, mfw = -1, mfh = -1;
-                if (wsp.active()) {
-                    mfx = wsp.margin() * hd_scale * ow / logical_w;
-                    mfw = 320 * hd_scale * ow / logical_w;
-                    mfy = 0;
-                    mfh = oh;
-                }
-                if (show_menu)
-                    draw_menu_vector(b, ow, oh, hd_text, pause.menu(), 0.0f,
-                                     mfx, mfy, mfw, mfh);
-                if (show_confirm)
-                    draw_confirm_vector(b, ow, oh, hd_text, pause.confirm(),
-                                        mfx, mfy, mfw, mfh);
-                text_overlay.flush(ren, logical_w, logical_h);
-            }
-        }
-        if (show_menu_shot) {
-            // Debug: read back the fully-composited frame (scene + slab + vector
-            // text) right before present so we can verify the HD overlay.
-            capture_renderer_output(ren, show_menu_shot);
-            menu_shot_path.clear();   // consume a menu-script `shot` request
-        }
-        // do_present=false leaves the composited frame in the backbuffer for a
-        // caller-side RenderReadPixels (Metal reads black AFTER present).
-        if (do_present) SDL_RenderPresent(ren);
+        fp.present(f, with_hud, do_present);
     };
     // std::function view of upload_and_show for the services extracted out
     // of this frame loop (ReportFormService, CC3); the lambda stays the
@@ -972,8 +813,11 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         while (SDL_PollEvent(&ev)) {
             if (handle_fullscreen_toggle(ev, win)) continue;
             if (ev.type == SDL_QUIT) return false;
-            if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE)
-                return false;
+            // ESC is inert on the non-gameplay screens this present drives
+            // (level-entry loading, the pre-tally fade, the surface tally, the
+            // L3 descent) — gameplay's own loop owns ESC→pause.  Polling still
+            // DRAINS the queue, so keys mashed on the previous screen (e.g. the
+            // boss tally) can't leak through here and abort the run to title.
         }
         FrameBuffer copy = f;   // upload may mutate (HD label masking)
         upload_and_show(copy, /*with_hud=*/false);
@@ -1013,9 +857,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                 while (SDL_PollEvent(&ev)) {
                     if (handle_fullscreen_toggle(ev, win)) continue;
                     if (ev.type == SDL_QUIT) return false;
-                    if (ev.type == SDL_KEYDOWN &&
-                        ev.key.keysym.sym == SDLK_ESCAPE)
-                        return false;
+                    // ESC inert (HD loading/tally); gameplay owns ESC→pause.
                 }
                 SDL_UpdateTexture(tex, nullptr, hd_px.data(), w * 4);
                 SDL_RenderClear(ren);
@@ -1132,70 +974,11 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                             perf_frame_ms, overlay_scale);
     };
 
-    // OLDUVAI_REINIT_TEST: headless integration hook — triggers a render_scale
-    // reinit once (frame 5) and captures the post-reinit output size + player
-    // position on re-entry.  Two static latches carry state across the two
-    // run_platform_level invocations (pre-reinit → kReinitDisplay → run_game
-    // rebuilds → re-enters with restore).  The result file path comes from the
-    // env var; the hook is a no-op unless that var is set.
-    // statics are zero-initialised; reset between test runs by the process.
-    static bool s_reinit_triggered = false;  // have we fired the set() call?
-    static bool s_reinit_done      = false;  // have we written the result file?
-    static int  s_pre_x = 0, s_pre_y = 0;   // player pos before reinit
-    static int  s_pre_entcount = -1;        // live entity count before reinit
-    static unsigned s_pre_entsum = 0;       // entity CONTENT checksum pre-reinit
-    // Content checksum over the mutable per-entity fields: an equal COUNT of
-    // freshly-respawned (reset) entities must NOT pass the round-trip check —
-    // that's the exact false-confidence shape this hook was built to close.
-    const auto ent_checksum = [](const std::vector<core::Entity>& es) {
-        unsigned h = 2166136261u;                    // FNV-1a
-        const auto mix = [&h](int v) {
-            h ^= static_cast<unsigned>(v);
-            h *= 16777619u;
-        };
-        for (const auto& e : es) {
-            mix(static_cast<int>(e.obj_type));
-            mix(e.x); mix(e.y); mix(e.state); mix(e.counter);
-            mix(e.ko_counter); mix(e.active ? 1 : 0);
-        }
-        return h;
-    };
-    // Read once; reused in both the pre-loop block and the in-loop trigger.
-    const char* const reinit_test_path = std::getenv("OLDUVAI_REINIT_TEST");
-    if (reinit_test_path) {
-        // Post-reinit entry: we are in the re-spawned level, restore applied.
-        // Capture output size + player position and write the result file.
-        if (s_reinit_triggered && !s_reinit_done) {
-            s_reinit_done = true;
-            int out_w = 0, out_h = 0;
-            // Use logical window size (SDL_GetWindowSize) not renderer output
-            // size so the result is DPI-independent — on macOS Retina
-            // SDL_GetRendererOutputSize returns 2× the logical size, which
-            // would make the assertion fail on HiDPI displays.
-            SDL_GetWindowSize(win, &out_w, &out_h);
-            const int post_x = g.state.player.x;
-            const int post_y = g.state.player.y;
-            // Entity-count round-trip check: the full-state save must restore the
-            // live screen's entities, not just the player.  (A save→reinit→restore
-            // on the load_level default screen used to drop them all — the L1
-            // screen-0 spike vanished.)
-            const int post_entcount = static_cast<int>(g.state.entities.size());
-            const unsigned post_entsum = ent_checksum(g.state.entities);
-            // "wb": the file is machine-parsed by reinit_smoke.sh; text mode
-            // on Windows would append \r to the last field and break the
-            // shell string compare.
-            if (FILE* f = std::fopen(reinit_test_path, "wb")) {
-                std::fprintf(f, "%d %d %d %d %d %d %d %d %u %u\n",
-                             out_w, out_h,
-                             s_pre_x, s_pre_y,
-                             post_x, post_y,
-                             s_pre_entcount, post_entcount,
-                             s_pre_entsum, post_entsum);
-                std::fclose(f);
-            }
-            running = false;
-        }
-    }
+    // OLDUVAI_REINIT_TEST headless integration hook (reinit_test_hook.hpp),
+    // env-gated (a total no-op in normal play).  On the post-reinit re-entry it
+    // writes the round-trip result file and ends the loop.
+    ReinitTestHook reinit_hook(std::getenv("OLDUVAI_REINIT_TEST"));
+    reinit_hook.maybe_write_result(g.state, win, running);
 
     // The SettingsFlow (OL-B1) + close-without-apply detection live in
     // PauseService (CC3 seam 2); begin_frame() runs the dirty-session
@@ -1229,28 +1012,9 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                 perf_samples = 0;
             }
         }
-        // OLDUVAI_REINIT_TEST: pre-reinit trigger on frame 5 — player has a
-        // valid spawn position by then (GET READY counter started at 0x11).
-        if (reinit_test_path &&
-            !s_reinit_triggered && menu_ok && frame == 5) {
-            s_reinit_triggered = true;
-            s_pre_x = g.state.player.x;
-            s_pre_y = g.state.player.y;
-            s_pre_entcount = static_cast<int>(g.state.entities.size());
-            s_pre_entsum = ent_checksum(g.state.entities);
-            // Force the save→reinit→restore MECHANISM directly, decoupled from
-            // the Pause classifier (which is interim-disabled for in-game
-            // reinit-class changes).  Seed all four target fields + raise
-            // want_reinit so the pause block below captures the snapshot and
-            // returns kReinitDisplay.
-            reinit_req.enhanced     = opts.enhanced;
-            reinit_req.render_scale = 4;
-            reinit_req.hd_profile   = opts.hd_profile;
-            reinit_req.music_device = opts.music_device;
-            reinit_req.sfx_backend  = opts.sfx_backend;
-            want_reinit = true;
-            pause.set_open(true);
-        }
+        // OLDUVAI_REINIT_TEST: frame-5 pre-reinit trigger (reinit_test_hook.hpp).
+        reinit_hook.maybe_trigger(g.state, opts, frame, menu_ok, reinit_req,
+                                  want_reinit, pause);
         // Pre-frame snapshot for transition classification: the player
         // position before this frame's movement/teleport (direction
         // inference) and the inside-ness before cave/secret entry.
@@ -1426,7 +1190,8 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
             // LevelOutcome mapping stays here (LevelOutcome is file-local),
             // in the exact order of the old inline block.
             const PauseService::FreezeResult pfr = pause.service_freeze(
-                {g, god_active, use_hd_text, frame_ms, upload_and_show_fn});
+                {g, god_active, use_hd_text, frame_ms, wsp,
+                 upload_and_show_fn});
             if (pfr == PauseService::FreezeResult::kFroze) continue;
             if (pfr != PauseService::FreezeResult::kNone) {
                 switch (pfr) {
@@ -1473,65 +1238,18 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
             }
         }
 
-        const Uint8* keys = SDL_GetKeyboardState(nullptr);
-        systems::FrameInputs in;
-        if (replay.active()) {
-            // The reference replay convention reads key state for the
-            // NEXT frame (its oracle injects keys for frame+1 after
-            // tracing frame N) — match it or every input lands one
-            // frame late.
-            in = replay.at(frame + 1);
-            if (frame > replay.last_frame() + 18) running = false;
-        } else {
-            in.left = keys[SDL_SCANCODE_LEFT] != 0 || gamepad::left();
-            in.right = keys[SDL_SCANCODE_RIGHT] != 0 || gamepad::right();
-            in.up = keys[SDL_SCANCODE_UP] != 0 || gamepad::up();
-            in.down = keys[SDL_SCANCODE_DOWN] != 0 || gamepad::down();
-            const bool attack_held = keys[SDL_SCANCODE_SPACE] != 0 ||
-                                     keys[SDL_SCANCODE_LCTRL] != 0 ||
-                                     gamepad::attack_held();
-            // Autofire reads the PRE-frame latch/club state — exactly what
-            // this frame's latch check will see — and must stay ahead of
-            // input_rec.record below so recordings hold the resolved pulses.
-            autofire.cooldown = autofire_cooldown(opts.autofire);
-            in.attack = autofire.attack(attack_held,
-                                        g.state.player.club_flag,
-                                        g.state.player.attack_latch);
-        }
+        // Resolve this frame's inputs — replay, or live keyboard + gamepad +
+        // autofire (frame_input.hpp).
+        systems::FrameInputs in = gather_frame_inputs(
+            replay, frame, opts.autofire, autofire, g.state.player, running);
         // Record the RESOLVED inputs (live or replay-injected) at the frame
         // the reader will resolve them — the loop reads replay.at(frame+1),
         // so emit at frame+1 to round-trip back to this same game frame.
         if (input_rec.active()) input_rec.record(frame + 1, in);
 
-        // Previous-tick snapshot for the smooth-motion lerp — every
-        // field the reference interpolates (via
-        // save_prev_positions): player x/y + dx/dy (ghost rise),
-        // entity x/y/current_y/throw/draw_dy, fireball, glider,
-        // death halo, rolling stone, score popups.
-        g.state.player.prev_x = g.state.player.x;
-        g.state.player.prev_y = g.state.player.y;
-        g.state.player.prev_dx = g.state.player.dx;
-        g.state.player.prev_dy = g.state.player.dy;
-        for (auto& e : g.state.entities) {
-            e.prev_x = e.x;
-            e.prev_y = e.y;
-            e.prev_current_y = e.current_y;
-            e.prev_throw_x = e.throw_x;
-            e.prev_throw_y = e.throw_y;
-            e.prev_draw_dy = e.draw_dy;
-        }
-        g.state.prev_stone_x = g.state.stone_x;
-        g.state.prev_stone_y = g.state.stone_y;
-        g.state.prev_fireball_x = g.state.fireball_x;
-        g.state.prev_fireball_y = g.state.fireball_y;
-        g.state.prev_glider_x = g.state.glider_x;
-        g.state.prev_glider_y = g.state.glider_y;
-        g.state.prev_death_halo_x = g.state.death_halo_x;
-        g.state.prev_death_halo_y = g.state.death_halo_y;
-        for (auto& b : g.state.score_bonuses) {
-            b.prev_x = b.x;
-            b.prev_y = b.y;
-        }
+        // Previous-tick snapshot for the smooth-motion lerp — every field the
+        // reference interpolates, before the sim tick (lerp_snapshot.hpp).
+        save_prev_positions(g.state);
         // Apply this frame's inputs before the pre-frame systems that
         // read them (flight physics steers from the live key state).
         g.state.input.left = in.left;
@@ -1622,6 +1340,23 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
             systems::check_secret_exit(g.state);
         }
         // 8. Surface transitions — secret entry takes priority.
+        // OLDUVAI_FORCE_L3_DESCENT (debug/gate): the L3 (internal 3 / display 5)
+        // 17->18 trunk-descent is otherwise reachable only by eating >=kFoodGate
+        // food + KO'ing the big bird, so no headless run reaches it.  Seed the
+        // three natural-gate INPUTS check_l3_transition reads (food, player.y,
+        // the bird-cleared latch) so the UNMODIFIED transition crosses 17->18
+        // and plays the cinematic — the run-to-run-deterministic path the
+        // l3_end_level extraction's before/after byte-diff exercises.  Placed
+        // AFTER run_frame (physics moved player.y; monster AI overwrote
+        // screen_clear_of_monsters this frame) and BEFORE check_screen_transition
+        // so the seeded values are exactly what the gate reads.  Cheap state
+        // guards precede getenv, so it fires at most a few frames at screen 17.
+        if (g.state.current_level == 3 && g.state.current_screen == 17 &&
+            !g.state.screen_change && std::getenv("OLDUVAI_FORCE_L3_DESCENT")) {
+            g.state.food_count = systems::kFoodGate;
+            g.state.player.y = 0x44;
+            g.state.screen_clear_of_monsters = true;
+        }
         if (!g.state.cave_flag && !g.state.secret_flag) {
             g.state.secret_spring_bouncing = false;
             if (!systems::check_secret_entry(g.state)) {
@@ -1778,340 +1513,33 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                     systems::SeamKind::FakeCaveInstant;
             if (l7_fake_cave && opts.enhanced) warp_fade = true;
             if (l3_trunk_descent) {
-                // ── Descent widescreen margins (#1) ──────────────────────
-                // The trunk-descent composes a NATIVE 320×200 frame per step
-                // and hands it to a present callback.  The default callback
-                // (upload_and_show) pillarboxes that native frame with pure-
-                // black bars under widescreen, so the margins VANISH for the
-                // whole animation.  Instead, composite each native frame into
-                // the bound screen's static wide background (backdrop + ground
-                // extended to the edge — the SAME no-neighbour fill the steady
-                // screen-18 view uses) so the bezel stays filled and the
-                // descent ends seamlessly into the widescreen surface.  Pure
-                // rendering: no LCG/state touched (the smoke jitter is rolled
-                // logic-side), so the rng-critical descent is unaffected.
-                // Rebuilt per phase because Phase 1 is bound to screen 17 and
-                // the pan + Phase 2 to screen 18.
-                std::vector<std::uint8_t> descent_wide;   // native wsp.native_w()×200
-                // Phase-1 (screen 17) and Phase-2 (screen 18) wide margins, kept
-                // so the camera pan can scroll BOTH (screen 17 up, screen 18 in
-                // from below) in lockstep with the centre — no margin pop.
-                std::vector<std::uint8_t> descent_m17, descent_m18;
-                const bool descent_ws =
-                    wsp.active() && hd && hd_scale > 1 && wsp.wide_tex() != nullptr;
-                // The descent stages (Phase 1 / pan / Phase 2) render `substeps`
-                // sub-frames per 18 Hz logical step in enhanced mode (l3_end_
-                // level.cpp: substeps = enhanced ? 3 : 1) and rely on the CALLER
-                // pacing each sub-frame at frame_ms/substeps to keep the wall-
-                // clock duration constant.  Pacing every sub-frame at the full
-                // frame_ms ran the whole descent 3× too slow (the "pathetic"
-                // perf) and starved the pan's continuous interpolation.  Pace at
-                // the sub-frame budget so the pan glides at 54 Hz and the total
-                // duration matches the reference.
-                const Uint32 descent_step_ms =
-                    frame_ms / static_cast<Uint32>(opts.enhance.descent_pan ? 3 : 1);
-                // F5 during the descent: the blocking descent loop never reaches
-                // the frame-service bug-capture, so capture the full WS composite
-                // here instead (standalone PNG — no g.state frame service).
-                int descent_shot_seq = 0;
-                bool descent_shot = false;
-                bool descent_prev_f5 = false;   // F5 rising-edge latch
-                auto build_descent_margins = [&]() {
-                    if (!descent_ws) return;
-                    // Build the descent margins EXACTLY like the steady view
-                    // (get_static_wide_bg_hd): the SAME neighbour peeks
-                    // (ws_left/ws_right for the bound screen), so the margins are
-                    // identical to the steady screen before and after the descent
-                    // — no pop-in/out at the boundaries.  Using REAL neighbours
-                    // also kills the earlier bark strip: Phase-1's right margin is
-                    // a peek of screen 18, not a no-neighbour MIRROR of screen
-                    // 17's foreground tree column.  Only a genuine level-edge
-                    // (screen 18's right) falls back to the layer extension.
-                    wsp.compose_static_wide_bg(descent_wide);
-                };
-                auto present_ws_descent = [&](const FrameBuffer& f,
-                                              bool with_hud) -> bool {
-                    const Uint32 t0 = SDL_GetTicks();
-                    SDL_Event ev;
-                    while (SDL_PollEvent(&ev)) {
-                        if (handle_fullscreen_toggle(ev, win)) continue;
-                        if (ev.type == SDL_QUIT) return false;
-                        if (ev.type == SDL_KEYDOWN &&
-                            ev.key.keysym.sym == SDLK_ESCAPE)
-                            return false;
-                    }
-                    // F5 is consumed by the descent function's OWN SDL_PollEvent
-                    // loop (it runs before this present callback), so the keydown
-                    // never reaches the drain above.  Read the key STATE directly
-                    // (level-triggered, not queue-drained) with a rising-edge
-                    // latch so one press = one capture.
-                    {
-                        const Uint8* ks = SDL_GetKeyboardState(nullptr);
-                        const bool f5 = ks != nullptr && ks[SDL_SCANCODE_F5] != 0;
-                        if (f5 && !descent_prev_f5) descent_shot = true;
-                        descent_prev_f5 = f5;
-                    }
-                    const std::size_t need =
-                        static_cast<std::size_t>(wsp.native_w()) * 200 * 4;
-                    if (!descent_ws || descent_wide.size() != need) {
-                        // Classic / non-widescreen: pillarbox via upload_and_show.
-                        FrameBuffer copy = f;
-                        upload_and_show(copy, with_hud);
-                        const Uint32 el = SDL_GetTicks() - t0;
-                        if (el < descent_step_ms) SDL_Delay(descent_step_ms - el);
-                        return true;
-                    }
-                    // Composite the native descent frame into the static margins.
-                    std::vector<std::uint8_t> wide = descent_wide;
-                    for (int y = 0; y < 200; ++y)
-                        std::memcpy(
-                            &wide[(static_cast<std::size_t>(y) * wsp.native_w() +
-                                   wsp.margin()) * 4],
-                            &f.px[static_cast<std::size_t>(y) * 320 * 4],
-                            320 * 4);
-                    // Neighbour seam overhang into the centre: descent_wide's
-                    // margins carry the straddler completion, but the descent
-                    // frame `f` is composed natively (320) without the
-                    // neighbour's tiles, so the memcpy above buried it —
-                    // re-apply band-limited (shared helper; Phase-2/pan seam
-                    // lists are empty, so those present calls no-op).
-                    wsp.reapply_seam_bands(wide);
-                    enhance::EnhancedHudLayout hud_layout;
-                    const bool hud = with_hud && use_hd_text;
-                    if (hud) {
-                        hud_layout =
-                            enhance::compute_enhanced_hud_layout(hd_text, g.state);
-                        enhance::draw_enhanced_hud_bars(wide, wsp.native_w(), 200, 1,
-                                                        hud_layout, wsp.margin());
-                    }
-                    std::vector<std::uint8_t> up = enhance::upscale_rgba(
-                        wide, wsp.native_w(), 200, hd_scale, opts.hd_profile);
-                    SDL_UpdateTexture(wsp.wide_tex(), nullptr, up.data(),
-                                      wsp.native_w() * hd_scale * 4);
-                    SDL_RenderClear(ren);
-                    SDL_RenderCopy(ren, wsp.wide_tex(), nullptr, nullptr);
-                    if (hud && hd_text.ok()) {
-                        int ow = 0, oh = 0;
-                        if (text_overlay.begin(ren, hd_text, ow, oh)) {
-                            wsp.draw_wide_hud_text(text_overlay.buffer(), ow,
-                                                   oh, hud_layout);
-                            text_overlay.flush(ren, logical_w, logical_h);
-                        }
-                    }
-                    if (descent_shot) {   // F5 pressed mid-descent — save full WS
-                        descent_shot = false;
-                        int ow = 0, oh = 0;
-                        SDL_GetRendererOutputSize(ren, &ow, &oh);
-                        SDL_Surface* sh = SDL_CreateRGBSurfaceWithFormat(
-                            0, ow, oh, 32, SDL_PIXELFORMAT_RGBA32);
-                        if (sh != nullptr &&
-                            SDL_RenderReadPixels(ren, nullptr,
-                                SDL_PIXELFORMAT_RGBA32, sh->pixels,
-                                sh->pitch) == 0) {
-                            // Same root as the F5 report dirs (this IS the
-                            // descent's F5 capture) — never the cwd.
-                            const std::filesystem::path root =
-                                bug_report_root();
-                            std::error_code ec;
-                            std::filesystem::create_directories(root, ec);
-                            char p[64];
-                            std::snprintf(p, sizeof p, "descent_ws_%03d.png",
-                                          descent_shot_seq++);
-                            const std::string path = (root / p).string();
-                            save_surface_image(sh, path);
-                            std::fprintf(stderr, "[WS-SHOT] saved %s\n",
-                                         path.c_str());
-                        }
-                        if (sh != nullptr) SDL_FreeSurface(sh);
-                    }
-                    SDL_RenderPresent(ren);
-                    const Uint32 work = SDL_GetTicks() - t0;
-                    if (work < descent_step_ms) SDL_Delay(descent_step_ms - work);
-                    return true;
-                };
-                auto descent_present = [&](const FrameBuffer& f) -> bool {
-                    return present_ws_descent(f, /*with_hud=*/false);
-                };
-                // Phase 1 (FUN_2276_0282): run BEFORE bind_screen so the
-                // animation shows screen 17's platform sliding down against
-                // screen 17's backdrop.  LCG jitter is rolled logic-side
-                // AFTER Phase 1 and BEFORE Phase 2 (reference ordering:
-                // step 8c — roll_l3_descent_smoke_jitter then
-                // run_l3_trunk_descent).
-                //
-                // Headless / replay: Phase 1 and Phase 2 animations are
-                // blocking display loops — in headless (opts.frames > 0)
-                // the present lambda already returns immediately, so they
-                // burn through frames quickly.  The LCG consumption
-                // (jitter roll = 40 draws) MUST happen regardless.
-                //
-                // Build the L3-surface-specific sprite vectors needed by
-                // the descent renderer (already loaded into g.render / g.grot3).
-                // The descent functions compose into a NATIVE 320×200 buffer
-                // and pass it to `present`; `present` then upscales for HD.
-                // We must NOT pass the HD-sized gameplay fb directly — the
-                // descent does `fb = bg_static` (native copy) which would
-                // resize it and corrupt subsequent gameplay composition.
-                {
-                    // g.render.tile_sprites = ELEML3(28) + ELEML3B(5) + GROT3(2)
-                    // (appended in bind_screen L3 surface path).
-                    // Decoration tiles use indices 0/1 (= ELEML3[0/1]).
-                    // The transition already advanced current_screen to 18, but
-                    // these are SCREEN-17's margins — restore it to 17 so the
-                    // per-screen dead-end rules (trunk-skip + dirt-void in
-                    // compose_static_wide_bg_native) fire; otherwise the giant
-                    // trunk spills into the strip for the whole descent.
-                    const int saved_cs = g.state.current_screen;
-                    g.state.current_screen = prev_screen;   // 17
-                    build_descent_margins();   // screen 17's static wide margins
-                    descent_m17 = descent_wide;   // saved for the pan scroll
-                    g.state.current_screen = saved_cs;       // back to 18
-                    FrameBuffer native_fb{};   // native 320×200 for descent
-                    if (!run_l3_screen17_descent(
-                            g.state, g.render.tile_sprites,
-                            g.render.entity_sprites, g.render.palette,
-                            g.tiles, g.grot3, native_fb,
-                            opts.enhance.descent_pan,
-                            g.render.extend_top_backdrop, descent_present)) {
-                        running = false;
-                    }
-                }
-                // Roll smoke jitter logic-side — 40 LCG draws consumed in
-                // the same order as the EXE regardless of rendering mode.
-                // FUN_2276_03d9:0x0554 (smoke A) + 0x0586 (smoke B), iters 0..19.
-                systems::roll_l3_descent_smoke_jitter(g.state);
-
-                // Bind screen 18 now (before Phase 2).  Phase 2 renders
-                // screen-17 records descending into screen-18's backdrop.
-                systems::clear_per_screen_state(g.state);
-                bind_screen(g, g.state.current_screen);
-                wsp.update_cache();   // recompute peek for the new screen
-                build_descent_margins();     // screen 18's static wide margins
-                descent_m18 = descent_wide;  // saved for the pan scroll
-                g.state.screen_change = false;
-                g.state.transition_skip = true;
-
-                // Enhancement #11 (opt-in, NOT EXE-faithful): camera-pan
-                // bridging Phase 1 → Phase 2.  The EXE hard-swaps the backdrop
-                // here; this glides screen 17 up/out and screen 18 in from
-                // below.  Gated on opts.enhance.descent_pan inside the helper
-                // (no-op + early return when the flag is off → the default path
-                // is byte-identical).  The pan touches NO LCG/RNG state — it
-                // builds backdrops from the already-bound L3 surface tiles and
-                // scrolls them — so the trace/corpus is unaffected.  Runs AFTER
-                // bind_screen(18) so screen 18's tiles are available for the
-                // incoming surface, mirroring the reference where
-                // the pan precedes Phase 2.  Smoke jitter was already rolled
-                // above; pan order relative to the roll is irrelevant (pan = 0
-                // LCG draws).
-                //
-                // present_hud: like `present` but draws the enhanced HUD over
-                // each pan frame (with_hud=true) so the HUD stays visible across
-                // the pan — reference _present_frame draws the HUD every pan
-                // frame.  No state mutation:
-                // draw_enhanced_hud_* only reads g.state.
-                if (running && opts.enhance.descent_pan) {
-                    // present_hud: the descent present WITH the enhanced HUD on
-                    // each pan frame.  Also scrolls the wide MARGINS in lockstep
-                    // with the centre pan — screen-17 margins recede UP, screen-18
-                    // margins enter from BELOW, the SAME geometry run_l3_descent_
-                    // pan uses for the centre (ody=-t*H, ndy=H+ody) — so the bezel
-                    // transitions screen 17 → 18 seamlessly with the centre
-                    // instead of popping at the phase boundary.
-                    const int pan_n = 12 * (opts.enhance.descent_pan ? 3 : 1);
-                    int pan_i = 0;
-                    auto present_hud = [&](const FrameBuffer& f) -> bool {
-                        if (descent_ws &&
-                            descent_m17.size() == descent_wide.size() &&
-                            descent_m18.size() == descent_wide.size()) {
-                            const double t =
-                                static_cast<double>(++pan_i) / pan_n;
-                            const int H = 200;
-                            const int ody = -static_cast<int>(t * H);
-                            const int ndy = H + ody;
-                            const std::size_t rowb =
-                                static_cast<std::size_t>(wsp.native_w()) * 4;
-                            std::fill(descent_wide.begin(), descent_wide.end(), 0);
-                            auto shift = [&](const std::vector<std::uint8_t>& src,
-                                             int sdy) {
-                                for (int y = 0; y < H; ++y) {
-                                    const int sy = y - sdy;
-                                    if (sy < 0 || sy >= H) continue;
-                                    std::memcpy(
-                                        &descent_wide[static_cast<std::size_t>(y) *
-                                                      rowb],
-                                        &src[static_cast<std::size_t>(sy) * rowb],
-                                        rowb);
-                                }
-                            };
-                            shift(descent_m17, ody);   // screen 17 recedes up
-                            shift(descent_m18, ndy);   // screen 18 enters below
-                        }
-                        return present_ws_descent(f, /*with_hud=*/true);
-                    };
-                    FrameBuffer native_pan{};   // native 320×200 for the pan
-                    if (!run_l3_descent_pan(
-                            g.state, g.render.tile_sprites,
-                            g.render.entity_sprites, g.render.palette,
-                            g.tiles, g.grot3, native_pan,
-                            opts.enhance.descent_pan,
-                            g.render.extend_top_backdrop, present_hud)) {
-                        running = false;
-                    }
-                    descent_wide = descent_m18;   // Phase 2 = static screen-18
-                }
-
-                // Phase 2 (FUN_2276_03d9): 21 iters, y_offset −80→0.
-                if (running) {
-                    const auto& td = g.tiles;
-                    FrameBuffer native_fb2{};   // native 320×200 for Phase 2
-                    if (!run_l3_trunk_descent(
-                            g.state, g.render.tile_sprites,
-                            g.render.entity_sprites, g.render.palette,
-                            td, g.grot3, native_fb2,
-                            opts.enhance.descent_pan,
-                            g.render.extend_top_backdrop, descent_present)) {
-                        running = false;
-                    } else {
-                        // Stamp the descent-overlay tiles onto screen 18's
-                        // collision + render list (mirrors EXE
-                        // FUN_2276_03d9 Collision_StampDur on iter 20;
-                        // reference: _setup_screen_collision after run_l3_trunk_descent).
-                        std::vector<presentation::LevelRenderAssets::TileDraw>
-                            overlay;
-                        for (const auto& tp : l3_descent_overlay_tiles(td)) {
-                            const int idx = descent_resolve_sprite_idx(tp.sprite_idx);
-                            if (idx >= 0 &&
-                                idx < static_cast<int>(g.dur.tiles.size())) {
-                                g.state.collision.stamp_tile(
-                                    g.dur.tiles[static_cast<std::size_t>(idx)].segments,
-                                    tp.x, tp.y);
-                            }
-                            overlay.push_back({idx, tp.x, tp.y});
-                        }
-                        // Draw order matches the reference:
-                        // the overlay renders BEFORE screen 18's own records,
-                        // so the ground row covers the descended trunk's
-                        // bottom — the trunk stays BEHIND the ground exactly
-                        // as during the descent animation.  Appending it
-                        // (drawn last) popped the trunk bottom OVER the
-                        // ground on the first steady frame.  Insert after the
-                        // bind-injected backdrop, before the level tiles.
-                        const auto ins =
-                            g.render.tiles.begin() +
-                            std::min<std::ptrdiff_t>(
-                                g.render.backdrop_tile_count,
-                                static_cast<std::ptrdiff_t>(
-                                    g.render.tiles.size()));
-                        g.render.tiles.insert(ins, overlay.begin(),
-                                              overlay.end());
-                        // Enhanced descent package: arm the settling-dust tail
-                        // on the steady screen (same gate as the in-animation
-                        // dust extension).
-                        if (opts.enhance.descent_pan)
-                            l3_smoke_tail = kL3SmokeTailTicks;
-                    }
-                }
+                // The whole screen-17→18 trunk-descent cinematic (widescreen
+                // margins + present callbacks + Phase 1 / enhanced pan / Phase 2
+                // + screen-18 overlay stamping) lives in l3_end_level.cpp.  Bind
+                // the live run-loop context and run it; it drives `running`
+                // false on ESC / window-close and arms l3_smoke_tail, exactly as
+                // the inline block did.  transition_kind stays 0 (no extra
+                // transition) afterwards.
+                DescentCtx dc;
+                dc.wsp = &wsp;
+                dc.ren = ren;
+                dc.win = win;
+                dc.hd_text = &hd_text;
+                dc.text_overlay = &text_overlay;
+                dc.g = &g;
+                dc.opts = &opts;
+                dc.running = &running;
+                dc.l3_smoke_tail = &l3_smoke_tail;
+                dc.hd = hd;
+                dc.hd_scale = hd_scale;
+                dc.use_hd_text = use_hd_text;
+                dc.frame_ms = frame_ms;
+                dc.prev_screen = prev_screen;
+                dc.logical_w = logical_w;
+                dc.logical_h = logical_h;
+                dc.l3_smoke_tail_ticks = kL3SmokeTailTicks;
+                dc.upload_and_show = upload_and_show_fn;
+                run_l3_trunk_descent_sequence(dc);
                 transition_kind = 0;   // no additional transition needed
             } else if (!now_inside && !was_inside && !warp_fade) {
                 transition_kind = 1;   // surface pan-scroll
@@ -2265,7 +1693,17 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                  transition_kind == 3 || transition_kind == 4);
             if (wsp.active() &&
                 (transition_kind == 1 || transition_kind == 2)) {
-                ws_old = wsp.present_path();   // OLD cache still live here
+                // The peek CACHE is still the old screen's here, but the
+                // STATE is not: enter_cave/exit_cave have already flipped
+                // cave_flag + current_screen to the NEW side (see the restore
+                // block below, which exists for exactly that reason).
+                // present_path()'s surface_selffill() case reads those two
+                // fields, so on a cave EXIT it mis-reads the outgoing CAVE as a
+                // no-neighbour SURFACE screen and wraps it with composed
+                // margins — the cave fade-OUT grew widescreen content the cave
+                // fade-IN correctly lacks.  was_cave/was_secret describe the
+                // OUTGOING side, so gate on them.
+                ws_old = !was_cave && !was_secret && wsp.present_path();
                 // Native-320 outgoing center matching the kind's content, composed
                 // from g.state (still the OLD screen — assets not yet rebound):
                 //   kind 1 (pan): player-LESS (the player rides the incoming
@@ -2972,7 +2410,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                 if (wsp.present_path()) {
                     wsp.present(bubble_hook);
                 } else {
-                    dump_steady_fb();
+                    maybe_dump_steady(fb.px.data(), fb.w, fb.h);
                     upload_and_show(fb);
                 }
                 wsp.set_float_pos(false);
@@ -3039,7 +2477,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
             if (wsp.present_path()) {
                 wsp.present(bubble_hook);
             } else {
-                dump_steady_fb();
+                maybe_dump_steady(fb.px.data(), fb.w, fb.h);
                 upload_and_show(fb);
             }
             log_draw(0);
@@ -3219,30 +2657,23 @@ int run_game(const GameOptions& opts) {
         std::fprintf(stderr, "game: SDL init failed: %s\n", SDL_GetError());
         return 1;
     }
-    // Gamepad: subsystem + hotplug watch + button mapping from play.json
-    // pad_* keys (see presentation/gamepad.hpp for the two-prong design).
-    {
-        gamepad::Config pcfg;
-        pcfg.jump = gamepad::button_from_string(opts.pad_jump,
-                                                SDL_CONTROLLER_BUTTON_A);
-        pcfg.attack = gamepad::button_from_string(opts.pad_attack,
-                                                  SDL_CONTROLLER_BUTTON_X);
-        pcfg.pause = gamepad::button_from_string(opts.pad_pause,
-                                                 SDL_CONTROLLER_BUTTON_START);
-        pcfg.confirm = gamepad::button_from_string(opts.pad_confirm,
-                                                   SDL_CONTROLLER_BUTTON_A);
-        pcfg.back = gamepad::button_from_string(opts.pad_back,
-                                                SDL_CONTROLLER_BUTTON_B);
-        pcfg.deadzone = opts.pad_deadzone;
-        gamepad::init(pcfg);
-    }
+    // Gamepad: subsystem + hotplug watch + button mapping from play.json pad_*
+    // keys (gamepad.hpp two-prong design).
+    gamepad::init_from_options(opts);
     // Gameplay tables + AdLib SFX voice patches live in the user's own
     // executable — read and install them up front so the audio backend can
     // pre-render the OPL SFX (content policy: the engine ships no game
     // data).  Missing/corrupt files surface later via the level loader.
     try {
         install_exe_game_data(prepare::load_game_executable(opts.game_dir));
-    } catch (const std::exception&) {}
+    } catch (const std::exception& e) {
+        // Non-fatal BY DESIGN (the level loader reports missing/corrupt game
+        // files with better context), but not silent: swallowing this without a
+        // word meant a corrupt executable surfaced later as a confusing
+        // loader error with no hint that table installation was the cause.
+        std::fprintf(stderr, "game data: EXE tables not installed (%s)\n",
+                     e.what());
+    }
     std::optional<SdlAudio> audio_opt;
     audio_opt.emplace(rt.music_device, rt.rom_dir, rt.soundfont,
                       rt.sfx_backend, rt.audio_rate, rt.audio_buffer,
@@ -3409,6 +2840,28 @@ int run_game(const GameOptions& opts) {
                 be.music_device = rt.music_device;
                 be.sfx_backend = rt.sfx_backend;
                 be.persist = rt.persist;
+                // --god on a boss fight.  god is seeded per LEVEL ENTRY inside
+                // run_platform_level (energy 999 / lives 99 / full belly), but a
+                // boss arena is its own loop that never runs that code — so
+                // jumping straight to a boss (`--play --level 2 --god`) fought
+                // it with the default 3 lives and looked like --god was
+                // ignored.  Carry the lives boost in; damage and energy are
+                // deliberately left alone, so the fight is still a real fight,
+                // just endlessly retryable.  Suppressed under --replay for the
+                // same reason the surface path suppresses it (a scripted replay
+                // must not get cheat state).
+                //
+                // rt.god, NOT opts.god: `opts` is run_game's CONST parameter —
+                // the frozen CLI snapshot — while `rt` is the runtime-mutable
+                // session copy that run_platform_level actually receives, and
+                // that the pause Cheats toggle writes through
+                // (configure_pause_bind: bind.god_session = &opts->god, where
+                // that opts IS rt).  Reading the const snapshot here meant god
+                // enabled from the pause menu never reached a boss, and god
+                // disabled there still seeded 99 lives.  Immutable CLI fields
+                // (replay, game_dir, frames…) correctly stay on `opts`.
+                if (rt.god && opts.replay.empty())
+                    carry.lives = 99;   // EXE cap, same value as the surface seed
                 const auto r = run_boss_level(opts.game_dir, internal,
                                               carry.lives, carry.score, sw,
                                               opts.frames, opts.screenshot,
@@ -3417,6 +2870,46 @@ int run_game(const GameOptions& opts) {
                                               opts.record_inputs);
                 carry.lives = r.lives;
                 carry.score = r.score;
+                if (r.reinit) {
+                    // After-fight apply: the boss staged reinit-class display/
+                    // audio Options it could not honor mid-fight.  Apply them to
+                    // rt + rebuild the pipeline now so the next level (or a
+                    // Restart Fight) uses them — the surface pause's
+                    // kReinitDisplay path, minus the state snapshot (the fight
+                    // is already over, so there is nothing to restore).
+                    const BossReinit& nr = *r.reinit;
+                    rt.enhanced = nr.enhanced;
+                    const int new_scale =
+                        hd_scale_for(rt.enhanced, nr.hd_profile, nr.render_scale);
+                    rt.render_scale = nr.render_scale;
+                    rt.hd_profile   = nr.hd_profile;
+                    const bool aspect_changed = nr.aspect != rt.aspect;
+                    rt.aspect       = nr.aspect;
+                    if (nr.music_device != rt.music_device ||
+                        nr.sfx_backend != rt.sfx_backend) {
+                        rt.music_device = nr.music_device;
+                        rt.sfx_backend  = nr.sfx_backend;
+                        audio_opt.reset();   // tear down device + synth handles
+                        audio_opt.emplace(rt.music_device, rt.rom_dir,
+                                          rt.soundfont, rt.sfx_backend,
+                                          rt.audio_rate, rt.audio_buffer,
+                                          rt.midi_port);
+                        load_all_sfx(*audio_opt);
+                    }
+                    // Rebuild when the HD scale changes OR aspect changed
+                    // (create_scaled_window re-derives the layout from
+                    // rt.aspect).  Same primitive the surface reinit uses.
+                    if (new_scale != hd_scale || aspect_changed) {
+                        hd = rt.enhanced && rt.hd_profile != "native";
+                        hd_scale = new_scale;
+                        if (!rebuild_window(hd_scale)) {
+                            std::fprintf(stderr, "settings: aborting after "
+                                                 "failed window rebuild\n");
+                            quit_requested = true;
+                            break;
+                        }
+                    }
+                }
                 if (r.quit_program) {          // boss Pause → Quit to Desktop
                     quit_requested = true;
                     break;
@@ -3525,80 +3018,8 @@ int run_game(const GameOptions& opts) {
     // run_platform_level, so boss deaths exited silently.  THEEND.PC1 is in
     // FILESA.VGA; MORT.MDI is in FILESA.CUR (both confirmed present).
     if (!quit_requested && game_over && !single) {
-        formats::CurArchive eva(slurp(opts.game_dir / "FILESA.VGA"));
-        formats::CurArchive efa(slurp(opts.game_dir / "FILESA.CUR"));
-        if (!eva.contains("THEEND.PC1")) {
-            std::fprintf(stderr, "game-over: THEEND.PC1 not in FILESA.VGA\n");
-            audio_opt->stop_music();
-        } else {
-            const formats::Pc1Image end = formats::parse_pc1(eva.get("THEEND.PC1").data);
-            if (end.width != 320) {
-                std::fprintf(stderr, "game-over: THEEND.PC1 unexpected width\n");
-                audio_opt->stop_music();
-            } else {
-                SDL_Texture* gtex =
-                    create_stream_tex(sw.ren, 320 * hd_scale, 200 * hd_scale);
-                // MORT.MDI death music over the picture (no celebratory chime).
-                if (audio_opt->music_available()) {
-                    const std::vector<std::uint8_t>* md = nullptr;
-                    if (efa.contains("MORT.MDI")) md = &efa.get("MORT.MDI").data;
-                    if (md != nullptr) {
-                        audio_opt->play_music(*md, formats::mdi_track_id("mort.mdi"));
-                    }
-                }
-                // Compose THEEND.PC1 → RGBA once.
-                FrameBuffer end_fb;
-                for (std::size_t i = 0;
-                     i < end.pixels.size() && i < 320u * 200u; ++i) {
-                    const std::uint8_t idx = end.pixels[i];
-                    const formats::Rgb c =
-                        (idx < end.palette.size()) ? end.palette[idx]
-                                                   : formats::Rgb{};
-                    end_fb.px[i * 4]     = c.r;
-                    end_fb.px[i * 4 + 1] = c.g;
-                    end_fb.px[i * 4 + 2] = c.b;
-                    end_fb.px[i * 4 + 3] = 255;
-                }
-                // Upload (HD-upscale if scaled) + present, mirroring the win
-                // ending's render_at + the intro present pattern.
-                if (hd_scale > 1) {
-                    const auto up = enhance::upscale_rgba(
-                        end_fb.px, 320, 200, hd_scale, rt.hd_profile);
-                    SDL_UpdateTexture(gtex, nullptr, up.data(),
-                                      320 * hd_scale * 4);
-                } else {
-                    SDL_UpdateTexture(gtex, nullptr, end_fb.px.data(), 320 * 4);
-                }
-                // Hold ~8 seconds (8*18 frames @ 18 Hz), re-presenting each
-                // tick and polling QUIT/ESC to abort early.
-                constexpr int kHoldFrames = 8 * 18;
-                for (int f = 0; f < kHoldFrames; ++f) {
-                    SDL_Event ev;
-                    bool abort = false;
-                    while (SDL_PollEvent(&ev)) {
-                        if (handle_fullscreen_toggle(ev, sw.win)) continue;
-                        if (ev.type == SDL_QUIT ||
-                            (ev.type == SDL_KEYDOWN &&
-                             ev.key.keysym.sym == SDLK_ESCAPE)) {
-                            abort = true;
-                            break;
-                        }
-                    }
-                    if (abort) break;
-                    SDL_RenderClear(sw.ren);
-                    SDL_RenderCopy(sw.ren, gtex, nullptr, nullptr);
-                    SDL_RenderPresent(sw.ren);
-                    SDL_Delay(1000 / 18);
-                }
-                // FADE the death music out — do NOT hard-cut it.  EXE
-                // FUN_2bd7_02e7 ends the game-over screen with FUN_1f75_00e4
-                // (MDI_FadeStop, a gradual master-volume ramp) after the 8 s
-                // wait, then FUN_1f75_017a (free slot).  A hard stop_music()
-                // chopped MORT.MDI mid-loop, which is audibly wrong.
-                audio_opt->fade_out_music();
-                SDL_DestroyTexture(gtex);
-            }
-        }
+        show_game_over_screen(opts.game_dir, *audio_opt, sw, hd_scale,
+                              rt.hd_profile);
     }
     // ── Ending: the win picture + music after the last level. ──
     // Reached by finishing L7 (the level loop leaves display == 8) or
@@ -3606,180 +3027,8 @@ int run_game(const GameOptions& opts) {
     // Game_WinSequence slot) — great for testing the ending.  Afterwards the
     // normal post-win flow applies: loop back to the attract at position 0.
     if (!quit_requested && display > 7 && rc == 0 && !single) {
-        formats::CurArchive eva(slurp(opts.game_dir / "FILESA.VGA"));
-        formats::CurArchive efa(slurp(opts.game_dir / "FILESA.CUR"));
-        SDL_Texture* etex =
-            create_stream_tex(sw.ren, 320 * hd_scale, 200 * hd_scale);
-        if (audio_opt->music_available() && efa.contains("FIN.MDI")) {
-            audio_opt->play_music(efa.get("FIN.MDI").data, formats::mdi_track_id("fin.mdi"));
-        }
-        // ── Real ending sequence: Game_WinSequence (FUN_2bd7_0183, 356 B) ──
-        // COOL3.PC1 (family cave scene) + COOL2.MAT[0] (192×125 caveman from
-        // behind) in FILESA.VGA.  Caveman rises from y=198 to y=73 at −2/frame
-        // (~63 frames @18 Hz).  Smooth-motion: 3 sub-frames lerping y.
-        // Missing-assets fallback: return silently per spec §F6.
-        // EXE evidence: capstone 2bd7_0183_sequencer_b.txt 0x0207-0x0279.
-        [&]() {
-            // Load from FILESA.VGA (confirmed archive; see spec F6 note).
-            if (!eva.contains("COOL3.PC1") || !eva.contains("COOL2.MAT")) {
-                std::fprintf(stderr, "ending: assets missing (COOL3.PC1 / "
-                                     "COOL2.MAT not in FILESA.VGA)\n");
-                audio_opt->stop_music();
-                return;
-            }
-            const formats::Pc1Image bg =
-                formats::parse_pc1(eva.get("COOL3.PC1").data);
-            if (bg.width != 320) {
-                std::fprintf(stderr, "ending: COOL3.PC1 unexpected width\n");
-                audio_opt->stop_music();
-                return;
-            }
-            const std::vector<formats::Sprite> mat_sprites =
-                formats::MatFile(eva.get("COOL2.MAT").data, "COOL2.MAT")
-                    .sprites();
-            if (mat_sprites.empty()) {
-                std::fprintf(stderr, "ending: COOL2.MAT has no sprites\n");
-                audio_opt->stop_music();
-                return;
-            }
-            const formats::Sprite& sprite = mat_sprites[0];
-
-            // Build the RGBA background once.
-            FrameBuffer bg_fb;
-            for (std::size_t i = 0; i < bg.pixels.size() && i < 320u * 200u;
-                 ++i) {
-                const std::uint8_t idx = bg.pixels[i];
-                const formats::Rgb c =
-                    (idx < bg.palette.size()) ? bg.palette[idx]
-                                              : formats::Rgb{};
-                bg_fb.px[i * 4]     = c.r;
-                bg_fb.px[i * 4 + 1] = c.g;
-                bg_fb.px[i * 4 + 2] = c.b;
-                bg_fb.px[i * 4 + 3] = 255;
-            }
-
-            // Build the palette vector once (blit_sprite takes const ref).
-            const std::vector<formats::Rgb> pal(bg.palette.begin(),
-                                                bg.palette.end());
-
-            // OLDUVAI_ENDING_SHOT=<png>: headless verify — dump the first
-            // composited ending frame (COOL3 backdrop + COOL2 caveman at
-            // y=198) via renderer readback, then exit.  Same pattern as
-            // OLDUVAI_MAINMENU_SHOT; pairs with --level 8 + dummy video.
-            const char* const ending_shot = std::getenv("OLDUVAI_ENDING_SHOT");
-            // Compose one frame at logical y, upload, and display.
-            // delay_ms: wall-clock pause for this sub-step.
-            // Returns false if the user quit or pressed ESC.
-            auto render_at = [&](int render_y, Uint32 delay_ms) -> bool {
-                FrameBuffer fb2 = bg_fb;   // copy background
-                blit_sprite(fb2, sprite, pal, 64, render_y);
-                // Poll for quit/ESC before uploading.
-                SDL_Event ev;
-                while (SDL_PollEvent(&ev)) {
-                    if (handle_fullscreen_toggle(ev, sw.win)) continue;
-                    if (ev.type == SDL_QUIT) return false;
-                    if (ev.type == SDL_KEYDOWN &&
-                        ev.key.keysym.sym == SDLK_ESCAPE) return false;
-                }
-                if (hd_scale > 1) {
-                    const auto up = enhance::upscale_rgba(
-                        fb2.px, 320, 200, hd_scale, rt.hd_profile);
-                    SDL_UpdateTexture(etex, nullptr, up.data(),
-                                      320 * hd_scale * 4);
-                } else {
-                    SDL_UpdateTexture(etex, nullptr, fb2.px.data(), 320 * 4);
-                }
-                SDL_RenderClear(sw.ren);
-                SDL_RenderCopy(sw.ren, etex, nullptr, nullptr);
-                if (ending_shot) {
-                    // Read back the composited frame before present (the
-                    // OLDUVAI_MAINMENU_SHOT pattern), save it, and quit the
-                    // session — a one-shot verify must not loop to the title.
-                    capture_renderer_output(sw.ren, ending_shot);
-                    quit_requested = true;
-                    return false;
-                }
-                SDL_RenderPresent(sw.ren);
-                if (delay_ms > 0) SDL_Delay(delay_ms);
-                return true;
-            };
-
-            // EXE 0x0207-0x0279: y = 198..73 (loop exits when y < 73).
-            constexpr int kYStart = 198;
-            constexpr int kYEnd   = 73;
-            constexpr int kDY     = 2;
-            constexpr Uint32 kFrameMs = 1000 / 18;   // 18 Hz logic cadence
-
-            const bool smooth = rt.enhance.smooth_motion;
-            // vsync render-interpolation for the credits scroll (general
-            // technique — smooth_present.hpp): fill each 18Hz logic step (y-=2)
-            // with vsync-paced frames at continuous alpha.  Without vsync, fall
-            // back to discrete sub-frames.  render_at(y, 0) presents with no
-            // extra delay so the vsync block alone paces it (a fixed delay would
-            // stack on top and slow the scroll).
-            const bool e_vsync = smooth_try_enable_vsync(sw.ren, smooth);
-            bool aborted = false;
-            int prev_y = kYStart;
-            for (int y = kYStart; y >= kYEnd && !aborted; y -= kDY) {
-                if (smooth && e_vsync) {
-                    const Uint32 t0 = SDL_GetTicks();
-                    while (!aborted) {
-                        const Uint32 el = SDL_GetTicks() - t0;
-                        const float a = el >= kFrameMs
-                                            ? 1.0f
-                                            : static_cast<float>(el) /
-                                                  static_cast<float>(kFrameMs);
-                        const int ly =
-                            prev_y + static_cast<int>(
-                                         std::lround((y - prev_y) * a));
-                        aborted = !render_at(ly, 0);
-                        if (SDL_GetTicks() - t0 >= kFrameMs) break;
-                    }
-                } else if (smooth) {
-                    // No vsync: discrete sub-frames lerping y from prev_y to y.
-                    constexpr Uint32 kSubMs = kFrameMs / 3;
-                    for (int sub = 1; sub <= 3 && !aborted; ++sub) {
-                        const int lerp_y = prev_y + (y - prev_y) * sub / 3;
-                        aborted = !render_at(lerp_y, kSubMs);
-                    }
-                } else {
-                    aborted = !render_at(y, kFrameMs);
-                }
-                prev_y = y;
-            }
-
-            if (aborted) {
-                audio_opt->stop_music();
-                return;
-            }
-
-            // Hold the final frame: wait for any-key press+release.
-            // EXE 0x02a7: Keyboard_WaitPressRelease (KEYDOWN then KEYUP).
-            // ESC / SDL_QUIT abort immediately at this point too.
-            bool pressed = false;
-            bool done = false;
-            while (!done) {
-                SDL_Event ev;
-                if (SDL_WaitEvent(&ev)) {
-                    if (ev.type == SDL_QUIT) { done = true; break; }
-                    if (handle_fullscreen_toggle(ev, sw.win)) continue;
-                    if (ev.type == SDL_KEYDOWN) {
-                        if (ev.key.keysym.sym == SDLK_ESCAPE) {
-                            done = true;
-                            break;
-                        }
-                        pressed = true;
-                    }
-                    if (ev.type == SDL_KEYUP && pressed) {
-                        done = true;
-                    }
-                }
-            }
-
-            // EXE 0x02d2-0x02da: MDI_FadeStop + MDI_FreeSlot(0).
-            audio_opt->stop_music();
-        }();  // IIFE — structured cleanup without goto
-        SDL_DestroyTexture(etex);
+        show_win_ending(opts.game_dir, *audio_opt, sw, hd_scale, rt.hd_profile,
+                        rt.enhance.smooth_motion, quit_requested);
     }
     // Attract-loop tail: replay / one-shot modes exit after a single pass;
     // interactive sessions restart from the attract at sequence position 0

@@ -35,6 +35,7 @@ A GOG install is auto-discovered, so a GOG copy plays with a bare
 | Engine + SDL2 (+ transitive deps) | bundled (ldd-driven) |
 | OPL music (vendored Nuked-OPL3) | built in |
 | libfluidsynth (GM music) | bundled (injected — it is `dlopen`'d) |
+| libmt32emu (MT-32 music) | bundled (built from munt source — not in Ubuntu; `dlopen`'d; needs your own ROMs to sound) |
 | HD fonts (Freckle Face, Noto Sans; OFL) | bundled beside the binary |
 | ALSA (`libasound`) | host-provided (it `dlopen`s host plugins) |
 | GM SoundFont | host-provided (auto-discovered; see below) |

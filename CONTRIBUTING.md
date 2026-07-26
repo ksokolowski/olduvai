@@ -111,3 +111,30 @@ When in doubt, favour the play experience over the diff.
   `formats`, `core`, `systems` must not touch SDL.
 - Every game-behaviour constant cites its evidence
   (`// FUN_xxxx_yyyy +0xNN`) in a comment.
+
+## Where a shared helper lives (the anti-duplication rule)
+
+`scripts/check_layers.sh` ranks the seven layers, but says nothing about
+ownership *inside* a layer — and `presentation/` alone is 120 files. With no
+rule, a four-line local copy in an anonymous namespace is always the cheaper
+move: internal linkage, no header edit, no rebuild fan-out, and no compiler,
+linker or check will ever object. That is how `slurp` reached **nine** copies
+and the upscale-then-upload idiom **six**.
+
+So, the rule:
+
+- A **stateless leaf helper** used by 2+ translation units lives in a shared
+  header of its layer — `presentation/image_out.hpp` (image/file output),
+  `presentation/window_util.hpp` (SDL/window/texture), `systems/sprite_ids.hpp`
+  (entity sprite ids + classification), `formats/byteorder.hpp` (integer
+  reads) — or a new small header if none fits.
+- Adding a **new local copy of a helper that already exists elsewhere** is a
+  review finding, not a style preference. Grep before you write the four lines.
+- **Exception, and it is a real one:** a verbatim extraction may carry its
+  private helper along, because carrying it is what keeps the before/after
+  byte-diff a valid proof. Note it in the commit message so the count is
+  visible rather than silently growing.
+
+The point is not line count. It is that a duplicated helper diverges: the
+FramePresenter extraction froze a live `opts.hd_profile` into a copy and the
+whole 27-test corpus passed straight through the bug (`b6ec12f` → `def8235`).

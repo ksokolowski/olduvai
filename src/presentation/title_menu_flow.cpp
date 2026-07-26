@@ -74,6 +74,7 @@
 #include "presentation/settings_preview.hpp"
 #include "presentation/settings_seed.hpp"
 #include "presentation/settings_flow.hpp"
+#include "presentation/staging_bindings.hpp"
 #include "presentation/settings_session.hpp"
 #include "enhance/mmpx.hpp"
 #include "enhance/omniscale.hpp"
@@ -272,59 +273,26 @@ void run_title_menu(TitleMenuCtx& ctx) {
                 }
             }
             if (mm) {
-                using PFn = std::function<void(const std::string&, const std::string&)>;
                 // SettingsSession + ConfirmDialog for the main-menu Options batch
                 // staging flow (§8.6).  Mirrors the in-game Pause wiring exactly.
                 SettingsSession main_session;
                 ConfirmDialog   main_confirm;
 
-                struct MBind : MenuBindings {
-                    SdlAudio* audio = nullptr;
-                    SDL_Window* win = nullptr;
-                    bool enhanced = false;
-                    const PFn* persist = nullptr;
-                    std::map<std::string, std::string> mem;
+                // Main-menu Options: writes the edited value back to `rt` so
+                // Start Game uses it this session, and takes the Tier-1 live
+                // path for same-scale hd_profile + aspect.  The rest is the
+                // shared skeleton (no live cheat.god / autofire on this menu).
+                struct MBind : StagingBindings {
                     GameOptions* rt = nullptr;   // write back so Start Game uses the edited value this session
-                    DisplaySettings cur;         // snapshot of rt at baseline (updated on APPLY)
                     // Tier-1 live Aspect: sets rt.aspect + SDL_RenderSetLogicalSize.
                     // The main-menu flush dims are recomputed per-frame from
                     // rt.aspect, so this just gives immediate effect.
                     std::function<void(const std::string&)> apply_aspect;
-                    // Batched staging session: every editable key change goes here.
-                    SettingsSession* session = nullptr;
-                    std::string get(const std::string& k) override {
-                        auto it = mem.find(k);
-                        return it == mem.end() ? std::string{} : it->second;
-                    }
-                    void save(const std::string& k, const std::string& v) {
-                        if (persist && *persist) (*persist)(k, v);
-                    }
-                    void set(const std::string& k, const std::string& v) override {
-                        if (k == "preset") {
-                            // One-click Classic/HD preset: fan the bundle out through
-                            // this same set() so every key rides the normal machinery.
-                            mem[k] = v;
-                            apply_preset(*this, v);
-                            return;
-                        }
-                        // cheat.*: session-only — no staging, no persist.
-                        if (k.rfind("cheat.", 0) == 0) {
-                            mem[k] = v;
-                            return;
-                        }
 
-                        // All editable settings keys — enhance.* included —
-                        // stage provisionally (play.json sees nothing until
-                        // Apply; encode_enhance_persist writes the flags as
-                        // the single "enhance" config list there).
-                        const std::string old_val = mem.count(k) ? mem[k] : std::string{};
-                        mem[k] = v;
-
-                        // Live preview for cheap keys only — do NOT write rt or
-                        // persist (shared: settings_preview.hpp).
-                        if (preview_cheap_key(k, v, audio, win, enhanced)) {
-                            // handled — still stages below
-                        } else if (k == "hd_profile") {
+                  protected:
+                    void apply_live_preview(const std::string& k,
+                                            const std::string& v) override {
+                        if (k == "hd_profile") {
                             // Same-scale hd_profile: live-swap the rt field the upscaler reads.
                             const ApplyTier tier = classify_change(k, v, cur);
                             if (tier == ApplyTier::Live && rt)
@@ -332,10 +300,6 @@ void run_title_menu(TitleMenuCtx& ctx) {
                         } else if (k == "aspect" && apply_aspect) {
                             apply_aspect(v);   // Tier-1 live: logical-size only
                         }
-                        // Heavy keys (render_scale, music_device, sfx_backend, hd_profile Reinit)
-                        // are staged only — no rt write, no persist, no rebuild here.
-
-                        if (session) session->stage(k, k, old_val, v);
                     }
                 } mbind;
                 mbind.audio = &*audio_opt; mbind.win = sw.win;

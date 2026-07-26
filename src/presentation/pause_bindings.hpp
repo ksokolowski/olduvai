@@ -19,82 +19,63 @@
 #include "presentation/settings_apply.hpp"  // ApplyTier, classify_change, DisplaySettings
 #include "presentation/settings_preview.hpp"  // preview_cheap_key
 #include "presentation/settings_session.hpp"  // SettingsSession
+#include "presentation/staging_bindings.hpp"  // StagingBindings, PersistFn
 
 namespace olduvai::presentation {
 
-using PersistFn = std::function<void(const std::string&, const std::string&)>;
+// In-game Pause: adds the live cheat.god / autofire keys (read + applied
+// straight through to game state, never staged) and the Tier-1 live path for
+// same-scale hd_profile + aspect.  Everything else is the shared skeleton.
+struct PauseBindings : StagingBindings {
+    // LIVE target: run_platform_level's per-LEVEL `god_active` local, so a
+    // toggle takes effect immediately in the running level.
+    bool* god = nullptr;
+    // SESSION target: GameOptions::god, the flag every level entry re-derives
+    // `god_active` from.  Without it a god toggle made in the pause menu died
+    // at the next level boundary — the next level recomputed god_active from
+    // GameOptions::god and silently reverted to whatever --god said.  Writing
+    // both makes the cheat live AND sticky across L1→L7 (and into the boss
+    // arenas, whose lives seed reads GameOptions::god).
+    bool* god_session = nullptr;
+    std::string* autofire = nullptr;   // → GameOptions::autofire token
+    // Tier-classifier wiring: signal reinit back to run_game.
+    bool* want_reinit = nullptr;
+    PendingReinit* reinit_req = nullptr;
+    std::string* rt_hd_profile = nullptr;
+    // Tier-1 live Aspect: applies SDL_RenderSetLogicalSize + updates the
+    // run-loop's logical_w/h + rt.aspect.  Set from the menu loop.
+    std::function<void(const std::string&)> apply_aspect;
 
-    struct PauseBindings : MenuBindings {
-        bool* god = nullptr;
-        std::string* autofire = nullptr;   // → GameOptions::autofire token
-        SdlAudio* audio = nullptr;
-        SDL_Window* win = nullptr;
-        bool enhanced = false;
-        const PersistFn* persist = nullptr;   // → play.json (app layer)
-        std::map<std::string, std::string> mem;
-        // Tier-classifier wiring: signal reinit back to run_game.
-        bool* want_reinit = nullptr;
-        PendingReinit* reinit_req = nullptr;
-        DisplaySettings cur;               // snapshot of rt at level entry
-        std::string* rt_hd_profile = nullptr;
-        // Tier-1 live Aspect: applies SDL_RenderSetLogicalSize + updates the
-        // run-loop's logical_w/h + rt.aspect.  Set from the menu loop.
-        std::function<void(const std::string&)> apply_aspect;
-        // Batched staging session: every editable key change goes here instead
-        // of being persisted immediately.  Pointer is set to the local
-        // SettingsSession after construction.  §8.6.
-        SettingsSession* session = nullptr;
-        std::string get(const std::string& k) override {
-            if (k == "cheat.god") return (god && *god) ? "1" : "0";
-            if (k == "autofire") return autofire ? *autofire : "off";
-            auto it = mem.find(k);
-            return it == mem.end() ? std::string{} : it->second;
+  protected:
+    bool get_special(const std::string& k, std::string& out) override {
+        if (k == "cheat.god") { out = (god && *god) ? "1" : "0"; return true; }
+        if (k == "autofire") { out = autofire ? *autofire : "off"; return true; }
+        return false;
+    }
+    bool set_special(const std::string& k, const std::string& v) override {
+        if (k == "cheat.god") {
+            const bool on = (v == "1");
+            if (god) *god = on;                   // live, this level
+            if (god_session) *god_session = on;   // sticky, across levels
+            return true;
         }
-        void save(const std::string& key, const std::string& v) {
-            if (persist && *persist) (*persist)(key, v);
+        if (k == "autofire") {   // live apply + persist, never staged
+            if (autofire) *autofire = v;
+            save("autofire", v);
+            return true;
         }
-        void set(const std::string& k, const std::string& v) override {
-            if (k == "cheat.god") { if (god) *god = (v == "1"); return; }
-            if (k == "autofire") {   // live apply + persist, never staged
-                if (autofire) *autofire = v;
-                save("autofire", v);
-                return;
-            }
-            if (k == "preset") {
-                // One-click Classic/HD preset: fan the bundle out through
-                // this same set() so every key rides the normal machinery.
-                mem[k] = v;
-                apply_preset(*this, v);
-                return;
-            }
-
-            // cheat.* keys are session-only: no staging, no persist.
-            if (k.rfind("cheat.", 0) == 0) {
-                mem[k] = v;
-                return;
-            }
-            // All editable settings keys — enhance.* included — stage the
-            // change provisionally; play.json sees nothing until Apply
-            // (encode_enhance_persist translates the flags into the single
-            // "enhance" config list there).
-            // Safe/cheap ones preview live so the user gets immediate feedback
-            // (volume, fullscreen, same-scale hd_profile); heavy ones are
-            // staged only — no reinit until the user confirms.  §8.6.
-            const std::string old_val = mem.count(k) ? mem[k] : std::string{};
-            mem[k] = v;
-            // Live preview for cheap keys (shared: settings_preview.hpp).
-            if (preview_cheap_key(k, v, audio, win, enhanced)) {
-                // handled — still stages below
-            } else if (k == "hd_profile") {
-                const ApplyTier tier = classify_change(k, v, cur);
-                if (tier == ApplyTier::Live && rt_hd_profile)
-                    *rt_hd_profile = v;   // same-scale: live swap
-            } else if (k == "aspect" && apply_aspect) {
-                apply_aspect(v);          // Tier-1 live: logical-size only
-            }
-            // Stage for the confirm dialog (no persist, no reinit yet).
-            if (session) session->stage(k, k, old_val, v);
+        return false;
+    }
+    void apply_live_preview(const std::string& k,
+                            const std::string& v) override {
+        if (k == "hd_profile") {
+            const ApplyTier tier = classify_change(k, v, cur);
+            if (tier == ApplyTier::Live && rt_hd_profile)
+                *rt_hd_profile = v;   // same-scale: live swap
+        } else if (k == "aspect" && apply_aspect) {
+            apply_aspect(v);          // Tier-1 live: logical-size only
         }
+    }
 };
 
 }  // namespace olduvai::presentation

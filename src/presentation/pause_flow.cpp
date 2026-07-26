@@ -221,6 +221,7 @@ MenuActionTable make_pause_actions(PauseActionsDeps* d) {
 
 void configure_pause_bind(PauseBindings& bind, const PauseBindWireDeps& d) {
     bind.god = d.god_active;
+    bind.god_session = &d.opts->god;   // survives the level boundary
     bind.autofire = &d.opts->autofire;
     bind.audio = d.audio;
     bind.win = d.sw->win;

@@ -13,21 +13,14 @@ namespace {
 constexpr int kBirdSprTable[8] = {1, 0, 1, 2, 1, 0, 1, 2};
 // Animated food L3 sprite table (DS:0x80b8, 0-based).
 constexpr int kAnimFoodL3Sprites[4] = {94, 84, 83, 84};
-// Bonus icon sprites by type (DS:0x8088, 0-based).
-constexpr int kBonusSprites[6] = {90, 81, 89, 130, 131, 139};
 constexpr int kSprBonusSmokeBase = 85;
 constexpr int kSprBonusGhost = 88;
-constexpr int kSprBirdKo = 43;
-constexpr int kSprChimp = 92;
-constexpr int kSprSpider = 118;
-constexpr int kSprBat = 121;
 constexpr int kSprSnakeBody = 149;
 constexpr int kSprSnakeFlat = 150;
 constexpr int kSprSnakeMid = 151;
 constexpr int kSprSnakeExtended = 152;
 constexpr int kSprMonsterL7ADormant = 50;
-constexpr int kSprRockL3 = 116;
-constexpr int kSprJFishRiseLeft = 55, kSprJFishFallLeft = 56;
+constexpr int kSprJFishFallLeft = 56;
 constexpr int kSprJFishRiseRight = 57, kSprJFishFallRight = 58;
 }  // namespace
 
@@ -38,23 +31,6 @@ using core::ObjType;
 
 namespace {
 
-bool is_shared_monster(ObjType t) {
-    switch (t) {
-        case ObjType::RedDino:
-        case ObjType::YellowFuzz:
-        case ObjType::BrownBear:
-        case ObjType::GreenDino:
-        case ObjType::MonsterL3A:
-        case ObjType::MonsterL3B:
-        case ObjType::MonsterL5A:
-        case ObjType::MonsterL5B:
-        case ObjType::MonsterL7A:
-        case ObjType::MonsterL7B:
-            return true;
-        default:
-            return false;
-    }
-}
 
 int state_of(const Entity& e) { return e.state; }
 
@@ -727,7 +703,7 @@ void refresh_entity_sprites_on_screen_bind(std::vector<Entity>& entities,
         // Only the shared state machine drives sprite from state in a
         // way that disagrees with the stored value.  MonsterL7A runs
         // its own gated handler — excluded in the reference too.
-        if (!is_shared_monster(e.obj_type) ||
+        if (!is_monster(e.obj_type) ||
             e.obj_type == ObjType::MonsterL7A) {
             continue;
         }
@@ -766,7 +742,7 @@ UpdateEntitiesResult update_entities(std::vector<Entity>& entities,
     // food/score.  // FUN_27f7_093d +0x0a0f..0x0a33
     if (kill_all) {
         for (Entity& e : entities) {
-            if (!e.active || !is_shared_monster(e.obj_type)) continue;
+            if (!e.active || !is_monster(e.obj_type)) continue;
             e.respawns = 0;
             if (e.state != static_cast<int>(MonsterState::Dead)) {
                 e.state = static_cast<int>(MonsterState::Ko);

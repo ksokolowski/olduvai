@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 
+#include "formats/byteorder.hpp"
 #include "formats/lzss.hpp"
 
 namespace olduvai::formats {
@@ -16,20 +17,6 @@ std::string to_lower(const std::string& s) {
     std::transform(out.begin(), out.end(), out.begin(),
                    [](unsigned char c) { return std::tolower(c); });
     return out;
-}
-
-std::uint16_t read_u16le(const std::vector<std::uint8_t>& raw,
-                         std::size_t pos) {
-    return static_cast<std::uint16_t>(raw[pos]) |
-           (static_cast<std::uint16_t>(raw[pos + 1]) << 8);
-}
-
-std::uint32_t read_u32le(const std::vector<std::uint8_t>& raw,
-                         std::size_t pos) {
-    return static_cast<std::uint32_t>(raw[pos]) |
-           (static_cast<std::uint32_t>(raw[pos + 1]) << 8) |
-           (static_cast<std::uint32_t>(raw[pos + 2]) << 16) |
-           (static_cast<std::uint32_t>(raw[pos + 3]) << 24);
 }
 
 }  // namespace

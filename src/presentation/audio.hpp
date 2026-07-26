@@ -25,6 +25,23 @@
 
 namespace olduvai::presentation {
 
+// The melodic MIDI synth seam (audio DIP): the two sample-generating backends
+// — libmt32emu (Roland MT-32/CM-32L) and libfluidsynth (General MIDI + a
+// SoundFont) — behind one 2-method interface.  `send` feeds one parsed MIDI
+// channel-voice message (status, data1, data2); `render` pulls `frames` stereo
+// s16 sample-frames into `out` (2*frames interleaved L/R samples).  The
+// real-time mixer, play/stop key-off, and the offline SFX pre-render all drive
+// the active synth ONLY through these two calls — each implementation owns its
+// dlopen handle, its bound C-API subset, the per-library quirks (MT-32 takes a
+// raw packed message; GM demuxes into typed fluid_synth_* calls) and its whole
+// lifetime (see audio.cpp).  A null pointer means "no melodic synth".
+class PcmMidiSynth {
+public:
+    virtual ~PcmMidiSynth() = default;
+    virtual void send(std::uint8_t status, std::uint8_t d1, std::uint8_t d2) = 0;
+    virtual void render(int frames, std::int16_t* out) = 0;
+};
+
 class SdlAudio {
 public:
     // device: "auto" tries mt32 (library + ROMs) then opl; or force
@@ -44,20 +61,23 @@ public:
     // midi_port: host MIDI OUT port name for the host-midi music device
     // (empty = pick a sensible default).  Ignored unless music_device selects
     // host MIDI.
+    // `offline`: set up the synth backends at `audio_rate` but open NO SDL
+    // audio device and start no callback — for the deterministic headless
+    // render harness (render_offline).  device_ stays 0 (ok() is false); music
+    // still binds, driven by hand via render_offline / mix().
     explicit SdlAudio(const std::string& music_device = "auto",
                       const std::string& rom_dir = "",
                       const std::string& soundfont = "",
                       const std::string& sfx_backend = "auto",
                       int audio_rate = 0, int audio_buffer = 0,
-                      const std::string& midi_port = "");
+                      const std::string& midi_port = "", bool offline = false);
     ~SdlAudio();
     SdlAudio(const SdlAudio&) = delete;
     SdlAudio& operator=(const SdlAudio&) = delete;
 
     bool ok() const { return device_ != 0; }
     bool music_available() const {
-        return opl_music_ != nullptr || mt32_ != nullptr ||
-               fs_synth_ != nullptr || host_midi_active_;
+        return opl_music_ != nullptr || synth_ != nullptr || host_midi_active_;
     }
     const std::string& active_music_backend() const { return music_backend_; }
     // True when play_music() feeds a General MIDI synth, i.e. the MDI
@@ -72,12 +92,12 @@ public:
     // aftertouch / pitch-bend events (which the EXE 'R'/MPU-401 branch never
     // forwards, per FUN_1ecd_0599) are dropped — matching the Python MT-32
     // render and keeping GM's character close to the MT-32 (owner request).
-    // The OPL/AdLib backend (mt32_/fs_ both null) keeps those events, as the
-    // EXE 'A' branch genuinely uses them.
+    // The OPL/AdLib backend (synth_ null) keeps those events, as the EXE 'A'
+    // branch genuinely uses them.
     bool drop_runtime_modulation() const {
         // Host MIDI mirrors the EXE 'R'/MPU-401 branch (a real MT-32), so it
         // drops runtime CC/aftertouch/pitch-bend just like the builtin MT-32.
-        return mt32_ != nullptr || fs_synth_ != nullptr || host_midi_active_;
+        return synth_ != nullptr || host_midi_active_;
     }
 
     void load_sfx(const std::string& id, const formats::VocAudio& voc);
@@ -101,6 +121,14 @@ public:
     void fade_out_music();
 
     void mix(std::int16_t* out, int frames);       // audio-thread callback
+
+    // Headless deterministic render (offline ctor only): load a format-0 MIDI
+    // stream into the sequencer and render `frames` stereo samples by driving
+    // mix() in fixed chunks — the same event quantisation as real playback,
+    // reproducible run-to-run.  Sequencer-backed synths (mt32-builtin / gm)
+    // only; OPL plays raw game-MDI, not the sequencer.  Returns 2*frames s16.
+    std::vector<std::int16_t> render_offline(
+        const std::vector<std::uint8_t>& midi_stream, int frames);
 
 private:
     std::uint32_t device_ = 0;
@@ -132,13 +160,10 @@ private:
     // Authentic AdLib music driver (vendored Nuked-OPL3; null unless the
     // OPL music path is the active backend).
     std::unique_ptr<OplMusicPlayer> opl_music_;
-    // libmt32emu handles (dlopen'd; null when absent or no ROMs).
-    void* mt32_lib_ = nullptr;
-    void* mt32_ = nullptr;
-    // libfluidsynth handles (dlopen'd; null when absent or no SoundFont).
-    void* fs_lib_ = nullptr;
-    void* fs_settings_ = nullptr;
-    void* fs_synth_ = nullptr;
+    // Active melodic synth (MT-32 or GM); null when neither loaded (OPL / host
+    // MIDI / no music).  Owns its dlopen handle + backend objects — see the
+    // PcmMidiSynth impls in audio.cpp.
+    std::unique_ptr<PcmMidiSynth> synth_;
     MidiSequencer seq_;
     // Host-MIDI music path (opt-in, --music-device mt32/host-midi).  When
     // active, music streams out a real MIDI OUT port on its own wall-clock
@@ -149,9 +174,6 @@ private:
     std::string music_backend_ = "none";
     bool midi_sfx_ = false;
     bool opl_sfx_ = false;   // sfx_backend == "opl": render AdLib FM via Nuked
-    struct PendingOff { int channel, note; std::int64_t at; };
-    std::vector<PendingOff> note_offs_;
-    std::int64_t sample_clock_ = 0;
     // Music mix gain (0..1).  Read lock-free by the audio callback, ramped
     // by fade_out_music() on the main thread; reset to 1 by play_music().
     std::atomic<float> music_gain_{1.0f};

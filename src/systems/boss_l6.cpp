@@ -87,7 +87,7 @@ void update_l6_boss_frame(BossPlayerState& p, L6BossState& boss,
     if (p.hit_counter == 0) check_slam_damage(boss, p);
     update_boss_player(p, in.left, in.right, in.jump, in.fire);
     update_boss_club(p);
-    p.x = std::max(10, std::min(p.x, 280));
+    p.x = clamp_boss_x(p.x, 10, 280);
     if (boss.health <= kBossWinThreshold) boss.win_flag = 1;
 }
 

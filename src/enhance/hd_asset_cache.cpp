@@ -2,6 +2,10 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "enhance/hd_asset_cache.hpp"
 
+#ifdef OLDUVAI_HAVE_ZLIB
+#include <zlib.h>
+#endif
+
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -64,6 +68,13 @@ std::vector<std::uint8_t> alpha_bleed(const std::vector<std::uint8_t>& src,
 // The key (hex) is the filename, so the file is content-addressed: a hit can
 // only ever reproduce the exact bytes an upscale would have made.
 constexpr char kMagic[4] = {'O', 'H', 'D', '1'};
+// Compressed variant.  A DISTINCT magic rather than a flag byte, so the
+// compatibility falls out of the existing "any malformation is a silent miss"
+// rule: an older build (or one built without zlib) fails the magic compare,
+// treats the entry as absent and simply re-bakes it.  The cache is derived
+// data, so a miss costs time, never correctness.  Future codecs take their own
+// magic (OHDZ = deflate; a zstd variant would be OHDS).
+constexpr char kMagicZ[4] = {'O', 'H', 'D', 'Z'};
 
 void put_le32(std::uint8_t* p, std::uint32_t v) {
     p[0] = static_cast<std::uint8_t>(v & 0xFF);
@@ -94,18 +105,40 @@ bool load_block(const std::filesystem::path& file, HdAsset& a) {
     std::uint8_t hdr[16];
     in.read(reinterpret_cast<char*>(hdr), sizeof(hdr));
     if (in.gcount() != static_cast<std::streamsize>(sizeof(hdr))) return false;
-    if (std::memcmp(hdr, kMagic, 4) != 0) return false;
+    const bool zipped = std::memcmp(hdr, kMagicZ, 4) == 0;
+    if (!zipped && std::memcmp(hdr, kMagic, 4) != 0) return false;
     const std::int32_t w = static_cast<std::int32_t>(get_le32(hdr + 4));
     const std::int32_t h = static_cast<std::int32_t>(get_le32(hdr + 8));
     const std::uint32_t len = get_le32(hdr + 12);
     if (w <= 0 || h <= 0) return false;
     const std::uint64_t expect =
         static_cast<std::uint64_t>(w) * static_cast<std::uint64_t>(h) * 4ull;
-    if (len != expect) return false;
-    std::vector<std::uint8_t> px(len);
-    in.read(reinterpret_cast<char*>(px.data()),
-            static_cast<std::streamsize>(len));
-    if (in.gcount() != static_cast<std::streamsize>(len)) return false;
+    std::vector<std::uint8_t> px;
+    if (zipped) {
+#ifdef OLDUVAI_HAVE_ZLIB
+        // len = COMPRESSED size; the uncompressed size is implied by w*h*4.
+        if (expect > 0xFFFFFFFFull) return false;
+        std::vector<std::uint8_t> comp(len);
+        in.read(reinterpret_cast<char*>(comp.data()),
+                static_cast<std::streamsize>(len));
+        if (in.gcount() != static_cast<std::streamsize>(len)) return false;
+        px.resize(static_cast<std::size_t>(expect));
+        uLongf out_len = static_cast<uLongf>(expect);
+        if (::uncompress(px.data(), &out_len, comp.data(),
+                         static_cast<uLong>(len)) != Z_OK ||
+            out_len != static_cast<uLongf>(expect)) {
+            return false;   // corrupt entry -> miss -> re-bake
+        }
+#else
+        return false;       // built without zlib: treat as absent, re-bake raw
+#endif
+    } else {
+        if (len != expect) return false;
+        px.resize(len);
+        in.read(reinterpret_cast<char*>(px.data()),
+                static_cast<std::streamsize>(len));
+        if (in.gcount() != static_cast<std::streamsize>(len)) return false;
+    }
     a.w = w;
     a.h = h;
     a.px = std::move(px);
@@ -124,14 +157,34 @@ bool store_block(const std::filesystem::path& file, const HdAsset& a) {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
         if (!out) return false;
         std::uint8_t hdr[16];
-        std::memcpy(hdr, kMagic, 4);
         put_le32(hdr + 4, static_cast<std::uint32_t>(a.w));
         put_le32(hdr + 8, static_cast<std::uint32_t>(a.h));
-        put_le32(hdr + 12, static_cast<std::uint32_t>(a.px.size()));
-        out.write(reinterpret_cast<const char*>(hdr), sizeof(hdr));
-        out.write(reinterpret_cast<const char*>(a.px.data()),
-                  static_cast<std::streamsize>(a.px.size()));
-        if (!out) return false;
+#ifdef OLDUVAI_HAVE_ZLIB
+        // The bake is upscaled PALETTE art: a 4x full screen holds ~17 distinct
+        // RGBA values in 4 MB, so deflate is ~40x here and the whole cache goes
+        // from hundreds of MB to ~10.  Level 6 rather than 9: measured within a
+        // few percent of 9 on this content for a fraction of the bake time.
+        uLongf cap = ::compressBound(static_cast<uLong>(a.px.size()));
+        std::vector<std::uint8_t> comp(cap);
+        if (::compress2(comp.data(), &cap, a.px.data(),
+                        static_cast<uLong>(a.px.size()), 6) == Z_OK &&
+            cap < a.px.size()) {
+            std::memcpy(hdr, kMagicZ, 4);
+            put_le32(hdr + 12, static_cast<std::uint32_t>(cap));
+            out.write(reinterpret_cast<const char*>(hdr), sizeof(hdr));
+            out.write(reinterpret_cast<const char*>(comp.data()),
+                      static_cast<std::streamsize>(cap));
+            if (!out) return false;
+        } else
+#endif
+        {   // no zlib, or compression did not help: store raw
+            std::memcpy(hdr, kMagic, 4);
+            put_le32(hdr + 12, static_cast<std::uint32_t>(a.px.size()));
+            out.write(reinterpret_cast<const char*>(hdr), sizeof(hdr));
+            out.write(reinterpret_cast<const char*>(a.px.data()),
+                      static_cast<std::streamsize>(a.px.size()));
+            if (!out) return false;
+        }
     }
     std::error_code ec;
     std::filesystem::rename(tmp, file, ec);
@@ -189,9 +242,9 @@ const HdAsset& HdAssetCache::get(const std::vector<std::uint8_t>& src, int w,
         // from the binary input mask — keeping it gives smooth silhouettes
         // (matches Python, which leaves the scaler's blended alpha untouched).
         // Overwriting it with nearest would re-introduce the blocky staircase.
-        const bool palette_preserving =
-            (profile == "mmpx" || profile == "retro" || profile == "native" ||
-             profile == "smooth" || profile == "eagle");
+        // Single source of truth for the per-scaler alpha treatment; see
+        // profile_preserves_palette() in upscale.hpp (audit A4).
+        const bool palette_preserving = profile_preserves_palette(profile);
         if (has_alpha && palette_preserving) {
             for (int y = 0; y < a.h; ++y)
                 for (int x = 0; x < a.w; ++x) {

@@ -44,6 +44,9 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
     auto& play_shot_frame = args.play_shot_frame;
     auto& viewer_frames = args.viewer_frames;
     auto& viewer_shot = args.viewer_shot;
+    auto& render_audio = args.render_audio;
+    auto& render_audio_out = args.render_audio_out;
+    auto& render_audio_secs = args.render_audio_secs;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         bool known = true;
@@ -184,6 +187,12 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
             viewer_frames = std::atoi(argv[++i]);
         } else if (arg == "--viewer-shot" && i + 1 < argc) {
             viewer_shot = argv[++i];
+        } else if (arg == "--render-audio" && i + 1 < argc) {
+            render_audio = argv[++i];
+        } else if (arg == "--render-audio-out" && i + 1 < argc) {
+            render_audio_out = argv[++i];
+        } else if (arg == "--render-audio-secs" && i + 1 < argc) {
+            render_audio_secs = std::atof(argv[++i]);
         } else {
             known = false;
         }

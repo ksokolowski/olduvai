@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# clang-tidy configuration for olduvai.
+#
+# Deliberately CONSERVATIVE.  This is a trace-validated engine: behaviour is
+# pinned by a zero-tolerance per-frame oracle diff, and docs/internal/
+# OOP_SOLID_AUDIT.md Section B is an explicit DO-NOT-abstract list.  So the
+# check set is chosen for SIGNAL (real defects + honest size metrics), not for
+# style churn:
+#
+#   enabled   bugprone / performance / clang-analyzer  — real defects
+#             misc-*                                   — dead code, header hygiene
+#             readability-function-size                — the size KPIs
+#             readability-function-cognitive-complexity
+#             a few readability-* that catch genuine mistakes
+#
+#   NOT enabled, on purpose:
+#     modernize-*            churn across a stable C++17 tree; would rewrite
+#                            thousands of lines the oracle diff must re-prove
+#     cppcoreguidelines-*    opinionated; fights the deliberately data-oriented
+#                            core (free functions over plain structs is WHY the
+#                            oracle diff works)
+#     readability-identifier-naming  the naming is consistent already
+#     google-/fuchsia-/llvm-*        foreign house styles
+#     performance-enum-size  fires on ~12 enums; changing an enum's base type
+#                            on a trace-validated engine risks struct layout and
+#                            save/serialisation for no measurable gain
+#
+# readability-function-size is used as a MEASUREMENT, not a hard rule: the
+# thresholds are set to flag genuine monsters (run_platform_level,
+# run_boss_level) and not ordinary code.  NestingThreshold and VariableThreshold
+# are the two that actually predict "hard to read" — the live-local count is
+# what makes a function hard to extract from.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  performance-*,
+  -performance-enum-size,
+  clang-analyzer-*,
+  misc-definitions-in-headers,
+  misc-redundant-expression,
+  misc-unused-alias-decls,
+  misc-unused-using-decls,
+  readability-function-size,
+  readability-function-cognitive-complexity,
+  readability-misleading-indentation,
+  readability-redundant-control-flow,
+  readability-redundant-string-init,
+  readability-inconsistent-declaration-parameter-name
+
+CheckOptions:
+  # Flag only genuine monsters — ordinary 100-line functions are fine here.
+  readability-function-size.LineThreshold: 200
+  readability-function-size.StatementThreshold: 200
+  readability-function-size.BranchThreshold: 40
+  readability-function-size.ParameterThreshold: 8
+  # The two that actually track readability:
+  readability-function-size.NestingThreshold: 6
+  readability-function-size.VariableThreshold: 40
+  readability-function-cognitive-complexity.Threshold: 50
+  readability-function-cognitive-complexity.IgnoreMacros: true
+
+# Only our own sources; vendored third_party (Nuked-OPL3, doctest) is exempt.
+HeaderFilterRegex: '^.*/src/(formats|prepare|core|systems|enhance|presentation|app|trace)/.*\.hpp$'
+WarningsAsErrors: ''

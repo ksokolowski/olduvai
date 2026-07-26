@@ -23,6 +23,8 @@ bool is_boss_level(int internal_level) {
     return internal_level == 2 || internal_level == 4 || internal_level == 6;
 }
 
+}  // namespace
+
 // Peek set: all four surface levels — 1 (jungle), 5 (icy), 3 (dark woods),
 // 7 (volcanic).  Peek composes the ACTUAL horizontally-adjacent screens into
 // the margins (compose_surface_screen_static), which works for tile-based
@@ -35,8 +37,6 @@ bool level_supports_peek(int internal_level) {
     return internal_level == 1 || internal_level == 5 ||
            internal_level == 3 || internal_level == 7;
 }
-
-}  // namespace
 
 PeekNeighbors widescreen_neighbors(int internal_level, int current_screen,
                                    bool secret_flag, int surface_screen_count) {

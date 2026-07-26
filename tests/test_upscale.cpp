@@ -2,10 +2,15 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include <doctest/doctest.h>
 
+#include "enhance/hd_asset_cache.hpp"
 #include "enhance/upscale.hpp"
 
+#include <filesystem>
+
+#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -69,6 +74,38 @@ std::vector<std::uint8_t> nearest(const std::vector<std::uint8_t>& px,
 TEST_CASE("upscale_rgba: scale 1 is identity") {
     const auto px = test_card();
     CHECK(olduvai::enhance::upscale_rgba(px, 4, 4, 1, "omniscale") == px);
+}
+
+TEST_CASE("profile_preserves_palette: pins per-scaler alpha treatment (A4)") {
+    using olduvai::enhance::profile_preserves_palette;
+    using olduvai::enhance::supported_hd_profiles;
+    // Whole-pixel / nearest scalers — alpha mask re-stamped nearest.
+    for (const char* p : {"native", "retro", "smooth", "eagle", "mmpx"})
+        CHECK(profile_preserves_palette(p));
+    // Blending scalers — anti-aliased alpha edge kept.
+    for (const char* p : {"omniscale", "xbr"})
+        CHECK_FALSE(profile_preserves_palette(p));
+    // Unknown => false (safe default).
+    CHECK_FALSE(profile_preserves_palette("bogus"));
+    CHECK_FALSE(profile_preserves_palette(""));
+
+    // Maintenance gate: every supported profile must be consciously classified
+    // by exactly one list above, and the predicate must agree.  A newly-added
+    // scaler left unlisted trips this — turning A4's silent partial-alpha halo
+    // into a gate failure instead of an eyeball catch.
+    const std::vector<std::string> preserving = {"native", "retro", "smooth",
+                                                 "eagle", "mmpx"};
+    const std::vector<std::string> blending = {"omniscale", "xbr"};
+    for (const auto& p : supported_hd_profiles()) {
+        const bool in_preserving =
+            std::find(preserving.begin(), preserving.end(), p) !=
+            preserving.end();
+        const bool in_blending =
+            std::find(blending.begin(), blending.end(), p) != blending.end();
+        INFO("supported HD profile not classified in the A4 test: " << p);
+        CHECK((in_preserving != in_blending));  // exactly one
+        CHECK(profile_preserves_palette(p) == in_preserving);
+    }
 }
 
 TEST_CASE("upscale_rgba: omniscale x4 sizes and smooths") {
@@ -203,4 +240,61 @@ TEST_CASE("upscale_rgba: alpha preserved by palette scalers on transparent borde
         CHECK(up[3] == 0);                       // (0,0) alpha
         CHECK(up[(7 * 8 + 7) * 4 + 3] == 0);     // (7,7) alpha
     }
+}
+
+// ── HD disk-cache round trip ────────────────────────────────────────────────
+// The bake is stored DEFLATED when built with zlib (magic OHDZ) and raw
+// otherwise (OHD1).  Compression must be exactly lossless: the cache feeds
+// rendering, so a single altered byte is a visual defect that no gameplay
+// trace would catch.  Bake with one cache instance, read back with a FRESH one
+// pointed at the same directory, and compare the buffers byte-for-byte — that
+// isolates the codec (identical input, identical profile), unlike comparing
+// rendered frames, which vary run-to-run for unrelated reasons.
+TEST_CASE("HD disk cache round-trips the bake byte-for-byte") {
+    namespace fs = std::filesystem;
+    const fs::path dir =
+        fs::temp_directory_path() / "olduvai_hdcache_roundtrip_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+
+    // Synthetic 16-colour source (content-policy clean: no game bytes).
+    const int w = 64, h = 40;
+    std::vector<std::uint8_t> src(static_cast<std::size_t>(w) * h * 4);
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const std::size_t o = (static_cast<std::size_t>(y) * w + x) * 4;
+            const std::uint8_t v =
+                static_cast<std::uint8_t>(((x / 4) ^ (y / 4)) & 0x0F);
+            src[o] = static_cast<std::uint8_t>(v * 17);
+            src[o + 1] = static_cast<std::uint8_t>(255 - v * 17);
+            src[o + 2] = static_cast<std::uint8_t>((v * 37) & 0xFF);
+            src[o + 3] = 255;
+        }
+    }
+
+    std::vector<std::uint8_t> baked;
+    int bw = 0, bh = 0;
+    {
+        olduvai::enhance::HdAssetCache c;
+        c.enable_disk(dir);
+        const auto& a = c.get(src, w, h, 2, "mmpx");
+        baked = a.px;
+        bw = a.w;
+        bh = a.h;
+    }
+    REQUIRE(bw > 0);
+    REQUIRE(bh > 0);
+    REQUIRE(baked.size() == static_cast<std::size_t>(bw) * bh * 4);
+
+    // A FRESH instance: the in-memory map is empty, so this must come off disk.
+    olduvai::enhance::HdAssetCache c2;
+    c2.enable_disk(dir);
+    const auto& b = c2.get(src, w, h, 2, "mmpx");
+    CHECK(b.w == bw);
+    CHECK(b.h == bh);
+    REQUIRE(b.px.size() == baked.size());
+    CHECK(b.px == baked);            // lossless, byte-for-byte
+
+    fs::remove_all(dir, ec);
 }

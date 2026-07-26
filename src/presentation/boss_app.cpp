@@ -35,9 +35,11 @@
 #include "presentation/hud_render.hpp"
 #include "presentation/replay.hpp"
 #include "presentation/screens.hpp"
+#include "presentation/parse_util.hpp"
 #include "presentation/settings_flow.hpp"
 #include "presentation/settings_preview.hpp"
 #include "presentation/settings_seed.hpp"
+#include "presentation/staging_bindings.hpp"
 #include "presentation/smooth_present.hpp"
 #include "presentation/boss_widescreen.hpp"
 #include "presentation/widescreen.hpp"
@@ -365,15 +367,17 @@ BossRunResult run_boss_level(const std::filesystem::path& game_dir,
     // fullscreen single 320×200 images, so whole-frame upscale is fine
     // (per-asset and whole-frame upscale are identical for a single
     // opaque 320×200 image, and these screens are not arena fight frames).
+    // ESC is inert on every screen lpresent drives — the pre-fight loading
+    // card, the post-win fade, and the score tally.  None has a menu wired, and
+    // ESC there used to abort the run / drop a WON fight to game-over (the class
+    // of bug fixed across the ending).  Only a real window-close (SDL_QUIT)
+    // stops.  (The tally also consumes ESC as a skip inside show_score_tally
+    // before this present ever runs.)
     auto lpresent = [&](const FrameBuffer& f) -> bool {
         SDL_Event lev;
         while (SDL_PollEvent(&lev)) {
             if (handle_fullscreen_toggle(lev, win)) continue;
-            if (lev.type == SDL_QUIT ||
-                (lev.type == SDL_KEYDOWN &&
-                 lev.key.keysym.sym == SDLK_ESCAPE)) {
-                return false;
-            }
+            if (lev.type == SDL_QUIT) return false;
         }
         if (hd) {
             // Loading/tally screens are always 320×200 — upscale whole-frame.
@@ -407,9 +411,8 @@ BossRunResult run_boss_level(const std::filesystem::path& game_dir,
                 SDL_Event lev;
                 while (SDL_PollEvent(&lev)) {
                     if (handle_fullscreen_toggle(lev, win)) continue;
-                    if (lev.type == SDL_QUIT ||
-                        (lev.type == SDL_KEYDOWN &&
-                         lev.key.keysym.sym == SDLK_ESCAPE))
+                    // ESC inert on the loading card (no menu); window-close only.
+                    if (lev.type == SDL_QUIT)
                         return false;
                 }
                 SDL_UpdateTexture(tex, nullptr, hd_px.data(), w * 4);
@@ -492,45 +495,15 @@ BossRunResult run_boss_level(const std::filesystem::path& game_dir,
     // entry, so visible effect waits for the next fight).  Reinit-class
     // keys (hd_profile / render_scale / music_device / sfx_backend) and
     // aspect are STAGED + persist-only: boss_app has no reinit machinery
-    // (deliberately out of scope) — they apply after the fight (stderr note).
+    // (deliberately out of scope), so they are saved to play.json and take
+    // effect on the NEXT launch — NOT after the fight (the running session
+    // keeps its in-memory settings; there is no post-fight reinit path).
     // Save/Load stay out: mid-boss-fight saves are not a supported concept.
-    using BossPersistFn =
-        std::function<void(const std::string&, const std::string&)>;
-    struct BossPauseBindings : MenuBindings {
-        SdlAudio* audio = nullptr;
-        SDL_Window* win = nullptr;
-        bool enhanced = false;
-        const BossPersistFn* persist = nullptr;  // injected app-level config write
-        std::map<std::string, std::string> mem;
-        SettingsSession* session = nullptr;      // set after construction
-        DisplaySettings cur;                     // live baseline at fight entry
-        std::string get(const std::string& k) override {
-            const auto it = mem.find(k);
-            return it == mem.end() ? std::string{} : it->second;
-        }
-        void save(const std::string& key, const std::string& v) {
-            if (persist && *persist) (*persist)(key, v);
-        }
-        void set(const std::string& k, const std::string& v) override {
-            if (k == "preset") {
-                // One-click Classic/HD preset: fan the bundle out through
-                // this same set() so every key rides the normal machinery.
-                mem[k] = v;
-                apply_preset(*this, v);
-                return;
-            }
-            // Everything else — enhance.* included — stages provisionally,
-            // exactly like the surface pause (persist happens on Apply).
-            const std::string old_val = mem.count(k) ? mem[k] : std::string{};
-            mem[k] = v;
-            // Live preview for the cheap keys (surface-pause parity;
-            // shared: settings_preview.hpp).
-            preview_cheap_key(k, v, audio, win, enhanced);
-            // Everything else (hd_profile / render_scale / music_device /
-            // sfx_backend / aspect) has NO live path in the boss: staged only.
-            if (session) session->stage(k, k, old_val, v);
-        }
-    } boss_bind;
+    // Boss Pause: staged-only.  No live cheat.god / autofire, and no live
+    // hd_profile / render_scale / music_device / sfx_backend / aspect path.
+    // The default StagingBindings hooks (all no-ops) express exactly that; the
+    // cheat.* skip it inherits is inert here (no cheats submenu on this menu).
+    struct BossPauseBindings : StagingBindings {} boss_bind;
     MenuModel boss_pause_model = boss_menu_model.value_or(MenuModel{});
     bool pause_open = false;
     // Batched staging: Options edits go through the session → confirm dialog
@@ -566,8 +539,18 @@ BossRunResult run_boss_level(const std::filesystem::path& game_dir,
     Menu boss_pause_menu(boss_pause_model, boss_bind, boss_pause_actions);
     // SettingsFlow (OL-B6): the SAME controller the surface pause and main
     // menu use (OL-B1) — subtree-exit detection, confirm-dialog keys,
-    // apply/discard resolution.  Boss-specific effects live in these hooks;
-    // there is NO reinit path here — reinit-class keys persist with a note.
+    // apply/discard resolution.  Boss-specific effects live in these hooks.
+    // The boss cannot reinit mid-fight, so reinit-class display/audio changes
+    // (+ aspect) are captured into `pending`, seeded from the fight-entry
+    // settings; an Applied change publishes it to res.reinit and run_game
+    // applies it + rebuilds the pipeline when the fight ends.
+    BossReinit pending;
+    pending.enhanced     = enhance.enhanced;
+    pending.render_scale = enhance.render_scale;
+    pending.hd_profile   = enhance.hd_profile;
+    pending.music_device = enhance.music_device;
+    pending.sfx_backend  = enhance.sfx_backend;
+    pending.aspect       = enhance.aspect;
     SettingsFlow::Hooks boss_hooks;
     boss_hooks.persist = [&](const std::string& k, const std::string& v) {
         // enhance.* keys persist as ONE "enhance" config list (plus the
@@ -582,22 +565,45 @@ BossRunResult run_boss_level(const std::filesystem::path& game_dir,
         boss_bind.save(k, v);
     };
     boss_hooks.classify = [&](const std::string& k, const std::string& v) {
+        // The boss has no live display/audio path, so every pipeline key is
+        // reinit-class FOR IT — it applies when the fight ends, not live (even
+        // a same-scale hd_profile swap or aspect, which are Live on the
+        // surface).  Drives the confirm-dialog note; capture is in apply_change.
+        if (k == "hd_profile" || k == "render_scale" || k == "enhanced" ||
+            k == "music_device" || k == "sfx_backend" || k == "aspect")
+            return ApplyTier::Reinit;
         return classify_change(k, v, boss_bind.cur);
     };
     boss_hooks.apply_change = [&](const StagedChange& ch, ApplyTier tier) {
-        // Volumes/fullscreen already previewed live.  Anything the boss
-        // cannot honor in place (display/audio pipeline + aspect) is
-        // persist-only in v1 — it applies after the fight.
+        // Volume/fullscreen already previewed live; enhance.* toggles persist
+        // for the next fight.  Every display/audio PIPELINE key (whatever its
+        // surface tier) is captured into `pending` and published to res.reinit
+        // for run_game to apply when the fight ends.  run_game rebuilds the
+        // window only if the HD scale actually changes; a same-scale hd_profile
+        // swap just updates rt.  (In classic mode enhanced stays off, so the
+        // HD scale is 1 and applying these is inert — still persisted.)
         (void)tier;
-        const bool deferred =
-            ch.key == "hd_profile" || ch.key == "render_scale" ||
-            ch.key == "music_device" || ch.key == "sfx_backend" ||
-            ch.key == "aspect";
-        if (deferred)
+        bool deferred = true;
+        if (ch.key == "enhanced")
+            pending.enhanced = ch.new_value == "true" || ch.new_value == "1";
+        else if (ch.key == "render_scale")
+            pending.render_scale = parse_i(ch.new_value, pending.render_scale);
+        else if (ch.key == "hd_profile")
+            pending.hd_profile = ch.new_value;
+        else if (ch.key == "music_device")
+            pending.music_device = ch.new_value;
+        else if (ch.key == "sfx_backend")
+            pending.sfx_backend = ch.new_value;
+        else if (ch.key == "aspect")
+            pending.aspect = ch.new_value;
+        else
+            deferred = false;   // volume/fullscreen live; enhance.* persist-only
+        if (deferred) {
+            res.reinit = pending;   // apply == commit; publish for run_game
             std::fprintf(stderr,
-                         "boss options: %s=%s saved — applies after the "
-                         "fight\n",
+                         "boss options: %s=%s — applies when the fight ends\n",
                          ch.key.c_str(), ch.new_value.c_str());
+        }
     };
     boss_hooks.revert_change = [&](const StagedChange& ch) {
         boss_bind.mem[ch.key] = ch.old_value;
@@ -609,7 +615,11 @@ BossRunResult run_boss_level(const std::filesystem::path& game_dir,
     };
     boss_hooks.reopen_options = [&]() { boss_pause_menu.open("options"); };
     boss_hooks.confirm_note = [](bool any_reinit, bool any_persist) {
-        if (any_reinit) return std::string("Applies after the fight.");
+        // Reinit-class display/audio changes now apply when the fight ends
+        // (run_game rebuilds the pipeline on return).  Persist-only changes
+        // (e.g. enhance.* feature toggles, latched at fight entry) still wait
+        // for the next launch.
+        if (any_reinit) return std::string("Applies when the fight ends.");
         if (any_persist)
             return std::string("Saved - takes effect on next launch.");
         return std::string{};
@@ -619,7 +629,6 @@ BossRunResult run_boss_level(const std::filesystem::path& game_dir,
     // Close-without-apply detection (surface parity): pause closed via
     // Resume/ESC while the session is dirty = implicit Discard.
     bool was_pause_open = false;
-    SDL_Texture* pause_tex = nullptr;   // native 320x200 pause frame (lazy)
     const bool boss_menu_ok =
         boss_menu_model.has_value() &&
         boss_pause_model.screens.count("pause_boss") != 0;
@@ -1068,11 +1077,20 @@ BossRunResult run_boss_level(const std::filesystem::path& game_dir,
             boss_flow.track_screen(boss_pause_menu.current_screen());
         // Pause freeze: draw the frozen fight + menu, skip logic/frame++.
         // The fight fb is HD-SIZED in HD mode, but the menu layout is
-        // native-coordinate — render the frozen scene at native 320×200
-        // into a dedicated buffer/texture and pillarbox it, exactly like
-        // present_frame's non-wide fallback.  Native-res during pause is
-        // fine (the menu IS the focus); the HD frame returns on resume.
+        // native-coordinate — so compose the frozen scene at native 320×200
+        // (with the native menu slab) and then WHOLE-FRAME UPSCALE it into the
+        // SAME HD `tex` the fight uses, exactly like present_wide_native's
+        // native fallback.
+        //
+        // This block used to upload the native buffer into its own 320×200
+        // texture and let SDL stretch it.  SDL_HINT_RENDER_SCALE_QUALITY is "0"
+        // (window_util.cpp), so that is a NEAREST blow-up: opening the pause
+        // menu visibly dropped the arena to classic pixels while the menu above
+        // it stayed HD.  The old comment claimed this matched present_frame's
+        // fallback, but present_frame uploads into the HD `tex` — the two are
+        // not equivalent in HD, which was the bug.
         if (pause_open && running) {
+            rebuild_ws_if_resized();   // Alt+Enter taken WHILE paused
             FrameBuffer pf{320, 200};
             RenderTarget prt{pf.px.data(), 320, 200, 1, nullptr, nullptr};
             if (internal_level == 2) render_l2_frame(prt, assets, player, l2);
@@ -1088,32 +1106,101 @@ BossRunResult run_boss_level(const std::filesystem::path& game_dir,
             const bool menu_use_vector =
                 hd && hd_text.ok() &&
                 (enhance.flags.hd_text || enhance.flags.hud_overlay);
+            // Widescreen: rebuild the frozen arena WIDE exactly the way the
+            // live fight does (build_wide_up) — mirror the CLEAN static
+            // background into the margins (reflect_pure + the 0.10 edge
+            // gradient), then draw the frozen fight SPRITES ONCE at
+            // origin_x = ws_M so edge-crossing sprites overflow into the
+            // margins naturally.
+            //
+            // Mirroring the already-composed fight frame instead would reflect
+            // the LIVE SPRITES into the bezel — the boss tail and the ringside
+            // dinos appearing as ghosts in the margins.  reflect_pure mirrors
+            // whatever is at the frame's edge, so the source must be the
+            // sprite-free background.  Same reason the menu is drawn after the
+            // wrap, not before.
+            FrameBuffer wide_pf;
+            bool wide_pause = hd && ws_active && wtex != nullptr && ws_w > 320;
+            if (wide_pause) {
+                FrameBuffer cbg{320, 200};
+                std::copy(assets.bg.begin(), assets.bg.end(), cbg.px.begin());
+                std::vector<std::uint8_t> wbuf;
+                compose_widescreen(wbuf, ws_M, cbg, /*left=*/nullptr,
+                                   /*right=*/nullptr, /*hud_rows=*/0,
+                                   /*backdrop=*/nullptr, /*reflect_pure=*/true,
+                                   /*margin_edge_brightness=*/0.10f);
+                wide_pf = FrameBuffer{ws_w, 200};
+                if (wbuf.size() == wide_pf.px.size()) {
+                    wide_pf.px = std::move(wbuf);
+                    RenderTarget wrt{wide_pf.px.data(), ws_w, 200, 1,
+                                     nullptr, nullptr};
+                    wrt.origin_x = ws_M;
+                    wrt.advance_state = false;   // purely visual
+                    if (internal_level == 2)
+                        render_l2_sprites(wrt, assets, player, l2);
+                    else if (internal_level == 4)
+                        render_l4_sprites(wrt, assets, player, l4);
+                    else
+                        render_l6_sprites(wrt, assets, player, l6);
+                } else {
+                    wide_pause = false;   // give up → pillarbox fallback
+                }
+            }
+            FrameBuffer& menu_fb = wide_pause ? wide_pf : pf;
             if (boss_confirm.is_open()) {
                 // Confirm dialog replaces the menu while open (§8.6 step 5)
                 // — same draw_confirm reuse as game_app's surface pause.
-                draw_confirm(pf, boss_confirm, assets.charset, /*dim=*/true,
+                draw_confirm(menu_fb, boss_confirm, assets.charset, /*dim=*/true,
                              /*draw_text=*/!menu_use_vector);
             } else {
-                draw_menu(pf, boss_pause_menu, assets.charset, /*dim=*/true,
+                draw_menu(menu_fb, boss_pause_menu, assets.charset, /*dim=*/true,
                           /*draw_text=*/!menu_use_vector, bone,
                           bone != nullptr ? &assets.bone_palette : nullptr);
             }
-            if (pause_tex == nullptr)
-                pause_tex = create_stream_tex(ren, 320, 200);
-            if (pause_tex != nullptr) {
-                SDL_UpdateTexture(pause_tex, nullptr, pf.px.data(), 320 * 4);
-                SDL_RenderClear(ren);
-                if (ws_active) {
-                    const SDL_Rect dst{ws_M * hd_scale, 0, 320 * hd_scale,
-                                       200 * hd_scale};
-                    SDL_RenderCopy(ren, pause_tex, nullptr, &dst);
-                } else {
-                    SDL_RenderCopy(ren, pause_tex, nullptr, nullptr);
-                }
+            if (wide_pause) {
+                const auto up = enhance::upscale_rgba(
+                    menu_fb.px, ws_w, 200, hd_scale, enhance.hd_profile);
+                SDL_UpdateTexture(wtex, nullptr, up.data(),
+                                  ws_w * hd_scale * 4);
+            } else if (hd) {
+                // Whole-frame HD upscale of the native pause compose, into the
+                // fight's HD texture (present_wide_native's native fallback).
+                const auto up = enhance::upscale_rgba(pf.px, 320, 200, hd_scale,
+                                                      enhance.hd_profile);
+                SDL_UpdateTexture(tex, nullptr, up.data(), 320 * hd_scale * 4);
+            } else {
+                SDL_UpdateTexture(tex, nullptr, pf.px.data(), 320 * 4);
+            }
+            // The renderer is shared with the shell, so the draw colour is
+            // whatever the last present set it to — pin it before the clear or
+            // the pillarbox bars inherit a stale colour.
+            SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+            SDL_RenderClear(ren);
+            if (wide_pause) {
+                // Already the full wide canvas — no bezel, no pillarbox.
+                SDL_RenderCopy(ren, wtex, nullptr, nullptr);
+            } else if (ws_active) {
+                const SDL_Rect dst{ws_M * hd_scale, 0, 320 * hd_scale,
+                                   200 * hd_scale};
+                SDL_RenderCopy(ren, tex, nullptr, &dst);
+            } else {
+                SDL_RenderCopy(ren, tex, nullptr, nullptr);
             }
             if (menu_use_vector) {
                 int ow = 0, oh = 0;
                 if (text_overlay.begin(ren, hd_text, ow, oh)) {
+                    // Boss HUD in the SAME overlay pass, BEFORE the menu (a
+                    // second begin/flush would not composite, so it cannot use
+                    // draw_boss_hud_overlay_wide, which opens its own).  Every
+                    // LIVE present overpaints the wide top band with the HUD;
+                    // without it the paused frame shows the mirrored arena
+                    // where the health bar and lives belong — and the enhanced
+                    // boss bg has its HUD strip erased (make_clean_boss_bg), so
+                    // that band is arena content, not a HUD.
+                    draw_boss_hud_into(text_overlay.buffer(), ow, oh,
+                                       /*draw_lives=*/true,
+                                       /*cx_native=*/ws_active ? ws_M : 0,
+                                       /*total_native_w=*/ws_active ? ws_w : 320);
                     // Widescreen: the pause frame is PILLARBOXED at ws_M (the
                     // dst rect above) — pass that frame rect so the glyphs
                     // land on the slab instead of stretching across the bars.
@@ -1530,6 +1617,10 @@ BossRunResult run_boss_level(const std::filesystem::path& game_dir,
     //   L6 Giant    254f:0620 — Level_EndScreen(6, 500)
     if (res.survived && !res.quit && max_frames <= 0 &&
         (shot.empty() || std::getenv("OLDUVAI_REAL_SHOT") != nullptr)) {
+        // The fight is WON: ESC is inert throughout the ending (victory + fade
+        // + tally have no menu) — it used to jump straight to THE END.  The
+        // victory loops below poll SDL_QUIT only; the fade + tally go through
+        // lpresent / show_score_tally, which are ESC-inert on their own.
         if (internal_level == 2) {
             // 18-frame flash; the EXE per-frame hold comes from the victory
             // lcall(15) routed through the delay shim at 1847:168f, which does
@@ -1556,9 +1647,9 @@ BossRunResult run_boss_level(const std::filesystem::path& game_dir,
                 SDL_Event ev;
                 while (SDL_PollEvent(&ev)) {
                     if (handle_fullscreen_toggle(ev, win)) continue;
-                    if (ev.type == SDL_QUIT ||
-                        (ev.type == SDL_KEYDOWN &&
-                         ev.key.keysym.sym == SDLK_ESCAPE)) {
+                    // Won already — ESC is inert here (no game-over); only a
+                    // window-close stops the victory flash.
+                    if (ev.type == SDL_QUIT) {
                         res.quit = true;
                     }
                 }
@@ -1696,9 +1787,9 @@ BossRunResult run_boss_level(const std::filesystem::path& game_dir,
                 SDL_Event ev;
                 while (SDL_PollEvent(&ev)) {
                     if (handle_fullscreen_toggle(ev, win)) continue;
-                    if (ev.type == SDL_QUIT ||
-                        (ev.type == SDL_KEYDOWN &&
-                         ev.key.keysym.sym == SDLK_ESCAPE)) {
+                    // Won already — ESC is inert here (no game-over); only a
+                    // window-close stops the victory ride-off.
+                    if (ev.type == SDL_QUIT) {
                         res.quit = true;
                     }
                 }
@@ -1906,9 +1997,9 @@ BossRunResult run_boss_level(const std::filesystem::path& game_dir,
                         SDL_Event ev;
                         while (SDL_PollEvent(&ev)) {
                             if (handle_fullscreen_toggle(ev, win)) continue;
-                            if (ev.type == SDL_QUIT ||
-                                (ev.type == SDL_KEYDOWN &&
-                                 ev.key.keysym.sym == SDLK_ESCAPE))
+                            // Won already — ESC is inert; only a window-close
+                            // stops the score tally.
+                            if (ev.type == SDL_QUIT)
                                 return false;
                         }
                         SDL_UpdateTexture(tex, nullptr, hd_px.data(), w * 4);
@@ -1940,7 +2031,6 @@ BossRunResult run_boss_level(const std::filesystem::path& game_dir,
     // ── End victory block ────────────────────────────────────────────────────
 
     hd_cache.clear();
-    if (pause_tex != nullptr) SDL_DestroyTexture(pause_tex);
     SDL_DestroyTexture(tex);
     if (wtex != nullptr) SDL_DestroyTexture(wtex);
     return res;

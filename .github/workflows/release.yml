@@ -23,6 +23,18 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq cmake g++ make libsdl2-dev libasound2-dev \
                                       libfluidsynth3 imagemagick file
+      - name: Build libmt32emu (MT-32 synth — not packaged in Ubuntu, so from source)
+        env:
+          MUNT_TAG: libmt32emu_2_8_3   # pin: bump tag deliberately (LGPL src pointer)
+        run: |
+          git clone --depth 1 --branch "$MUNT_TAG" https://github.com/munt/munt /tmp/munt
+          cmake -S /tmp/munt/mt32emu -B /tmp/mt32emu-build \
+                -DCMAKE_BUILD_TYPE=Release -Dlibmt32emu_SHARED=ON \
+                -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build /tmp/mt32emu-build -j"$(nproc)"
+          sudo cmake --install /tmp/mt32emu-build
+          sudo ldconfig
+          ldconfig -p | grep 'libmt32emu\.so\.2'   # fail loudly if it didn't land
       - name: Configure
         run: cmake --preset release
       - name: Build
@@ -32,6 +44,7 @@ jobs:
       - name: Package AppImage
         env:
           OLDUVAI_REQUIRE_FLUIDSYNTH: "1"   # release must bundle GM music
+          OLDUVAI_REQUIRE_MT32EMU: "1"      # release must bundle MT-32 (built above)
         run: |
           bash packaging/build_appimage_linux.sh
           ver=$(sed -n 's/^ *VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt | head -1)

@@ -89,25 +89,58 @@ PauseService::FreezeResult PauseService::service_freeze(const FreezeDeps& d) {
     FrameBuffer pf{320, 200};
     // Backdrop = the frozen game scene, composed at NATIVE 320×200 (the
     // classic overload, so it works regardless of --hd-profile), then
-    // dimmed behind the menu slab.  State is frozen, so re-composing each
-    // pause frame is idempotent.
-    compose_frame(pf, d.g.state, d.g.render, /*draw_player=*/true);
+    // dimmed behind the menu slab.
+    //
+    // advance_state=false: this compose is PURELY VISUAL.  The caller's pause
+    // branch `continue`s before run_frame AND before the authoritative per-tick
+    // fb compose, so an advancing compose here becomes the ONLY advance of a
+    // supposedly frozen frame — draining player.club_flag once per rendered
+    // pause frame (hold pause mid-swing and the club vanished).  The compose is
+    // idempotent only with the mutations suppressed.
+    {
+        RenderTarget prt{pf.px.data(), pf.w, pf.h, 1, nullptr, nullptr};
+        prt.advance_state = false;
+        compose_frame(prt, d.g.state, d.g.render, /*draw_player=*/true);
+    }
+    // Widescreen: wrap the frozen centre with the SAME margin content the live
+    // frame carries (wrap_wide_for dispatches on present_path(), so peek
+    // screens get real neighbour terrain and the self-fill screens get their
+    // extension, while caves/secrets keep their honest bezel).  Gated on
+    // present_path(), not active(), so the paused frame is never WIDER than the
+    // live frame it froze.  The menu is then drawn on the WIDE buffer:
+    // compute_menu_layout derives from fb.w/fb.h, so the dim covers the whole
+    // canvas and the slab centres on it.
+    FrameBuffer wide_pf;
+    const bool wide = d.wsp.present_path() && d.wsp.native_w() > 320;
+    if (wide) {
+        std::vector<std::uint8_t> wbuf;
+        d.wsp.wrap_wide_for(pf, /*is_present=*/true, wbuf);
+        wide_pf = FrameBuffer{d.wsp.native_w(), 200};
+        if (wbuf.size() == wide_pf.px.size()) wide_pf.px = std::move(wbuf);
+    }
+    FrameBuffer& menu_fb = wide ? wide_pf : pf;
     if (confirm_.is_open()) {
         // Confirm dialog replaces the menu while open (§8.6 step 5).
-        draw_confirm(pf, confirm_, d.g.charset, /*dim=*/true,
+        draw_confirm(menu_fb, confirm_, d.g.charset, /*dim=*/true,
                      /*draw_text=*/!d.use_hd_text);
     } else {
         // In HD the glyphs are drawn crisply by the vector overlay
         // (draw_menu_vector in upload_and_show); here draw the slab +
         // accent only.  In classic, draw the bitmap glyphs too.
-        draw_menu(pf, menu_, d.g.charset, /*dim=*/true,
+        draw_menu(menu_fb, menu_, d.g.charset, /*dim=*/true,
                   /*draw_text=*/!d.use_hd_text,   // bitmap unless enhanced
                   d.g.render.entity_sprites.size() > 33
                       ? &d.g.render.entity_sprites[33]
                       : nullptr,    // blank score-bone pointer …
                   &d.g.render.palette);   // … in the level's colours
     }
-    d.upload_and_show(pf, /*with_hud=*/false, /*do_present=*/true);
+    // with_hud=true: the pause branch skips the once-per-tick draw_hud_for_fb,
+    // so `pf` carries no HUD — without this the gauges/score vanished the
+    // instant the menu opened.  FramePresenter's HUD path is the PURE read one
+    // (compute_enhanced_hud_layout + draw_enhanced_hud_bars + the wide HUD
+    // text), NOT draw_hud, so it adds no second food-cap writeback or GET READY
+    // decrement.  Classic (non-HD) is unaffected: draw_hud_overlay requires hd.
+    d.upload_and_show(menu_fb, /*with_hud=*/true, /*do_present=*/true);
     if (std::getenv("OLDUVAI_PAUSE_SHOT")) {
         // Quit the whole program, not just this level's frame loop —
         // otherwise the sequencer advances to the next level and never

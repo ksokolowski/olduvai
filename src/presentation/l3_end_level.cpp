@@ -13,10 +13,26 @@
 #include <SDL.h>
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <system_error>
+#include <vector>
 
+#include "enhance/enhanced_hud.hpp"           // compute/draw_enhanced_hud_*
+#include "enhance/hd_text.hpp"                // enhance::HdText
+#include "enhance/upscale.hpp"                // upscale_rgba
+#include "presentation/bug_capture.hpp"       // bug_report_root
+#include "presentation/game_app.hpp"          // GameOptions
 #include "presentation/game_render.hpp"
+#include "presentation/image_out.hpp"         // save_rgba_image/save_surface_image
+#include "presentation/level_setup.hpp"       // Loaded, bind_screen
 #include "presentation/tile_patterns.hpp"
+#include "presentation/text_overlay.hpp"      // TextOverlay
+#include "presentation/widescreen_presenter.hpp"  // WidescreenPresenter
+#include "presentation/window_util.hpp"       // handle_fullscreen_toggle
+#include "systems/transitions.hpp"            // roll_l3_descent_smoke_jitter, clear_per_screen_state
 
 namespace olduvai::presentation {
 
@@ -248,14 +264,14 @@ bool run_l3_screen17_descent(
         const int y_offset_raw = frame / substeps;   // logical-frame index
         const int y_offset = std::min(y_offset_raw, final_offset);
 
-        // Drain SDL events — allow ESC abort.
+        // Drain SDL events (ESC is inert during the descent; window-close aborts).
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_QUIT) { state.game_over = true; return false; }
-            if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) {
-                state.game_over = true;
-                return false;
-            }
+            // ESC is inert during the descent cinematic (no menu wired here) —
+            // it used to silently abort the ENTIRE run to the title.  Only a
+            // real window-close (SDL_QUIT, above) stops it.
+            (void)0;
         }
 
         // Compose frame into fb.
@@ -339,10 +355,10 @@ bool run_l3_trunk_descent(
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_QUIT) { state.game_over = true; return false; }
-            if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) {
-                state.game_over = true;
-                return false;
-            }
+            // ESC is inert during the descent cinematic (no menu wired here) —
+            // it used to silently abort the ENTIRE run to the title.  Only a
+            // real window-close (SDL_QUIT, above) stops it.
+            (void)0;
         }
 
         fb = bg_static;
@@ -562,4 +578,381 @@ std::vector<prepare::TilePlacement> l3_descent_overlay_tiles(
                                                tiles.begin() + n);
 }
 
+
+void run_l3_trunk_descent_sequence(const DescentCtx& c) {
+    // Bind the live context (pointers → run_platform_level locals) to the names
+    // the block below uses, so the body is a VERBATIM move of the old inline
+    // `if (l3_trunk_descent) { ... }` transition branch (game_app.cpp).  The
+    // sequence composes each native descent frame into the widescreen margins,
+    // runs Phase 1 / the enhanced pan / Phase 2, and stamps the screen-18
+    // overlay — touching NO extra LCG/RNG state (the smoke jitter is rolled
+    // logic-side), so the cross-engine trace is byte-identical to the classic
+    // hard-swap when descent-pan is off.
+    WidescreenPresenter& wsp = *c.wsp;
+    SDL_Renderer* const ren = c.ren;
+    SDL_Window* const win = c.win;
+    enhance::HdText& hd_text = *c.hd_text;
+    TextOverlay& text_overlay = *c.text_overlay;
+    Loaded& g = *c.g;
+    const GameOptions& opts = *c.opts;
+    bool& running = *c.running;
+    int& l3_smoke_tail = *c.l3_smoke_tail;
+    const bool hd = c.hd;
+    const int hd_scale = c.hd_scale;
+    const bool use_hd_text = c.use_hd_text;
+    const Uint32 frame_ms = c.frame_ms;
+    const int prev_screen = c.prev_screen;
+    const int logical_w = c.logical_w;
+    const int logical_h = c.logical_h;
+    const int kL3SmokeTailTicks = c.l3_smoke_tail_ticks;
+    auto upload_and_show = [&](FrameBuffer& f, bool with_hud = true,
+                               bool do_present = true) {
+        c.upload_and_show(f, with_hud, do_present);
+    };
+    // ── Descent widescreen margins (#1) ──────────────────────
+    // The trunk-descent composes a NATIVE 320×200 frame per step
+    // and hands it to a present callback.  The default callback
+    // (upload_and_show) pillarboxes that native frame with pure-
+    // black bars under widescreen, so the margins VANISH for the
+    // whole animation.  Instead, composite each native frame into
+    // the bound screen's static wide background (backdrop + ground
+    // extended to the edge — the SAME no-neighbour fill the steady
+    // screen-18 view uses) so the bezel stays filled and the
+    // descent ends seamlessly into the widescreen surface.  Pure
+    // rendering: no LCG/state touched (the smoke jitter is rolled
+    // logic-side), so the rng-critical descent is unaffected.
+    // Rebuilt per phase because Phase 1 is bound to screen 17 and
+    // the pan + Phase 2 to screen 18.
+    std::vector<std::uint8_t> descent_wide;   // native wsp.native_w()×200
+    // Phase-1 (screen 17) and Phase-2 (screen 18) wide margins, kept
+    // so the camera pan can scroll BOTH (screen 17 up, screen 18 in
+    // from below) in lockstep with the centre — no margin pop.
+    std::vector<std::uint8_t> descent_m17, descent_m18;
+    const bool descent_ws =
+        wsp.active() && hd && hd_scale > 1 && wsp.wide_tex() != nullptr;
+    // The descent stages (Phase 1 / pan / Phase 2) render `substeps`
+    // sub-frames per 18 Hz logical step in enhanced mode (l3_end_
+    // level.cpp: substeps = enhanced ? 3 : 1) and rely on the CALLER
+    // pacing each sub-frame at frame_ms/substeps to keep the wall-
+    // clock duration constant.  Pacing every sub-frame at the full
+    // frame_ms ran the whole descent 3× too slow (the "pathetic"
+    // perf) and starved the pan's continuous interpolation.  Pace at
+    // the sub-frame budget so the pan glides at 54 Hz and the total
+    // duration matches the reference.
+    const Uint32 descent_step_ms =
+        frame_ms / static_cast<Uint32>(opts.enhance.descent_pan ? 3 : 1);
+    // F5 during the descent: the blocking descent loop never reaches
+    // the frame-service bug-capture, so capture the full WS composite
+    // here instead (standalone PNG — no g.state frame service).
+    int descent_shot_seq = 0;
+    bool descent_shot = false;
+    bool descent_prev_f5 = false;   // F5 rising-edge latch
+    auto build_descent_margins = [&]() {
+        if (!descent_ws) return;
+        // Build the descent margins EXACTLY like the steady view
+        // (get_static_wide_bg_hd): the SAME neighbour peeks
+        // (ws_left/ws_right for the bound screen), so the margins are
+        // identical to the steady screen before and after the descent
+        // — no pop-in/out at the boundaries.  Using REAL neighbours
+        // also kills the earlier bark strip: Phase-1's right margin is
+        // a peek of screen 18, not a no-neighbour MIRROR of screen
+        // 17's foreground tree column.  Only a genuine level-edge
+        // (screen 18's right) falls back to the layer extension.
+        wsp.compose_static_wide_bg(descent_wide);
+    };
+    auto present_ws_descent = [&](const FrameBuffer& f,
+                                  bool with_hud) -> bool {
+        const Uint32 t0 = SDL_GetTicks();
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (handle_fullscreen_toggle(ev, win)) continue;
+            if (ev.type == SDL_QUIT) return false;
+            // ESC is inert during the L3 trunk-descent cinematic (no
+            // menu here) — it used to silently abort the whole run
+            // to title.  Only a real window-close stops it.
+        }
+        // F5 is consumed by the descent function's OWN SDL_PollEvent
+        // loop (it runs before this present callback), so the keydown
+        // never reaches the drain above.  Read the key STATE directly
+        // (level-triggered, not queue-drained) with a rising-edge
+        // latch so one press = one capture.
+        {
+            const Uint8* ks = SDL_GetKeyboardState(nullptr);
+            const bool f5 = ks != nullptr && ks[SDL_SCANCODE_F5] != 0;
+            if (f5 && !descent_prev_f5) descent_shot = true;
+            descent_prev_f5 = f5;
+        }
+        const std::size_t need =
+            static_cast<std::size_t>(wsp.native_w()) * 200 * 4;
+        if (!descent_ws || descent_wide.size() != need) {
+            // Classic / non-widescreen: pillarbox via upload_and_show.
+            FrameBuffer copy = f;
+            upload_and_show(copy, with_hud);
+            const Uint32 el = SDL_GetTicks() - t0;
+            if (el < descent_step_ms) SDL_Delay(descent_step_ms - el);
+            return true;
+        }
+        // Composite the native descent frame into the static margins.
+        std::vector<std::uint8_t> wide = descent_wide;
+        for (int y = 0; y < 200; ++y)
+            std::memcpy(
+                &wide[(static_cast<std::size_t>(y) * wsp.native_w() +
+                       wsp.margin()) * 4],
+                &f.px[static_cast<std::size_t>(y) * 320 * 4],
+                320 * 4);
+        // Neighbour seam overhang into the centre: descent_wide's
+        // margins carry the straddler completion, but the descent
+        // frame `f` is composed natively (320) without the
+        // neighbour's tiles, so the memcpy above buried it —
+        // re-apply band-limited (shared helper; Phase-2/pan seam
+        // lists are empty, so those present calls no-op).
+        wsp.reapply_seam_bands(wide);
+        enhance::EnhancedHudLayout hud_layout;
+        const bool hud = with_hud && use_hd_text;
+        if (hud) {
+            hud_layout =
+                enhance::compute_enhanced_hud_layout(hd_text, g.state);
+            enhance::draw_enhanced_hud_bars(wide, wsp.native_w(), 200, 1,
+                                            hud_layout, wsp.margin());
+        }
+        // OLDUVAI_DUMP_DESCENT: dump the composed WS descent frame
+        // (pre-upscale native_w×200) so the l3_end_level extraction
+        // is provable byte-identical.  Debug-only; moves with
+        // present_ws_descent into l3_end_level.cpp.
+        if (const char* dd = std::getenv("OLDUVAI_DUMP_DESCENT")) {
+            static int descent_dump_seq = 0;
+            char p[512];
+            std::snprintf(p, sizeof p, "%s/descent_%04d.bmp", dd,
+                          descent_dump_seq++);
+            save_rgba_image(wide.data(), wsp.native_w(), 200, p);
+        }
+        std::vector<std::uint8_t> up = enhance::upscale_rgba(
+            wide, wsp.native_w(), 200, hd_scale, opts.hd_profile);
+        SDL_UpdateTexture(wsp.wide_tex(), nullptr, up.data(),
+                          wsp.native_w() * hd_scale * 4);
+        SDL_RenderClear(ren);
+        SDL_RenderCopy(ren, wsp.wide_tex(), nullptr, nullptr);
+        if (hud && hd_text.ok()) {
+            int ow = 0, oh = 0;
+            if (text_overlay.begin(ren, hd_text, ow, oh)) {
+                wsp.draw_wide_hud_text(text_overlay.buffer(), ow,
+                                       oh, hud_layout);
+                text_overlay.flush(ren, logical_w, logical_h);
+            }
+        }
+        if (descent_shot) {   // F5 pressed mid-descent — save full WS
+            descent_shot = false;
+            int ow = 0, oh = 0;
+            SDL_GetRendererOutputSize(ren, &ow, &oh);
+            SDL_Surface* sh = SDL_CreateRGBSurfaceWithFormat(
+                0, ow, oh, 32, SDL_PIXELFORMAT_RGBA32);
+            if (sh != nullptr &&
+                SDL_RenderReadPixels(ren, nullptr,
+                    SDL_PIXELFORMAT_RGBA32, sh->pixels,
+                    sh->pitch) == 0) {
+                // Same root as the F5 report dirs (this IS the
+                // descent's F5 capture) — never the cwd.
+                const std::filesystem::path root =
+                    bug_report_root();
+                std::error_code ec;
+                std::filesystem::create_directories(root, ec);
+                char p[64];
+                std::snprintf(p, sizeof p, "descent_ws_%03d.png",
+                              descent_shot_seq++);
+                const std::string path = (root / p).string();
+                save_surface_image(sh, path);
+                std::fprintf(stderr, "[WS-SHOT] saved %s\n",
+                             path.c_str());
+            }
+            if (sh != nullptr) SDL_FreeSurface(sh);
+        }
+        SDL_RenderPresent(ren);
+        const Uint32 work = SDL_GetTicks() - t0;
+        if (work < descent_step_ms) SDL_Delay(descent_step_ms - work);
+        return true;
+    };
+    auto descent_present = [&](const FrameBuffer& f) -> bool {
+        return present_ws_descent(f, /*with_hud=*/false);
+    };
+    // Phase 1 (FUN_2276_0282): run BEFORE bind_screen so the
+    // animation shows screen 17's platform sliding down against
+    // screen 17's backdrop.  LCG jitter is rolled logic-side
+    // AFTER Phase 1 and BEFORE Phase 2 (reference ordering:
+    // step 8c — roll_l3_descent_smoke_jitter then
+    // run_l3_trunk_descent).
+    //
+    // Headless / replay: Phase 1 and Phase 2 animations are
+    // blocking display loops — in headless (opts.frames > 0)
+    // the present lambda already returns immediately, so they
+    // burn through frames quickly.  The LCG consumption
+    // (jitter roll = 40 draws) MUST happen regardless.
+    //
+    // Build the L3-surface-specific sprite vectors needed by
+    // the descent renderer (already loaded into g.render / g.grot3).
+    // The descent functions compose into a NATIVE 320×200 buffer
+    // and pass it to `present`; `present` then upscales for HD.
+    // We must NOT pass the HD-sized gameplay fb directly — the
+    // descent does `fb = bg_static` (native copy) which would
+    // resize it and corrupt subsequent gameplay composition.
+    {
+        // g.render.tile_sprites = ELEML3(28) + ELEML3B(5) + GROT3(2)
+        // (appended in bind_screen L3 surface path).
+        // Decoration tiles use indices 0/1 (= ELEML3[0/1]).
+        // The transition already advanced current_screen to 18, but
+        // these are SCREEN-17's margins — restore it to 17 so the
+        // per-screen dead-end rules (trunk-skip + dirt-void in
+        // compose_static_wide_bg_native) fire; otherwise the giant
+        // trunk spills into the strip for the whole descent.
+        const int saved_cs = g.state.current_screen;
+        g.state.current_screen = prev_screen;   // 17
+        build_descent_margins();   // screen 17's static wide margins
+        descent_m17 = descent_wide;   // saved for the pan scroll
+        g.state.current_screen = saved_cs;       // back to 18
+        FrameBuffer native_fb{};   // native 320×200 for descent
+        if (!run_l3_screen17_descent(
+                g.state, g.render.tile_sprites,
+                g.render.entity_sprites, g.render.palette,
+                g.tiles, g.grot3, native_fb,
+                opts.enhance.descent_pan,
+                g.render.extend_top_backdrop, descent_present)) {
+            running = false;
+        }
+    }
+    // Roll smoke jitter logic-side — 40 LCG draws consumed in
+    // the same order as the EXE regardless of rendering mode.
+    // FUN_2276_03d9:0x0554 (smoke A) + 0x0586 (smoke B), iters 0..19.
+    systems::roll_l3_descent_smoke_jitter(g.state);
+
+    // Bind screen 18 now (before Phase 2).  Phase 2 renders
+    // screen-17 records descending into screen-18's backdrop.
+    systems::clear_per_screen_state(g.state);
+    bind_screen(g, g.state.current_screen);
+    wsp.update_cache();   // recompute peek for the new screen
+    build_descent_margins();     // screen 18's static wide margins
+    descent_m18 = descent_wide;  // saved for the pan scroll
+    g.state.screen_change = false;
+    g.state.transition_skip = true;
+
+    // Enhancement #11 (opt-in, NOT EXE-faithful): camera-pan
+    // bridging Phase 1 → Phase 2.  The EXE hard-swaps the backdrop
+    // here; this glides screen 17 up/out and screen 18 in from
+    // below.  Gated on opts.enhance.descent_pan inside the helper
+    // (no-op + early return when the flag is off → the default path
+    // is byte-identical).  The pan touches NO LCG/RNG state — it
+    // builds backdrops from the already-bound L3 surface tiles and
+    // scrolls them — so the trace/corpus is unaffected.  Runs AFTER
+    // bind_screen(18) so screen 18's tiles are available for the
+    // incoming surface, mirroring the reference where
+    // the pan precedes Phase 2.  Smoke jitter was already rolled
+    // above; pan order relative to the roll is irrelevant (pan = 0
+    // LCG draws).
+    //
+    // present_hud: like `present` but draws the enhanced HUD over
+    // each pan frame (with_hud=true) so the HUD stays visible across
+    // the pan — reference _present_frame draws the HUD every pan
+    // frame.  No state mutation:
+    // draw_enhanced_hud_* only reads g.state.
+    if (running && opts.enhance.descent_pan) {
+        // present_hud: the descent present WITH the enhanced HUD on
+        // each pan frame.  Also scrolls the wide MARGINS in lockstep
+        // with the centre pan — screen-17 margins recede UP, screen-18
+        // margins enter from BELOW, the SAME geometry run_l3_descent_
+        // pan uses for the centre (ody=-t*H, ndy=H+ody) — so the bezel
+        // transitions screen 17 → 18 seamlessly with the centre
+        // instead of popping at the phase boundary.
+        const int pan_n = 12 * (opts.enhance.descent_pan ? 3 : 1);
+        int pan_i = 0;
+        auto present_hud = [&](const FrameBuffer& f) -> bool {
+            if (descent_ws &&
+                descent_m17.size() == descent_wide.size() &&
+                descent_m18.size() == descent_wide.size()) {
+                const double t =
+                    static_cast<double>(++pan_i) / pan_n;
+                const int H = 200;
+                const int ody = -static_cast<int>(t * H);
+                const int ndy = H + ody;
+                const std::size_t rowb =
+                    static_cast<std::size_t>(wsp.native_w()) * 4;
+                std::fill(descent_wide.begin(), descent_wide.end(), 0);
+                auto shift = [&](const std::vector<std::uint8_t>& src,
+                                 int sdy) {
+                    for (int y = 0; y < H; ++y) {
+                        const int sy = y - sdy;
+                        if (sy < 0 || sy >= H) continue;
+                        std::memcpy(
+                            &descent_wide[static_cast<std::size_t>(y) *
+                                          rowb],
+                            &src[static_cast<std::size_t>(sy) * rowb],
+                            rowb);
+                    }
+                };
+                shift(descent_m17, ody);   // screen 17 recedes up
+                shift(descent_m18, ndy);   // screen 18 enters below
+            }
+            return present_ws_descent(f, /*with_hud=*/true);
+        };
+        FrameBuffer native_pan{};   // native 320×200 for the pan
+        if (!run_l3_descent_pan(
+                g.state, g.render.tile_sprites,
+                g.render.entity_sprites, g.render.palette,
+                g.tiles, g.grot3, native_pan,
+                opts.enhance.descent_pan,
+                g.render.extend_top_backdrop, present_hud)) {
+            running = false;
+        }
+        descent_wide = descent_m18;   // Phase 2 = static screen-18
+    }
+
+    // Phase 2 (FUN_2276_03d9): 21 iters, y_offset −80→0.
+    if (running) {
+        const auto& td = g.tiles;
+        FrameBuffer native_fb2{};   // native 320×200 for Phase 2
+        if (!run_l3_trunk_descent(
+                g.state, g.render.tile_sprites,
+                g.render.entity_sprites, g.render.palette,
+                td, g.grot3, native_fb2,
+                opts.enhance.descent_pan,
+                g.render.extend_top_backdrop, descent_present)) {
+            running = false;
+        } else {
+            // Stamp the descent-overlay tiles onto screen 18's
+            // collision + render list (mirrors EXE
+            // FUN_2276_03d9 Collision_StampDur on iter 20;
+            // reference: _setup_screen_collision after run_l3_trunk_descent).
+            std::vector<presentation::LevelRenderAssets::TileDraw>
+                overlay;
+            for (const auto& tp : l3_descent_overlay_tiles(td)) {
+                const int idx = descent_resolve_sprite_idx(tp.sprite_idx);
+                if (idx >= 0 &&
+                    idx < static_cast<int>(g.dur.tiles.size())) {
+                    g.state.collision.stamp_tile(
+                        g.dur.tiles[static_cast<std::size_t>(idx)].segments,
+                        tp.x, tp.y);
+                }
+                overlay.push_back({idx, tp.x, tp.y});
+            }
+            // Draw order matches the reference:
+            // the overlay renders BEFORE screen 18's own records,
+            // so the ground row covers the descended trunk's
+            // bottom — the trunk stays BEHIND the ground exactly
+            // as during the descent animation.  Appending it
+            // (drawn last) popped the trunk bottom OVER the
+            // ground on the first steady frame.  Insert after the
+            // bind-injected backdrop, before the level tiles.
+            const auto ins =
+                g.render.tiles.begin() +
+                std::min<std::ptrdiff_t>(
+                    g.render.backdrop_tile_count,
+                    static_cast<std::ptrdiff_t>(
+                        g.render.tiles.size()));
+            g.render.tiles.insert(ins, overlay.begin(),
+                                  overlay.end());
+            // Enhanced descent package: arm the settling-dust tail
+            // on the steady screen (same gate as the in-animation
+            // dust extension).
+            if (opts.enhance.descent_pan)
+                l3_smoke_tail = kL3SmokeTailTicks;
+        }
+    }
+}
 }  // namespace olduvai::presentation

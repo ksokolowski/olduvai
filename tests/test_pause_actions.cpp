@@ -313,3 +313,35 @@ TEST_CASE("granular toggle Apply keeps the enhanced=false companion") {
     CHECK(r.opts.enhance.smooth_motion);
     CHECK(!r.want_reinit);   // granular flags are not reinit-class
 }
+
+// ── cheat.god scope (the level-boundary bug) ────────────────────────────────
+// `bind.god` points at run_platform_level's PER-LEVEL `god_active` local, so a
+// toggle used to die at the next level boundary: the next level re-derives
+// god_active from GameOptions::god and silently reverted to whatever --god
+// said.  The setter must write the SESSION flag too, so the cheat is both live
+// and sticky (and so the boss arenas, whose lives seed reads GameOptions::god,
+// see it as well).
+TEST_CASE("cheat.god toggle writes BOTH the live local and the session flag") {
+    Rig r;
+    r.bind.god = &r.god_active;
+    r.bind.god_session = &r.opts.god;
+    REQUIRE_FALSE(r.god_active);
+    REQUIRE_FALSE(r.opts.god);
+
+    r.bind.set("cheat.god", "1");
+    CHECK(r.god_active);    // live: this level's loop reacts immediately
+    CHECK(r.opts.god);      // sticky: the next level re-derives from this
+
+    r.bind.set("cheat.god", "0");
+    CHECK_FALSE(r.god_active);
+    CHECK_FALSE(r.opts.god);   // turning it OFF must stick too
+}
+
+TEST_CASE("cheat.god reads back the live flag") {
+    Rig r;
+    r.bind.god = &r.god_active;
+    r.bind.god_session = &r.opts.god;
+    CHECK(r.bind.get("cheat.god") == "0");
+    r.god_active = true;
+    CHECK(r.bind.get("cheat.god") == "1");
+}

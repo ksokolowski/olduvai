@@ -5,8 +5,9 @@
 #
 # Ships NO game content — the user supplies game files at runtime via
 # --game-dir / config / GOG auto-discovery.  Bundles: SDL2 (+ transitive deps,
-# ldd-driven), libfluidsynth (dlopen'd → injected explicitly, invisible to
-# ldd), and both OFL HD fonts.  libasound and any SoundFont stay host-provided.
+# ldd-driven), libfluidsynth and libmt32emu (both dlopen'd → injected
+# explicitly, invisible to ldd), and both OFL HD fonts.  libasound and any
+# SoundFont stay host-provided; MT-32 additionally needs the user's own ROMs.
 #
 # glibc floor: the AppImage runs only on distros whose glibc >= this build
 # host's.  For broad portability build on an old-baseline system/container
@@ -87,8 +88,8 @@ else
 fi
 
 # 3. Populate deps with linuxdeploy: SDL2 (+ transitive) via ldd; libfluidsynth
-#    injected explicitly (dlopen'd → ldd can't see it); libasound excluded
-#    (it dlopens host plugins — bundling it breaks host MIDI).
+#    and libmt32emu injected explicitly (both dlopen'd → ldd can't see them);
+#    libasound excluded (it dlopens host plugins — bundling it breaks host MIDI).
 fetch_tool "${LINUXDEPLOY_URL}" "${tools_dir}/linuxdeploy" "${LINUXDEPLOY_SHA256}"
 fluidsynth_so="$(ldconfig -p | awk '/libfluidsynth\.so\.3/ {print $NF; exit}')"
 if [[ -z "${fluidsynth_so}" ]]; then
@@ -101,12 +102,27 @@ if [[ -z "${fluidsynth_so}" ]]; then
     fi
     echo "!! libfluidsynth.so.3 not found on host — GM music won't be bundled" >&2
 fi
+# libmt32emu: same story as FluidSynth — dlopen'd, so ldd/linuxdeploy can't
+# see it; inject explicitly.  Not in the Ubuntu repos, so the release job
+# builds it from munt source (see .github/workflows/release.yml) before this
+# runs.  MT-32 needs the user's own Roland ROMs to sound, so a host without
+# the lib only warns by default; release builds set OLDUVAI_REQUIRE_MT32EMU=1
+# so MT-32 support ships or the build fails loudly.
+mt32emu_so="$(ldconfig -p | awk '/libmt32emu\.so\.2/ {print $NF; exit}')"
+if [[ -z "${mt32emu_so}" ]]; then
+    if [[ "${OLDUVAI_REQUIRE_MT32EMU:-0}" = "1" ]]; then
+        echo "!! libmt32emu.so.2 not found on host — build munt libmt32emu first" >&2
+        exit 1
+    fi
+    echo "!! libmt32emu.so.2 not found on host — MT-32 music won't be bundled" >&2
+fi
 "${tools_dir}/linuxdeploy" \
     --appdir "${appdir}" \
     --executable "${appdir}/usr/bin/olduvai" \
     --desktop-file "${build_dir}/olduvai.desktop" \
     --icon-file "${build_dir}/olduvai.png" \
     ${fluidsynth_so:+--library "${fluidsynth_so}"} \
+    ${mt32emu_so:+--library "${mt32emu_so}"} \
     --exclude-library 'libasound.so*'
 
 # LGPL corresponding-source provision: record exactly which host libraries

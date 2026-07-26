@@ -201,7 +201,14 @@ public:
 
 private:
     int compute_margin(int ow, int oh) const;
+    // The FOND backdrop to hand the wide composers, or nullptr when this
+    // screen has none.  The same ternary appeared verbatim at five call sites
+    // (present fast + slow paths, present_transition, wrap_wide_static,
+    // compose_static_wide_bg), so a change to the rule had to be made five
+    // times.
+    const FrameBuffer* ws_backdrop() const;
     bool secret_selftile() const;
+    bool surface_selffill() const;
     void refresh_level_state();   // build_backdrop + update_cache
     void draw_margin_monsters(RenderTarget& wrt);
 

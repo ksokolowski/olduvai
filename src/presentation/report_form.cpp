@@ -119,7 +119,17 @@ bool ReportFormService::service_freeze(const FreezeDeps& d) {
     if (!open_) return false;
     d.g.state.god_mode = d.god_active;
     FrameBuffer pf{320, 200};
-    compose_frame(pf, d.g.state, d.g.render, /*draw_player=*/true);
+    // advance_state=false: this compose is PURELY VISUAL.  Like the pause
+    // freeze, the caller `continue`s before run_frame and before the
+    // authoritative per-tick fb compose, so an advancing compose here becomes
+    // the ONLY advance of a supposedly frozen frame and drains
+    // player.club_flag once per rendered form frame (open F5 mid-swing and the
+    // club vanished).  Same fix as PauseService::service_freeze.
+    {
+        RenderTarget prt{pf.px.data(), pf.w, pf.h, 1, nullptr, nullptr};
+        prt.advance_state = false;
+        compose_frame(prt, d.g.state, d.g.render, /*draw_player=*/true);
+    }
     if (!frame_ready_) {   // clean scene = the screenshot source
         frame_ = pf;
         frame_ready_ = true;

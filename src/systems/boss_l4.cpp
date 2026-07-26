@@ -104,8 +104,7 @@ void update_l4_boss_frame(BossPlayerState& p, L4BossState& boss,
     if (p.halo_flag == 0 && p.death_counter == 0) update_spring(p, boss);
     update_boss_player(p, in.left, in.right, in.jump, in.fire);
     update_boss_club(p);
-    if (p.x < 10) p.x = 10;
-    else if (p.x > 280) p.x = 280;
+    p.x = clamp_boss_x(p.x, 10, 280);
     if (check_hit(p, boss)) {
         boss.sfx_hit_pending = true;
         boss.hit_flash = 6;

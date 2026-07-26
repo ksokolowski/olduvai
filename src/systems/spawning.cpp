@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "systems/spawning.hpp"
 
+#include "systems/sprite_ids.hpp"
+
 #include "core/constants.hpp"
 #include "core/game_tables.hpp"
 #include "core/rng.hpp"
@@ -16,21 +18,12 @@ namespace {
 
 constexpr int kSprTrampoline = 129;
 constexpr int kSprPeakL7 = 146;
-constexpr int kSprEgg = 125;
-constexpr int kSprRock = 143;
-constexpr int kSprRockL3 = 116;
-constexpr int kSprFishUp = 83;
-constexpr int kSprJFishRiseLeft = 55;
-constexpr int kSprChimp = 92;
-constexpr int kSprSpider = 118;
-constexpr int kSprBat = 121;
 constexpr int kSprSnake = 150;
 constexpr int kSprFireCave = 25;
 constexpr int kSprBirdFlyBase = 40;
 constexpr int kSprProjectileL3Default = 153;
 constexpr int kSprHiddenFoodBase = 60;
 constexpr int kSprSecretFoodBase = 61;
-constexpr int kBonusSprites[6] = {90, 81, 89, 130, 131, 139};
 
 int w(const prepare::ObjectRecord& r, std::size_t i) {
     return i < r.words.size() ? r.words[i] : 0;

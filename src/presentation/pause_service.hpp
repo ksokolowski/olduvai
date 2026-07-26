@@ -29,6 +29,7 @@
 #include "presentation/replay.hpp"
 #include "presentation/settings_flow.hpp"
 #include "presentation/settings_session.hpp"
+#include "presentation/widescreen_presenter.hpp"
 
 namespace olduvai::presentation {
 
@@ -102,6 +103,10 @@ public:
         bool god_active;
         bool use_hd_text;
         std::uint32_t frame_ms;
+        // Needed so the frozen backdrop can be wrapped WIDE (real margin
+        // content) on screens whose live frame is wide — otherwise pausing
+        // pillarboxed the scene into black bars.  Mirrors ReportFormService.
+        WidescreenPresenter& wsp;
         // run_platform_level's upload_and_show(frame, with_hud, do_present).
         const std::function<void(FrameBuffer&, bool, bool)>& upload_and_show;
     };

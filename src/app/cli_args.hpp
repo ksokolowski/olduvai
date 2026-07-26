@@ -46,6 +46,11 @@ struct CliArgs {
     int play_shot_frame = 1;
     int viewer_frames = -1;
     std::string viewer_shot;
+    // Headless audio render harness (deterministic PCM for the A1 gate + the
+    // mt32_gm matching scripts).  --render-audio <format-0 .mid> triggers it.
+    std::string render_audio;       // input format-0 MIDI stream (SMF)
+    std::string render_audio_out;   // WAV out; empty → print "sha256  frames"
+    double render_audio_secs = 2.0; // render duration
 };
 
 // What main() should do after parsing.  When should_exit is set, main returns

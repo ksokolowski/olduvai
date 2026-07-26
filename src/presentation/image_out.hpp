@@ -26,4 +26,9 @@ bool save_rgba_image(const void* pixels, int w, int h, const std::string& path);
 // a successful read + save.
 bool capture_renderer_output(SDL_Renderer* ren, const std::string& path);
 
+// OLDUVAI_DUMP_STEADY debug aid: on each steady (non-widescreen) present, dump
+// the tightly-packed RGBA32 buffer as steady_fb_NNNN.bmp into the env-var
+// directory.  No-op when OLDUVAI_DUMP_STEADY is unset.  `pixels` is only read.
+void maybe_dump_steady(const void* pixels, int w, int h);
+
 }  // namespace olduvai::presentation

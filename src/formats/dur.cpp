@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "formats/dur.hpp"
 
+#include "formats/byteorder.hpp"
+
 namespace olduvai::formats {
 
 namespace {
@@ -12,12 +14,6 @@ constexpr std::size_t kMaxSegments = 4;
 
 std::int16_t read_i16le(const std::vector<std::uint8_t>& d, std::size_t p) {
     return static_cast<std::int16_t>(
-        static_cast<std::uint16_t>(d[p]) |
-        (static_cast<std::uint16_t>(d[p + 1]) << 8));
-}
-
-std::uint16_t read_u16le(const std::vector<std::uint8_t>& d, std::size_t p) {
-    return static_cast<std::uint16_t>(
         static_cast<std::uint16_t>(d[p]) |
         (static_cast<std::uint16_t>(d[p + 1]) << 8));
 }

@@ -35,10 +35,21 @@
 #include "prepare/exe_tables.hpp"
 #include "systems/player.hpp"
 
+struct SDL_Renderer;
+struct SDL_Window;
+
+namespace olduvai::enhance {
+class HdText;
+}
+
 namespace olduvai::presentation {
 
 struct FrameBuffer;
 struct LevelRenderAssets;
+class WidescreenPresenter;
+class TextOverlay;
+struct Loaded;
+struct GameOptions;
 
 // Tile-sprite remap for the descent path (0-based, per FUN_2276_03d9:0x0496-0x04b5
 // + FUN_2276_0282:0x032a-0x0347).
@@ -130,5 +141,39 @@ bool run_l3_descent_pan(
 // l3_descent_overlay list).  Caller stamps collision + adds to render.tiles.
 std::vector<prepare::TilePlacement> l3_descent_overlay_tiles(
     const prepare::LevelTiles& tile_data);
+
+// Live context for run_l3_trunk_descent_sequence — the whole screen-17→18
+// trunk-descent orchestration (margins + present callbacks + Phase 1 / pan /
+// Phase 2 + overlay stamping), lifted verbatim out of run_platform_level's
+// post-frame transition block (game_app.cpp).  Holds POINTERS to the run-loop
+// locals (so the body sees live values, like the old [&] captures) plus value
+// scalars stable across the blocking cinematic.  The sequence NEVER returns a
+// status — it drives `*running` false on ESC/window-close mid-descent and arms
+// `*l3_smoke_tail` (a cross-cutting counter the render path decrements), exactly
+// as the inline block did; the caller sets transition_kind = 0 afterwards.
+struct DescentCtx {
+    WidescreenPresenter* wsp = nullptr;
+    SDL_Renderer* ren = nullptr;
+    SDL_Window* win = nullptr;
+    enhance::HdText* hd_text = nullptr;
+    TextOverlay* text_overlay = nullptr;
+    Loaded* g = nullptr;              // the game bundle (state/render/tiles/dur)
+    const GameOptions* opts = nullptr;
+    bool* running = nullptr;          // set false on ESC / window-close mid-run
+    int* l3_smoke_tail = nullptr;     // armed after Phase 2 (descent-pan gated)
+    bool hd = false;
+    int hd_scale = 1;
+    bool use_hd_text = false;
+    std::uint32_t frame_ms = 0;
+    int prev_screen = 0;              // screen 17 (transition already advanced to 18)
+    int logical_w = 0;
+    int logical_h = 0;
+    int l3_smoke_tail_ticks = 0;      // = kL3SmokeTailTicks (the arm value)
+    // The per-frame pillarbox/present path (upload_and_show_fn view): the
+    // classic / non-widescreen descent fallback hands each native frame here.
+    std::function<void(FrameBuffer&, bool, bool)> upload_and_show;
+};
+
+void run_l3_trunk_descent_sequence(const DescentCtx& c);
 
 }  // namespace olduvai::presentation

@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.21)
 project(olduvai
-    VERSION 0.9.3
+    VERSION 0.9.4
     DESCRIPTION "Native recreation of the Prehistorik (1991) engine"
     LANGUAGES CXX C)
 
@@ -155,6 +155,22 @@ add_library(olduvai_formats
     src/systems/fluid_bubbles.cpp
 )
 target_include_directories(olduvai_formats PUBLIC src third_party/stb)
+
+# HD bake compression (OPTIONAL).  The upscaled cache stores palette art as
+# 32-bit RGBA — ~17 distinct colours in a 4 MB frame — so deflate takes the
+# on-disk bake from hundreds of MB to ~10.  zlib is in the macOS SDK, universal
+# on Linux and present in MSYS2; MSVC has none, so this is strictly optional:
+# without it the cache simply stores raw as before.  Entries carry a distinct
+# magic, and an unreadable entry is already treated as a miss and re-baked, so
+# builds with and without zlib interoperate on the same cache directory.
+find_package(ZLIB QUIET)
+if(ZLIB_FOUND)
+    target_link_libraries(olduvai_formats PRIVATE ZLIB::ZLIB)
+    target_compile_definitions(olduvai_formats PRIVATE OLDUVAI_HAVE_ZLIB)
+    message(STATUS "HD cache compression: zlib ${ZLIB_VERSION_STRING}")
+else()
+    message(STATUS "HD cache compression: OFF (zlib not found) — cache stores raw")
+endif()
 if(WIN32)
     # RegGetValueA in prepare/game_files.cpp (GOG install discovery).
     # MinGW links advapi32 by default; MSVC needs it explicit.
@@ -227,6 +243,11 @@ if(SDL2_FOUND)
         src/presentation/midi_seq.cpp
         src/presentation/replay.cpp
         src/presentation/image_out.cpp
+        src/presentation/draw_log.cpp
+        src/presentation/end_sequence.cpp
+        src/presentation/frame_input.cpp
+        src/presentation/frame_presenter.cpp
+        src/presentation/reinit_test_hook.cpp
         src/presentation/bug_capture.cpp
         src/presentation/mini_json.cpp
         src/presentation/menu.cpp
@@ -367,7 +388,8 @@ endif()
 
 # ── app ─────────────────────────────────────────────────────────────────────
 add_executable(olduvai src/app/main.cpp src/app/config.cpp
-                       src/app/options_resolve.cpp src/app/cli_args.cpp)
+                       src/app/options_resolve.cpp src/app/cli_args.cpp
+                       src/app/options_build.cpp)
 target_link_libraries(olduvai PRIVATE olduvai_formats)
 target_compile_definitions(olduvai PRIVATE
     OLDUVAI_VERSION="${PROJECT_VERSION}")
@@ -478,8 +500,10 @@ add_executable(olduvai_tests EXCLUDE_FROM_ALL
     tests/test_wav_io.cpp
     tests/test_opl_music.cpp
     tests/test_options_resolve.cpp
+    tests/test_options_build.cpp
     src/app/config.cpp
     src/app/options_resolve.cpp
+    src/app/options_build.cpp
     src/presentation/opl_music.cpp
     third_party/nuked_opl3/opl3.c
     src/presentation/mini_json.cpp
@@ -651,6 +675,21 @@ if(SDL2_FOUND)
                                                          ${OLDUVAI_SDL2})
     add_test(NAME text_overlay_edit COMMAND test_text_overlay_edit)
 
+    # Audio render gate (audio-harness Phase 2): deterministic offline PCM
+    # render of a SYNTHETIC MIDI (no game content) through each synth backend,
+    # one fresh process per backend via the shipping --render-audio CLI.
+    # Data-gated — each backend exits 77 without its assets (MT-32 ROMs / a GM
+    # SoundFont), so the whole test skips (77) on a runner without them.
+    # SDL_AUDIODRIVER=dummy: the offline render opens no device, but SDL audio
+    # init still needs a driver on a headless runner.
+    add_test(NAME audio_render
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/audio_render.sh"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(audio_render PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai
+        ENVIRONMENT "SDL_AUDIODRIVER=dummy")
+
     # Headless reinit integration smoke test: drives OLDUVAI_REINIT_TEST to
     # trigger a render_scale 2→4 reinit on frame 5 and asserts the logical
     # window size is 1280×800 and player position is preserved across the
@@ -729,6 +768,54 @@ if(SDL2_FOUND)
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
+    # Cave transition margin symmetry: a cave has no neighbours, so its
+    # widescreen margins must be a black bezel on the way OUT as well as IN.
+    # The exit direction regressed (ws_old read post-exit_cave state) and no
+    # existing test saw it — wide_transition covers cave ENTRY only.
+    add_test(NAME cave_exit_margins
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/cave_exit_margins.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(cave_exit_margins PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # Boss-arena per-frame trace: the boss-side counterpart of golden_trace.
+    # run_boss_level had NO behavioural gate (boss_replay_record only compares a
+    # recorded INPUT file), which is why every boss-side backlog item was
+    # blocked.  Additive; skips (77) without game data.
+    add_test(NAME boss_golden_trace
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/boss_golden_trace.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(boss_golden_trace PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # HD + WIDESCREEN pause overlay compose. pause_shot above pins the CLASSIC
+    # path only (--render-scale 1, no --aspect widescreen → margin 0), so the
+    # wide/HD pause frame — where the overlay dropped the margins and the HUD —
+    # had no gate at all. Skips (77) without game data.
+    add_test(NAME pause_shot_wide
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/pause_shot_wide.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(pause_shot_wide PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # BOSS-arena pause overlay compose. The boss pause is a bespoke present
+    # block that bypasses the boss present helpers; nothing gated it, and it
+    # skipped the HD upscale + widescreen compose entirely. Skips (77) without
+    # game data.
+    add_test(NAME boss_pause_shot
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/boss_pause_shot.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(boss_pause_shot PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
     # In-game menu behaviour baseline: drives the pause menu via OLDUVAI_MENU_SCRIPT
     # (synthetic key events) through a nav/Options/Cheats/back walk and byte-
     # compares each frame to a committed golden. The interactive-menu regression
@@ -803,7 +890,7 @@ configure_file(${CMAKE_SOURCE_DIR}/assets/fonts/NotoSans-LICENSE.txt
 if(APPLE AND SDL2_FOUND)
     add_executable(olduvai_app MACOSX_BUNDLE EXCLUDE_FROM_ALL
         src/app/main.cpp src/app/config.cpp src/app/options_resolve.cpp
-        src/app/cli_args.cpp src/app/first_run.cpp)
+        src/app/cli_args.cpp src/app/first_run.cpp src/app/options_build.cpp)
     set_target_properties(olduvai_app PROPERTIES
         OUTPUT_NAME "Olduvai"
         MACOSX_BUNDLE_BUNDLE_NAME "Olduvai"

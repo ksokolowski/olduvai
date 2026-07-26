@@ -52,10 +52,6 @@ struct ChainSets {
         }
     }
 
-    bool in_column(const TileDraw& t, int h) const {
-        return starts.count(key(t.x, t.y + h)) != 0 ||   // neighbour below
-               ends.count(key(t.x, t.y)) != 0;           // neighbour above
-    }
 };
 
 }  // namespace

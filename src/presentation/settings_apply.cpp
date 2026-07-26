@@ -70,6 +70,10 @@ ApplyTier classify_change_in_set(
         } else if (k == "hd_profile") {
             target.hd_profile = v;
         } else if (k == "render_scale") {
+            // Deliberate swallow: a malformed staged value simply keeps the
+            // current render_scale.  There is nothing to report — the menu
+            // cannot produce one, and a stray play.json value should not spam.
+            // NOLINTNEXTLINE(bugprone-empty-catch)
             try { target.render_scale = std::stoi(v); } catch (...) {}
         }
     };

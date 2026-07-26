@@ -14,6 +14,7 @@
 #include "config.hpp"
 #include "options_resolve.hpp"
 #include "cli_args.hpp"
+#include "options_build.hpp"
 #ifdef OLDUVAI_HAVE_SDL
 #include "first_run.hpp"
 #endif
@@ -28,6 +29,7 @@
 
 #ifdef OLDUVAI_HAVE_SDL
 #include "presentation/bug_capture.hpp"
+#include "presentation/audio.hpp"
 #include "presentation/game_app.hpp"
 #include "presentation/host_midi.hpp"
 #include "presentation/viewer.hpp"
@@ -247,6 +249,60 @@ int main(int argc, char** argv) {
             }
         }
     }
+
+#ifdef OLDUVAI_HAVE_SDL
+    // ── Headless audio render (Phase 1 harness) ──────────────────────────
+    // Deterministic offline PCM render of a synthetic format-0 MIDI stream
+    // through a synth backend — the gate for the audio DIP refactor and the
+    // substrate for the mt32_gm instrument-matching scripts.  Needs no game
+    // files; data-gated on the backend's own assets (MT-32 ROMs / GM
+    // SoundFont) → exits 77 (SKIP) when the chosen synth can't load.
+    if (!args.render_audio.empty()) {
+        std::vector<std::uint8_t> smf;
+        if (std::FILE* mf = std::fopen(args.render_audio.c_str(), "rb")) {
+            std::uint8_t buf[8192];
+            std::size_t got;
+            while ((got = std::fread(buf, 1, sizeof buf, mf)) > 0)
+                smf.insert(smf.end(), buf, buf + got);
+            std::fclose(mf);
+        }
+        if (smf.empty()) {
+            std::fprintf(stderr, "render-audio: cannot read %s\n",
+                         args.render_audio.c_str());
+            return 1;
+        }
+        const int rate = (ps.audio_rate >= 8000) ? ps.audio_rate : 44100;
+        olduvai::presentation::SdlAudio audio(
+            ps.music_device, ps.rom_dir, ps.soundfont, ps.sfx_backend, rate, 0,
+            "", /*offline=*/true);
+        if (!audio.music_available()) {
+            std::fprintf(stderr,
+                "render-audio: no synth backend for '%s' — SKIP "
+                "(MT-32 needs ROMs; GM needs a SoundFont)\n",
+                ps.music_device.c_str());
+            return 77;   // CTest SKIP_RETURN_CODE
+        }
+        const int frames =
+            static_cast<int>(rate * args.render_audio_secs);
+        const std::vector<std::int16_t> pcm = audio.render_offline(smf, frames);
+        if (!args.render_audio_out.empty()) {
+            olduvai::presentation::write_wav16(args.render_audio_out, pcm, rate,
+                                               2);
+            std::printf("render-audio: %d frames @ %d Hz (%s) -> %s\n", frames,
+                        rate, audio.active_music_backend().c_str(),
+                        args.render_audio_out.c_str());
+        } else {
+            const std::vector<std::uint8_t> bytes(
+                reinterpret_cast<const std::uint8_t*>(pcm.data()),
+                reinterpret_cast<const std::uint8_t*>(pcm.data()) +
+                    pcm.size() * sizeof(std::int16_t));
+            std::printf("%s  %d  %s\n",
+                        olduvai::presentation::sfx_digest_hex(bytes).c_str(),
+                        frames, audio.active_music_backend().c_str());
+        }
+        return 0;
+    }
+#endif
 
     // ── MIDI port enumeration ────────────────────────────────────────────
     // Standalone command (like --verify-cache): list the host MIDI OUT ports
@@ -513,202 +569,21 @@ int main(int argc, char** argv) {
             olduvai::prepare::ensure_prepared(gf);
         }
 
-        // Build the enhanced-feature set.  --enhanced enables the full bundle;
-        // --enhance a,b enables a named subset (union with --enhanced).  Mirrors
-        // reference tools/play.py _ENHANCEMENT_NAMES.  An unknown name is a hard
-        // error (exit 2), matching the reference.
-        olduvai::presentation::EnhanceFlags enhance_flags;
-        if (ps.enhanced)
-            enhance_flags = olduvai::presentation::EnhanceFlags::all();
-        {
-            std::stringstream ss(ps.enhance_list);
-            std::string item;
-            while (std::getline(ss, item, ',')) {
-                const auto b = item.find_first_not_of(" \t");
-                if (b == std::string::npos) continue;
-                const auto e = item.find_last_not_of(" \t");
-                const std::string name = item.substr(b, e - b + 1);
-                if      (name == "smooth-motion") enhance_flags.smooth_motion = true;
-                else if (name == "cinematic-cue") enhance_flags.cinematic_cue = true;
-                else if (name == "hud-overlay")   enhance_flags.hud_overlay   = true;
-                else if (name == "fluid-bubbles") enhance_flags.fluid_bubbles = true;
-                else if (name == "secret-slide")  enhance_flags.secret_slide  = true;
-                else if (name == "descent-pan")   enhance_flags.descent_pan   = true;
-                else if (name == "hd-text")       enhance_flags.hd_text       = true;
-                else {
-                    std::fprintf(stderr,
-                        "olduvai: unknown --enhance feature '%s'.  Known: "
-                        "smooth-motion, cinematic-cue, hud-overlay, "
-                        "fluid-bubbles, secret-slide, descent-pan, hd-text\n",
-                        name.c_str());
-                    return 2;
-                }
-            }
-        }
-        // Umbrella `enhanced` = the HD-render substrate; on if any feature is
-        // requested (so a single --enhance gives the enhanced render path).
-        ps.enhanced = enhance_flags.any();
-
-        // ── Tuning-flag validation (reject typos like the reference does).
-        if (ps.display_mode != "gpu" && ps.display_mode != "cpu") {
-            std::fprintf(stderr,
-                "olduvai: --display-mode must be 'gpu' or 'cpu' (got '%s')\n",
-                ps.display_mode.c_str());
-            return 2;
-        }
-        if (ps.transitions != "smooth" && ps.transitions != "classic") {
-            std::fprintf(stderr,
-                "olduvai: --transitions must be 'smooth' or 'classic' "
-                "(got '%s')\n", ps.transitions.c_str());
-            return 2;
-        }
-        if (ps.aspect != "keep" && ps.aspect != "4:3" &&
-            ps.aspect != "stretch" && ps.aspect != "widescreen") {
-            std::fprintf(stderr,
-                "olduvai: --aspect must be 'keep', '4:3', 'stretch', or "
-                "'widescreen' (got '%s')\n", ps.aspect.c_str());
-            return 2;
-        }
-        // --hd-font: map the friendly name to the bundled TTF file.  Unknown
-        // names are a hard error (matches the reference choices=[...]).
-        std::string hd_font_file;
-        if (ps.hd_font == "freckle") {
-            hd_font_file = "FreckleFace-Regular.ttf";
-        } else if (ps.hd_font == "noto") {
-            hd_font_file = "NotoSans-Regular.ttf";
-        } else {
-            std::fprintf(stderr,
-                "olduvai: --hd-font must be 'freckle' or 'noto' (got '%s')\n",
-                ps.hd_font.c_str());
-            return 2;
-        }
-        // --banner-fx: reject unknown effect names (the shader would silently
-        // fall back to caveman otherwise).
-        if (ps.banner_fx != "caveman" && ps.banner_fx != "fire" &&
-            ps.banner_fx != "rainbow" && ps.banner_fx != "gold" &&
-            ps.banner_fx != "pulse") {
-            std::fprintf(stderr,
-                "olduvai: --banner-fx must be caveman|fire|rainbow|gold|pulse "
-                "(got '%s')\n", ps.banner_fx.c_str());
-            return 2;
-        }
-        // --hd-profile: empty means "use the default" (omniscale, the
-        // historical owner default).  Any non-empty name must be one olduvai
-        // actually renders — reject unknown/unimplemented names with exit 2
-        // and the supported list (matches how the reference raises KeyError;
-        // NO silent fall-through to omniscale for a name we don't implement).
-        if (ps.hd_profile.empty()) {
-            ps.hd_profile = "omniscale";
-        } else if (!olduvai::enhance::is_supported_hd_profile(ps.hd_profile)) {
-            std::string list;
-            for (const auto& p : olduvai::enhance::supported_hd_profiles()) {
-                if (!list.empty()) list += ", ";
-                list += p;
-            }
-            std::fprintf(stderr,
-                "olduvai: --hd-profile '%s' is not supported.  Supported "
-                "profiles: %s.\n",
-                ps.hd_profile.c_str(), list.c_str());
-            return 2;
-        }
-
-        // --transitions classic: force smooth-motion off (a convenience
-        // override of the enhance flag, applied AFTER enhance resolution so
-        // it wins).
-        //
-        // --trace needs exactly ONE presented state per logic frame, but
-        // smooth-motion inserts sub-frames whose count comes from the display
-        // refresh (non-deterministic) — so tracing forces classic.  --replay
-        // ALONE does NOT: it only injects inputs once per logic tick, which
-        // sub-frame render interpolation never touches, so a recorded session
-        // replays with full smooth motion (demo-movie friendly).  --replay
-        // WITH --trace still forces classic via the trace branch.
-        if (ps.transitions == "classic") {
-            enhance_flags.smooth_motion = false;
-        } else if (!args.play_trace.empty()) {
-            if (enhance_flags.smooth_motion) {
-                std::fprintf(stderr,
-                    "olduvai: --trace set → forcing transitions classic "
-                    "(smooth-motion off) for deterministic frames\n");
-            }
-            enhance_flags.smooth_motion = false;
-        }
-
-        // widescreen_active requires the HD substrate (enhanced AND a non-
-        // native hd profile) — anything else silently pillarboxed before;
-        // say so instead.
-        if (ps.aspect == "widescreen" &&
-            (!ps.enhanced || ps.hd_profile == "native")) {
-            std::fprintf(stderr,
-                "olduvai: --aspect widescreen needs the enhanced HD substrate "
-                "(--enhanced or an --enhance subset, plus a non-native "
-                "--hd-profile) — falling back to a plain pillarbox\n");
-        }
+        // Validate + assemble the GameOptions (app/options_build.cpp): the
+        // --enhance parse, the six tuning-flag validations, the cross-field
+        // derivations, and the field-by-field copy — the untested other half
+        // of the parse_args/merge_config decomposition, now unit-testable
+        // (audit A2).  The callee never prints: warnings go to stderr on the
+        // success path, and a validation failure sets the exit code.
         olduvai::presentation::GameOptions go;
-        go.game_dir = args.game_dir;
-        // Sequencer mapping (EXE FUN_2bd7_04be slots): no --level → position 0
-        // (the attract: intro cards + title + main menu); an explicit 1-7
-        // jumps straight into that level (no logo/title/menu — --level 1 is
-        // explicit too); 8 = the win ending.  Headless/replay runs remap 0→1
-        // inside run_game for deterministic gameplay frame 0.
-        go.level = args.play_level < 0 ? 0 : args.play_level;
-        go.pad_jump = ps.pad_jump;
-        go.pad_attack = ps.pad_attack;
-        go.pad_pause = ps.pad_pause;
-        go.pad_confirm = ps.pad_confirm;
-        go.pad_back = ps.pad_back;
-        go.pad_deadzone = ps.pad_deadzone;
-        go.enhanced = ps.enhanced;
-        go.enhance = enhance_flags;
-        go.hd_profile = ps.hd_profile;
-        go.banner_fx = ps.banner_fx;
-        go.window_w = args.play_window_w;
-        go.window_h = args.play_window_h;
-        go.start_screen = args.play_start_screen;
-        go.render_scale = ps.render_scale;
-        go.music_device = ps.music_device;
-        go.midi_port = args.play_midi_port;
-        go.rom_dir = ps.rom_dir;
-        go.soundfont = ps.soundfont;
-        go.sfx_backend = ps.sfx_backend;
-        go.replay = args.play_replay;
-        go.trace = args.play_trace;
-        go.record_inputs = args.play_record_inputs;
-        go.cheats = args.play_cheats;
-        go.god = args.play_god;
-        go.autofire = ps.autofire;
-        go.debug_collision = args.play_debug_collision;
-        go.debug_entities = args.play_debug_entities;
-        go.debug_perf = args.play_debug_perf;
-        go.frames = args.play_frames;
-        go.screenshot = args.play_shot;
-        go.screenshot_frame = args.play_shot_frame;
-        // Scanout needs vblank pacing, but only CLASSIC uses it — the default-
-        // on flag must not silently enable vsync for enhanced/HD runs.
-        const bool hd_substrate =
-            ps.enhanced && ps.hd_profile != "native";
-        go.vsync = args.play_vsync || (ps.vga_scan && !hd_substrate);
-        go.fullscreen = args.play_fullscreen;
-        go.display_mode = ps.display_mode;
-        go.audio_rate = ps.audio_rate;
-        go.audio_buffer = ps.audio_buffer;
-        go.transitions = ps.transitions;
-        go.aspect = ps.aspect;
-        go.vga_scan = ps.vga_scan;
-        go.hd_font = hd_font_file;
-        // In-game Options menu → play.json.  Load-modify-save keeps any keys
-        // the menu doesn't touch; the app layer owns config I/O.
-        go.persist = [](const std::string& key, const std::string& value) {
-            olduvai::app::Config c = olduvai::app::load_config_file();
-            c[key] = value;
-            olduvai::app::save_config_file(c);
-        };
-        // Quicksave alongside the config (…/olduvai/saves/quicksave.json).
-        go.save_path = std::filesystem::path(olduvai::app::config_path())
-                           .parent_path()
-                           .append("saves")
-                           .append("quicksave.sav")
-                           .string();
+        const olduvai::app::BuildOutcome bo =
+            olduvai::app::build_game_options(args, ps, go);
+        for (const auto& w : bo.warnings)
+            std::fprintf(stderr, "%s", w.c_str());
+        if (!bo.ok) {
+            std::fprintf(stderr, "%s", bo.error.c_str());
+            return bo.exit_code;
+        }
         return olduvai::presentation::run_game(go);
 #else
         std::printf("This build has no presentation layer (SDL2 missing).\n");
