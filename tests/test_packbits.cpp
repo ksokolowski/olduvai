@@ -33,13 +33,13 @@ TEST_CASE("0x80 is a no-op") {
 }
 
 TEST_CASE("mixed runs") {
-    // 2 literals, no-op, repeat 'z' ×4 (0xFD = 257-253 = 4)
+    // 2 literals, no-op, repeat 'z' x4 (0xFD = 257-253 = 4)
     const auto out = packbits_decompress(B({0x01, 'h', 'i', 0x80, 0xFD, 'z'}), 6);
     CHECK(out == B({'h', 'i', 'z', 'z', 'z', 'z'}));
 }
 
 TEST_CASE("output truncated to expected size") {
-    // repeat ×5 but only 2 expected
+    // repeat x5 but only 2 expected
     CHECK(packbits_decompress(B({0xFC, 'A'}), 2) == B({'A', 'A'}));
 }
 

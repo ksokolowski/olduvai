@@ -119,7 +119,7 @@ EnhancedHudLayout compute_enhanced_hud_layout(
 
 void draw_enhanced_hud_bars(std::vector<std::uint8_t>& px, int bw, int bh,
                             int s, const EnhancedHudLayout& L, int x_off_native) {
-    // Gauge outline + dark empty fill, native coords × s (x shifted by the
+    // Gauge outline + dark empty fill, native coords x s (x shifted by the
     // native x-origin so the bars land at the centre in a wide buffer).
     for (const auto& b : L.boxes) {
         const int x = (b.x + x_off_native) * s, y = b.y * s,

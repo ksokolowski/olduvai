@@ -57,7 +57,7 @@ run() {  # run <name> <script>  → shots in ${WORK}/<name>, bug_reports in ${WO
       --game-dir "${GAME_DIR}" >/dev/null 2>&1 )
 }
 
-run_hd() {  # run_hd <name> <script>  → HD (×4) run so the presented shot exists
+run_hd() {  # run_hd <name> <script>  → HD (x4) run so the presented shot exists
     OUT="${WORK}/$1"
     mkdir -p "${OUT}"
     ( cd "${WORK}" &&
@@ -98,7 +98,7 @@ else
         || { echo "report_form: FAIL — description not in report.md"; FAIL=1; }
     [ ! -e "${saved}state.json" ] \
         || { echo "report_form: FAIL — state.json should no longer be written"; FAIL=1; }
-    # Classic 1× has no HD/widescreen transform, so no presented shot is written
+    # Classic 1x has no HD/widescreen transform, so no presented shot is written
     # (the native screenshot.png is pixel-equal to it).
     [ ! -e "${saved}screenshot_presented.png" ] \
         || { echo "report_form: FAIL — classic run should write no presented shot"; FAIL=1; }

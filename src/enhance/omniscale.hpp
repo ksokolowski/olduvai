@@ -12,7 +12,7 @@
 
 namespace olduvai::enhance {
 
-// RGBA in, (W*s)×(H*s) RGBA out; s in {2, 3, 4}.
+// RGBA in, (W*s)x(H*s) RGBA out; s in {2, 3, 4}.
 std::vector<std::uint8_t> omniscale(const std::vector<std::uint8_t>& rgba,
                                     int w, int h, int s);
 

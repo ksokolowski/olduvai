@@ -43,6 +43,7 @@ struct GameOptions {
     std::string music_device = "auto";
     std::string midi_port;                // host-midi: MIDI OUT port name ("" = default)
     std::string rom_dir;                  // MT-32 ROM override
+    std::string mt32_model;               // auto|cm32l|mt32
     std::string soundfont;                // GM SoundFont override
     // auto pairs to the music device (mt32→mt32-sfx, gm→gm-sfx, opl/none→
     // sb-dac), mirroring Python's _resolve_sfx_backend.  Explicit:

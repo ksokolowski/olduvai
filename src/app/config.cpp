@@ -105,9 +105,12 @@ std::string config_path() {
 }
 
 Config builtin_profile(const std::string& name) {
-    // Three profiles ↔ three ways to play (owner 2026-07-04: hd and hd-43
-    // target BEST UX by default; dos stays byte-faithful — main.cpp also
-    // clears enhanced-side saved keys for dos).  Audio deliberately NOT
+    // TWO profiles, because there are two ways to play: faithful or
+    // enhanced.  hd-43 used to be a third, but it differed from hd in
+    // exactly one key (aspect) — a display setting that has its own Video
+    // row, so offering it as a peer implied a mode that does not exist and
+    // gave one setting two homes.  `--profile hd-43` still works as an
+    // alias (see cli_args.cpp).  Audio deliberately NOT
     // pinned in any profile: the auto-pick chain (MT-32 ROMs → soundfont →
     // OPL) chooses the best available backend per machine.
     if (name == "dos") return {};   // byte-faithful defaults (+vga-scan default)
@@ -116,12 +119,6 @@ Config builtin_profile(const std::string& name) {
                 {"hd_profile", "omniscale"},
                 {"render_scale", "4"},
                 {"aspect", "widescreen"}};
-    }
-    if (name == "hd-43") {          // full enhanced at the CRT 4:3 look
-        return {{"enhanced", "true"},
-                {"hd_profile", "omniscale"},
-                {"render_scale", "4"},
-                {"aspect", "4:3"}};
     }
     return {};
 }

@@ -12,7 +12,7 @@
 //   show_score_tally caller — not in these helpers).
 
 #include "doctest/doctest.h"
-#include "presentation/screens.hpp"
+#include "presentation/sequence/screens.hpp"
 
 using namespace olduvai::presentation;
 
@@ -55,7 +55,7 @@ TEST_CASE("step_tally_lives: decrement and score accumulation") {
 
 TEST_CASE("tally countdown: bonus 500 + 3 lives yields correct total score") {
     // Reference spec: bonus 500 → 250 steps of -2/+20 = +5000 score,
-    // plus 3 lives × 1000 = +3000.  Total: 8000.
+    // plus 3 lives x 1000 = +3000.  Total: 8000.
     int bonus = 500;
     int lives = 3;
     long score = 0;
@@ -65,14 +65,14 @@ TEST_CASE("tally countdown: bonus 500 + 3 lives yields correct total score") {
         step_tally_bonus(bonus, score);
     }
     CHECK(bonus == 0);
-    CHECK(score == 5000);   // 250 steps × 20
+    CHECK(score == 5000);   // 250 steps x 20
 
     // Lives phase.
     while (lives > 0) {
         step_tally_lives(lives, score);
     }
     CHECK(lives == 0);
-    CHECK(score == 8000);   // 5000 + 3×1000
+    CHECK(score == 8000);   // 5000 + 3x1000
 }
 
 TEST_CASE("tally countdown: bonus 500 step count is exactly 250") {

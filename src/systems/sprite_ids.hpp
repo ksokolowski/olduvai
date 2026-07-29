@@ -20,7 +20,7 @@ namespace olduvai::systems {
 constexpr int kSprFishUp = 83;
 constexpr int kSprFishDown = 84;
 
-// Jellyfish (L5): first of the 4-pose rise/fall × left/right block (55..58).
+// Jellyfish (L5): first of the 4-pose rise/fall x left/right block (55..58).
 constexpr int kSprJFishRiseLeft = 55;
 
 // Hatching egg (L1) and the falling rock hazards (L7 / the L3 variant).

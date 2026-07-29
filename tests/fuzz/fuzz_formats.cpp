@@ -32,7 +32,7 @@
 #include "formats/packbits.hpp"
 #include "formats/unsqz.hpp"
 #include "formats/voc.hpp"
-#include "presentation/midi_seq.hpp"
+#include "presentation/audio/midi_seq.hpp"
 
 using namespace olduvai;
 

@@ -149,7 +149,7 @@ struct SystemsState {
     // no emerge frames (full scan of DS:0x987e writes — no exit re-arm);
     // owner deems that a DOS oversight vs the Amiga port.
     // v2 pacing (2026-07-05, teleport idiom): ENHANCED arms 9 ticks — 3
-    // dim stages × 3-tick holds (1/3 → 2/3 → full palette thirds) — and
+    // dim stages x 3-tick holds (1/3 → 2/3 → full palette thirds) — and
     // frame_runner freezes the player for the duration (owner-approved
     // "stop game time"); a hit or death cancels the emerge cleanly
     // (hit_player / frame_runner).  CLASSIC arms 2 lit ticks, draw-only,

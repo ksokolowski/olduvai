@@ -13,7 +13,7 @@
 // Club hits land outside the attack window while airborne above y<50
 // to the right of x>182: -2 health, counter snap to 19 (254f_0078:01c3)
 // and an inline SHOCKED PAIR draw — part A = base+0 (:01d1, H1 body, NO
-// table offset), part B = base+6 (:01f0, H4[3] 96×57 shocked arm+head).
+// table offset), part B = base+6 (:01f0, H4[3] 96x57 shocked arm+head).
 // The next tick's inc lands on 20 → the base+0/base+3 window pair (the
 // animated tail).  Engine QoL: the shocked pair holds 3 ticks with the
 // counter FROZEN at 19 so the tail still plays after the hold (hold=1

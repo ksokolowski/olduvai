@@ -374,7 +374,7 @@ TEST_CASE("L6 Giant: 240-frame fight matches the reference") {
 // x=0xd0=208 = tbl[c-16]+base+3 (:00de-:00e6); tbl = DS:0x1fe4 {0,1,2,1,0}
 // (raw EXE bytes at file 0x21974: 00 00 01 00 02 00 01 00 00 00).
 // Hit reaction (:01c9-0201): SHOCKED PAIR — part A = base+0 (:01d1, H1
-// body, NO table offset), part B = base+6 (:01f0, H4[3] 96×57 strip).
+// body, NO table offset), part B = base+6 (:01f0, H4[3] 96x57 strip).
 
 TEST_CASE("L6 giant: swing window pairs both parts on the same table value") {
     L6BossState boss;

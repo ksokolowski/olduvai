@@ -28,7 +28,7 @@
 namespace olduvai::enhance {
 
 // The native-coordinate layout shared by the bar pass and the text pass.
-// All coordinates are NATIVE (320×200 design space); each pass scales them by
+// All coordinates are NATIVE (320x200 design space); each pass scales them by
 // its own target factor.  `baseline` y values are text baselines.
 struct EnhancedHudLayout {
     struct TextItem {
@@ -64,7 +64,7 @@ void draw_enhanced_hud_bars(std::vector<std::uint8_t>& rgba, int buf_w,
                             int x_off_native = 0);
 
 // Draw the vector TEXT of the layout into an output-resolution RGBA overlay
-// (out_w × out_h).  Native x is multiplied by out_w/320, native baseline_y by
+// (out_w x out_h).  Native x is multiplied by out_w/320, native baseline_y by
 // out_h/200.  `text` must already be sized to the output cap height by the
 // caller (TextOverlay::begin → HdText::set_cap_px).
 void draw_enhanced_hud_text(std::vector<std::uint8_t>& rgba, int out_w,

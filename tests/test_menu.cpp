@@ -5,7 +5,7 @@
 // data/menus.json loader is Phase-3 wiring) and exercises the state machine.
 
 #include "doctest/doctest.h"
-#include "presentation/menu.hpp"
+#include "presentation/menu/menu.hpp"
 
 #include <map>
 #include <string>

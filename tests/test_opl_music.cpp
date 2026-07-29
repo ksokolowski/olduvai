@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "formats/mdi.hpp"
-#include "presentation/opl_music.hpp"
+#include "presentation/audio/opl_music.hpp"
 
 using olduvai::formats::MdiEventStream;
 using olduvai::formats::MdiStreamEvent;
@@ -27,7 +27,7 @@ void push_u32(std::vector<std::uint8_t>& v, std::uint32_t x) {
     v.push_back(static_cast<std::uint8_t>(x));
 }
 
-// A type-0x0001 timbre payload: mfr id, type, channel, 2×13-byte operator
+// A type-0x0001 timbre payload: mfr id, type, channel, 2x13-byte operator
 // blocks, 2 waveform bytes (34 bytes total).
 std::vector<std::uint8_t> timbre_payload(std::uint8_t channel) {
     std::vector<std::uint8_t> p = {0x00, 0x00, 0x3B, 0x00, 0x01, channel};

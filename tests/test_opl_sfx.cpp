@@ -12,7 +12,7 @@
 
 #include "doctest/doctest.h"
 #include "prepare/exe_tables.hpp"
-#include "presentation/opl_sfx.hpp"
+#include "presentation/audio/opl_sfx.hpp"
 
 using namespace olduvai::presentation;
 

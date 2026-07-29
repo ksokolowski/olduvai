@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "doctest/doctest.h"
-#include "presentation/midi_seq.hpp"
+#include "presentation/audio/midi_seq.hpp"
 
 using olduvai::presentation::MidiSequencer;
 

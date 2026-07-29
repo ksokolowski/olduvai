@@ -1,94 +1,76 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// menus.json loader — nested-JSON parser + MenuModel mapping, and a parity
-// check that olduvai parses the SAME data/menus.json the Python tests validate
-// (completes the cross-engine id-parity plan, Task 2.3).
+// The menu model is GENERATED from assets/data/menus.json at build time by
+// cmake/gen_menu_model.cmake, so the questions worth asking here changed.
+//
+// Gone: the parser tests (malformed JSON, unterminated input, a 100k-deep '['
+// nest, 1e999999).  There is no runtime parser left to harden — a malformed
+// menus.json now fails the build, and none of those inputs can reach a user.
+//
+// Kept: that the SHIPPED menus.json produces the model the engine expects.
+// That is about the content, not the transport, and it survives the change
+// intact — including the screen set, which is what caught the stale entries
+// when the enhanced-mode toggles were removed.
 
 #include "doctest/doctest.h"
-#include "presentation/menu_model.hpp"
+#include "presentation/menu/menu_model.hpp"
 
 #include <set>
 #include <string>
+#include <vector>
 
 using namespace olduvai::presentation;
 
-#ifndef OLDUVAI_SOURCE_DIR
-#define OLDUVAI_SOURCE_DIR "."
-#endif
-
-TEST_CASE("parse_menus_json: nested objects/arrays/types map to MenuModel") {
-    const std::string text = R"({
-      "version": 1,
-      "screens": {
-        "main": {
-          "header": "OLDUVAI",
-          "items": [
-            { "id": "start", "type": "action", "label": "Start", "action": "start_game" },
-            { "id": "opts", "type": "submenu", "label": "Options", "target": "options", "hint": "4" }
-          ]
-        },
-        "options": {
-          "header": "OPTIONS",
-          "items": [
-            { "id": "dev", "type": "choice", "label": "Device", "key": "d", "values": ["mt32", "off"] },
-            { "id": "scale", "type": "choice", "label": "Scale", "key": "s", "values": [1, 2, 4], "restart": true },
-            { "id": "vol", "type": "slider", "label": "Vol", "key": "v", "min": 0, "max": 100, "step": 5 },
-            { "id": "back", "type": "back", "label": "Back" }
-          ]
-        }
-      }
-    })";
-
-    const MenuModel m = parse_menus_json(text);
-    CHECK(m.screens.size() == 2);
-    CHECK(m.screens.at("main").header == "OLDUVAI");
-
-    const auto& items = m.screens.at("main").items;
-    CHECK(items[0].type == "action");
-    CHECK(items[0].action == "start_game");
-    CHECK(items[1].type == "submenu");
-    CHECK(items[1].target == "options");
-    CHECK(items[1].hint == "4");
-
-    const auto& opt = m.screens.at("options").items;
-    CHECK(opt[0].values == std::vector<std::string>{"mt32", "off"});
-    CHECK(opt[1].values == std::vector<std::string>{"1", "2", "4"});  // numbers → tokens
-    CHECK(opt[1].restart == true);
-    CHECK(opt[2].type == "slider");
-    CHECK(opt[2].min == 0.0);
-    CHECK(opt[2].max == 100.0);
-    CHECK(opt[2].step == 5.0);
-}
-
-TEST_CASE("parse_menus_json: malformed input throws") {
-    CHECK_THROWS(parse_menus_json("{ \"screens\": "));
-    CHECK_THROWS(parse_menus_json("not json"));
-}
-
-TEST_CASE("load_menus: olduvai parses the canonical data/menus.json (parity)") {
-    auto model = load_menus(std::string(OLDUVAI_SOURCE_DIR) + "/assets/data/menus.json");
-    REQUIRE(model.has_value());
+TEST_CASE("built_in_menu_model: the shipped menus.json yields the expected screens") {
+    const MenuModel m = built_in_menu_model();
 
     std::set<std::string> ids;
-    for (const auto& [sid, _] : model->screens) ids.insert(sid);
+    for (const auto& [sid, _] : m.screens) ids.insert(sid);
 
     const std::set<std::string> expected = {
-        "main", "options", "audio", "video", "enhancements",
-        "cave_paintings", "cheats", "cheat_bonus", "pause",
-        "pause_boss", "dev", "bug_report"};
+        "main", "options", "audio", "video", "cheats", "cheat_bonus",
+        "pause", "pause_boss", "dev", "bug_report"};
     CHECK(ids == expected);
-    CHECK(model->screens.at("main").header == "OLDUVAI");
-    // Spot-check a known binding survived the round-trip.
-    bool found_god = false;
-    for (const auto& it : model->screens.at("cheats").items)
-        if (it.id == "god") { CHECK(it.type == "toggle"); CHECK(it.key == "cheat.god"); found_god = true; }
-    CHECK(found_god);
+    CHECK(m.screens.at("main").header == "OLDUVAI");
 }
 
-TEST_CASE("parse_menus_json: pathological inputs fail cleanly") {
-    // Depth cap — ~100k '[' must throw the parser's own error, not blow the
-    // stack (no catch can survive stack exhaustion).
-    CHECK_THROWS(parse_menus_json(std::string(100000, '[')));
-    // Out-of-range number literal → parser error, not a stray out_of_range.
-    CHECK_THROWS(parse_menus_json("{\"a\": 1e999999}"));
+TEST_CASE("built_in_menu_model: bindings survive generation") {
+    const MenuModel m = built_in_menu_model();
+
+    // A toggle with its config key.
+    bool found_god = false;
+    for (const auto& it : m.screens.at("cheats").items) {
+        if (it.id == "god") {
+            CHECK(it.type == "toggle");
+            CHECK(it.key == "cheat.god");
+            found_god = true;
+        }
+    }
+    CHECK(found_god);
+
+    // A choice whose JSON values are NUMBERS.  They must arrive as the same
+    // integer tokens the old parser produced through num_token(), because the
+    // config layer compares them as strings — this is the one place the
+    // generator had to reproduce a conversion rather than copy text.
+    bool found_scale = false;
+    for (const auto& it : m.screens.at("video").items) {
+        if (it.id == "render_scale") {
+            CHECK(it.values == std::vector<std::string>{"2", "4"});
+            CHECK(it.restart);
+            found_scale = true;
+        }
+    }
+    CHECK(found_scale);
+
+    // A slider carries its numeric bounds.
+    bool found_vol = false;
+    for (const auto& it : m.screens.at("audio").items) {
+        if (it.id == "music_volume") {
+            CHECK(it.min == doctest::Approx(0.0));
+            CHECK(it.max == doctest::Approx(100.0));
+            CHECK(it.step == doctest::Approx(5.0));
+            found_vol = true;
+        }
+    }
+    CHECK(found_vol);
 }

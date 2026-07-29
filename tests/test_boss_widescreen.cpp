@@ -4,8 +4,8 @@
 // and compose_widescreen reflect_pure invariants (Task 6).
 // Compiles boss_widescreen.cpp + widescreen.cpp directly; links SDL-free.
 
-#include "presentation/boss_widescreen.hpp"
-#include "presentation/widescreen.hpp"
+#include "presentation/render/boss_widescreen.hpp"
+#include "presentation/render/widescreen.hpp"
 
 #include <cstdio>
 

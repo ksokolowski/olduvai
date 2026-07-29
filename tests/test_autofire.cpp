@@ -8,7 +8,7 @@
 #include <string>
 
 #include "doctest/doctest.h"
-#include "presentation/autofire.hpp"
+#include "presentation/input/autofire.hpp"
 #include "systems/player.hpp"
 
 using namespace olduvai;

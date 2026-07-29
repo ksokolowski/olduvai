@@ -46,7 +46,7 @@ public:
 // the old behaviour.  Every reader below detects the layout itself, so
 // callers pass exe bytes exactly as before.
 struct ExeLayout {
-    std::size_t header_size = 0x2000;  // MZ header bytes (e_cparhdr × 16)
+    std::size_t header_size = 0x2000;  // MZ header bytes (e_cparhdr x 16)
     std::int32_t ds_delta = 0;         // shift applied to canonical offsets
     const char* variant = "canonical"; // for prepare-time logging
 };

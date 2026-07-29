@@ -18,10 +18,6 @@ struct CliArgs {
     std::filesystem::path game_dir = ".";
     bool viewer = false;
     bool play = false;
-    bool do_prepare = false;
-    bool do_decode_sfx = false;
-    bool do_verify_cache = false;
-    bool do_purge_cache = false;
     bool do_list_midi_ports = false;
     int play_level = -1;
     std::string play_midi_port;

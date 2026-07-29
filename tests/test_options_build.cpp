@@ -33,17 +33,32 @@ TEST_CASE("options_build: defaults produce a valid GameOptions") {
     CHECK(bool(go.persist));   // the persist closure is wired
 }
 
-TEST_CASE("options_build: an --enhance subset turns on the umbrella + flags") {
+// --enhanced is all-or-nothing now.  A legacy list no longer selects
+// features; it only says "this user wanted enhanced mode".  That rule is what
+// keeps a play.json written by the old Options menu — which persisted subsets
+// as enhanced=false PLUS a granular list — from silently booting into DOS.
+TEST_CASE("options_build: a legacy --enhance list means enhanced, not a subset") {
     CliArgs a;
     PlaySettings s;
     s.enhance_list = "hud-overlay, fluid-bubbles";
     GameOptions go;
     const BuildOutcome bo = build_game_options(a, s, go);
     REQUIRE(bo.ok);
-    CHECK(go.enhanced == true);            // any feature => HD substrate on
-    CHECK(go.enhance.hud_overlay == true);
-    CHECK(go.enhance.fluid_bubbles == true);
-    CHECK(go.enhance.smooth_motion == false);
+    CHECK(go.enhanced == true);
+    // smooth_motion follows the umbrella; it is derived, not listed.
+    CHECK(go.enhance.smooth_motion == true);
+}
+
+TEST_CASE("options_build: enhanced=false plus a legacy list still means enhanced") {
+    CliArgs a;
+    PlaySettings s;
+    s.enhanced = false;                  // exactly what the old menu persisted
+    s.enhance_list = "hd-text,smooth-motion";
+    s.enhance_list_from_config = true;
+    GameOptions go;
+    const BuildOutcome bo = build_game_options(a, s, go);
+    REQUIRE(bo.ok);
+    CHECK(go.enhanced == true);
 }
 
 TEST_CASE("options_build: unknown --enhance feature is exit 2") {
@@ -58,6 +73,28 @@ TEST_CASE("options_build: unknown --enhance feature is exit 2") {
           "olduvai: unknown --enhance feature 'bogus-feature'.  Known: "
           "smooth-motion, cinematic-cue, hud-overlay, fluid-bubbles, "
           "secret-slide, descent-pan, hd-text\n");
+}
+
+// The SAME unknown name must not be fatal when it arrived from play.json.
+// The Options menu writes that key itself, so a token this build no longer
+// knows is the program's own doing, not a typo — rejecting it would leave the
+// user with a game that will not start, quoting a flag they never typed.
+TEST_CASE("options_build: unknown enhance feature FROM CONFIG warns, not exits") {
+    CliArgs a;
+    PlaySettings s;
+    s.enhance_list = "hud-overlay,bogus-feature";
+    s.enhance_list_from_config = true;
+    GameOptions go;
+    const BuildOutcome bo = build_game_options(a, s, go);
+    CHECK(bo.ok);
+    CHECK(bo.exit_code == 0);
+    CHECK(bo.error.empty());
+    REQUIRE(bo.warnings.size() >= 1);
+    CHECK(bo.warnings.back() ==
+          "olduvai: ignoring unknown enhance feature 'bogus-feature' "
+          "from the config file\n");
+    // The recognised name still counts as "wanted enhanced".
+    CHECK(go.enhanced);
 }
 
 TEST_CASE("options_build: tuning-flag typos are each exit 2") {
@@ -132,6 +169,11 @@ TEST_CASE("options_build: --trace forces classic and warns when smooth was on") 
     REQUIRE(bo.warnings.size() == 1);
     CHECK(bo.warnings[0].find("--trace") != std::string::npos);
     CHECK(bo.warnings[0].find("classic") != std::string::npos);
+    // The MODE must change, not just the flag.  smooth_motion is derived from
+    // `enhanced`, and a re-init re-derives it — if --trace only cleared the
+    // flag, a Style change mid-trace would switch smooth motion back on and
+    // the frame count would stop being deterministic.
+    CHECK(go.transitions == "classic");
 }
 
 TEST_CASE("options_build: widescreen without the HD substrate warns, not fails") {

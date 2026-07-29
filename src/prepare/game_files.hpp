@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Game-file detection and checksumming for the prepare pipeline.
+// Game-file detection and checksumming.
 //
 // Locates the five required Prehistorik files in a game directory
 // (case-insensitively — DOS media is often upper-case, extracted copies
-// often lower), checksums each with FNV-1a/64, and folds the per-file
-// digests plus the pipeline version into one stable cache key.  The key is
-// the directory name of the stage-1 prepare bucket, so any byte change in
-// any game file (or a pipeline-version bump) yields a fresh bucket.
+// often lower) and checksums each with FNV-1a/64.
 
 #pragma once
 
@@ -18,8 +15,16 @@
 
 namespace olduvai::prepare {
 
-// The required game files, in the order they fold into the combined key.
-// (Order is fixed so the key is stable across runs/platforms.)
+// Whole-file byte reader: the file's bytes, or an empty vector if it cannot
+// be opened.  (A missing file and an empty file are indistinguishable here —
+// callers that care test for existence separately.)
+//
+// Exported from prepare/ rather than any higher layer because prepare is the
+// lowest layer every caller may legally include, and because its absence is
+// why the engine had accumulated nine private copies of these four lines.
+std::vector<std::uint8_t> slurp_file(const std::filesystem::path& p);
+
+// The required game files, in a fixed order.
 const std::vector<std::string>& required_game_files();
 
 struct GameFileInfo {
@@ -43,10 +48,6 @@ struct GameFiles {
     // Empty when complete() is true.
     std::string problems() const;
 
-    // Combined cache key: hex of an FNV-1a/64 fold over the pipeline version
-    // and each file's checksum.  Only meaningful when complete(); returns ""
-    // otherwise (a partial fileset must never produce a usable key).
-    std::string cache_key() const;
 };
 
 // Detect + checksum the required files in `game_dir`.  Files that are absent

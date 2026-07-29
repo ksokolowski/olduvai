@@ -8,31 +8,30 @@
 #include <cstdlib>
 #include <filesystem>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "config.hpp"
 #include "options_resolve.hpp"
 #include "cli_args.hpp"
+#include "legacy_cache.hpp"
 #include "options_build.hpp"
 #ifdef OLDUVAI_HAVE_SDL
 #include "first_run.hpp"
 #endif
 #include "enhance/upscale.hpp"
-#include "prepare/cache_paths.hpp"
 #include "prepare/game_files.hpp"
-#include "prepare/prepare.hpp"
 #include "formats/cur.hpp"
 #include "formats/voc.hpp"
-#include "presentation/hd_sfx.hpp"
-#include "presentation/wav_io.hpp"
+#include "presentation/audio/wav_io.hpp"
 
 #ifdef OLDUVAI_HAVE_SDL
-#include "presentation/bug_capture.hpp"
-#include "presentation/audio.hpp"
+#include "presentation/diag/bug_capture.hpp"
+#include "presentation/audio/audio.hpp"
 #include "presentation/game_app.hpp"
-#include "presentation/host_midi.hpp"
-#include "presentation/viewer.hpp"
+#include "presentation/audio/host_midi.hpp"
+#include "presentation/diag/viewer.hpp"
 #endif
 
 namespace fs = std::filesystem;
@@ -57,6 +56,8 @@ void print_usage() {
         "\n"
         "General:\n"
         "  -h, --help              Show this help and exit.\n"
+        "      --mt32-model M      MT-32 ROM set: auto|cm32l|mt32 (default auto:\n"
+        "                          CM-32L when its ROMs are present).\n"
         "      --version           Print version and exit.\n"
         "      --game-dir <dir>    Directory with the game files (default: \".\",\n"
         "                          then the machine's GOG install if present).\n"
@@ -67,17 +68,6 @@ void print_usage() {
         "                          8 = win ending.  Default: the intro/title;\n"
         "                          an explicit level jumps straight in.\n"
         "\n"
-        "Cache (first-run prepare-and-cache pipeline):\n"
-        "      --prepare           Build the local cache for the detected game\n"
-        "                          files, then exit.  No game files are copied —\n"
-        "                          only checksums + decoded data live in the cache.\n"
-        "      --verify-cache      Report whether the cache is present/valid/stale\n"
-        "                          for the detected game files, then exit.\n"
-        "      --purge-cache       Delete the entire local cache, then exit.\n"
-        "                          The engine re-prepares on the next run.\n"
-        "      --decode-sfx        Decode the sound-effect samples to WAV files\n"
-        "                          in the cache (hd_sfx_src/) for the optional\n"
-        "                          HD SFX bake (scripts/bake_hd_sfx.py), then exit.\n"
         "\n"
         "Display:\n"
         "  -f, --fullscreen        Start in desktop-fullscreen (Alt+Enter toggles).\n"
@@ -129,15 +119,15 @@ void print_usage() {
         "                          (default: 2048).\n"
         "\n"
         "Enhanced / HD:\n"
-        "      --enhanced          Enable the full enhanced-feature bundle.\n"
-        "      --enhance <list>    Enable a comma-separated feature subset. Known:\n"
-        "                          smooth-motion, cinematic-cue, hud-overlay,\n"
-        "                          fluid-bubbles, secret-slide, descent-pan, hd-text.\n"
+        "      --enhanced          Enable enhanced mode (all effects).\n"
+        "      --enhance <list>    Deprecated: the per-feature names no longer\n"
+        "                          select a subset.  Any listed name simply\n"
+        "                          turns enhanced mode on.\n"
         "      --hd-profile <p>    HD upscaler profile: native|retro|smooth|\n"
         "                          eagle|xbr|mmpx|omniscale (default: omniscale).\n"
         "      --render-scale <n>  Integer render scale: 2 or 4 (default: 4).\n"
         "      --hd-font <f>       HD vector text face: freckle|noto\n"
-        "                          (default: freckle).  Needs hd-text + HD.\n"
+        "                          (default: freckle).  Needs enhanced mode.\n"
         "      --banner-fx <e>     Enhanced banner colour effect: caveman|fire|\n"
         "                          rainbow|gold|pulse (default: caveman).\n"
         "      --window <WxH>      Force window pixel size, e.g. 1680x720 (~21:9)\n"
@@ -148,11 +138,11 @@ void print_usage() {
         "                          level's screen count.\n"
         "\n"
         "Config:\n"
-        "      --profile <name>    Built-in profile: dos|hd|hd-43.  Overrides the\n"
+        "      --profile <name>    Built-in profile: dos|hd.  Overrides the\n"
         "                          saved config (CLI flags still win): dos =\n"
         "                          byte-faithful; hd = full enhanced +\n"
-        "                          widescreen peeks; hd-43 = full enhanced at\n"
-        "                          the CRT 4:3 look.\n"
+        "                          widescreen peeks (add --aspect 4:3 for the\n"
+        "                          classic CRT look).\n"
         "      --no-config         Ignore the saved config file for this run.\n"
         "      --save-config       Persist the effective CLI settings to the config\n"
         "                          file, then continue.\n"
@@ -183,6 +173,10 @@ void print_usage() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // One-shot migration: earlier versions left a cache directory behind that
+    // nothing reads any more (see legacy_cache.hpp).  Silent and best-effort.
+    olduvai::app::remove_legacy_cache_dir();
+
     olduvai::app::CliArgs args;
     olduvai::app::PlaySettings ps;
     {
@@ -200,8 +194,12 @@ int main(int argc, char** argv) {
     // the no-mode detection report would print to nowhere and the app
     // would appear to do nothing.  With no mode requested, default to
     // playing — the whole point of double-clicking the app.
-    if (!args.play && !args.viewer && !args.do_prepare && !args.do_decode_sfx &&
-        !args.do_verify_cache && !args.do_purge_cache && !args.do_list_midi_ports &&
+    // INVARIANT: every standalone verb must be listed here.  launched_from_gui
+    // is isatty(stdin)==0 && isatty(stderr)==0, not Finder detection — so a
+    // verb missing from this list silently becomes --play in any piped, CI or
+    // redirected shell.  A removed flag is a compile error; a FORGOTTEN one is
+    // a hang.
+    if (!args.play && !args.viewer && !args.do_list_midi_ports &&
         olduvai::app::launched_from_gui()) {
         args.play = true;
     }
@@ -274,7 +272,8 @@ int main(int argc, char** argv) {
         const int rate = (ps.audio_rate >= 8000) ? ps.audio_rate : 44100;
         olduvai::presentation::SdlAudio audio(
             ps.music_device, ps.rom_dir, ps.soundfont, ps.sfx_backend, rate, 0,
-            "", /*offline=*/true);
+            "", /*offline=*/true,
+            ps.mt32_model.empty() ? "auto" : ps.mt32_model);
         if (!audio.music_available()) {
             std::fprintf(stderr,
                 "render-audio: no synth backend for '%s' — SKIP "
@@ -305,7 +304,7 @@ int main(int argc, char** argv) {
 #endif
 
     // ── MIDI port enumeration ────────────────────────────────────────────
-    // Standalone command (like --verify-cache): list the host MIDI OUT ports
+    // Standalone command: list the host MIDI OUT ports
     // the --music-device host-midi path can target, then exit.  Needs no game
     // files.  When this build has no RtMidi (Linux without ALSA, or the option
     // off), report the feature as unavailable rather than crashing.
@@ -366,127 +365,8 @@ int main(int argc, char** argv) {
     // These run without launching the game (and exit when done).  Purge needs
     // no game files; prepare/verify detect+checksum the fileset themselves so
     // they can report missing/zero-byte files with a clear message.
-    if (args.do_purge_cache) {
-        const std::string root = olduvai::prepare::cache_root().string();
-        if (olduvai::prepare::purge_cache()) {
-            std::printf("Purged cache at %s\n", root.c_str());
-            return 0;
-        }
-        std::fprintf(stderr, "olduvai: failed to purge cache at %s\n",
-                     root.c_str());
-        return 1;
-    }
 
-    if (args.do_decode_sfx) {
-        // Decode the game's digital sound effects to WAV in the user's cache
-        // (hd_sfx_src/<digest>.wav) so the optional offline HD SFX bake
-        // (scripts/bake_hd_sfx.py) can enhance them into hd_sfx/.  Decoded
-        // data derived from the user's own files, in the user's cache.
-        namespace fs2 = std::filesystem;
-        const auto slurp = [](const fs2::path& p) {
-            std::vector<std::uint8_t> d;
-            std::FILE* f = std::fopen(p.string().c_str(), "rb");
-            if (f == nullptr) return d;
-            std::uint8_t buf[65536];
-            std::size_t got;
-            while ((got = std::fread(buf, 1, sizeof(buf), f)) > 0)
-                d.insert(d.end(), buf, buf + got);
-            std::fclose(f);
-            return d;
-        };
-        const fs2::path out_dir = olduvai::presentation::hd_sfx_src_dir();
-        if (!olduvai::prepare::ensure_cache_dir(out_dir)) {
-            std::fprintf(stderr, "olduvai: cannot create %s\n",
-                         out_dir.string().c_str());
-            return 1;
-        }
-        int exported = 0;
-        for (const char* archive :
-             {"FILESA.CUR", "FILESB.CUR", "FILESA.VGA", "FILESB.VGA"}) {
-            const auto bytes = slurp(args.game_dir / archive);
-            if (bytes.empty()) continue;
-            try {
-                const olduvai::formats::CurArchive ar(bytes);
-                for (const auto& entry : ar.entries()) {
-                    if (entry.name.size() < 4 ||
-                        entry.name.substr(entry.name.size() - 4) != ".VOC") {
-                        continue;
-                    }
-                    const auto voc = olduvai::formats::parse_voc(entry.data);
-                    const auto* audio = voc.audio();
-                    if (audio == nullptr || audio->data.empty() ||
-                        audio->sample_rate <= 0) {
-                        continue;
-                    }
-                    std::vector<std::int16_t> pcm(audio->data.size());
-                    for (std::size_t i = 0; i < pcm.size(); ++i) {
-                        pcm[i] = static_cast<std::int16_t>(
-                            (audio->data[i] - 128) << 8);
-                    }
-                    const fs2::path out =
-                        out_dir / (olduvai::presentation::sfx_digest_hex(
-                                       audio->data) +
-                                   ".wav");
-                    if (olduvai::presentation::write_wav16(
-                            out, pcm, audio->sample_rate, 1)) {
-                        std::printf("decoded %-12s -> %s\n",
-                                    entry.name.c_str(),
-                                    out.string().c_str());
-                        ++exported;
-                    }
-                }
-            } catch (const std::exception&) {
-                continue;   // unreadable archive: the play path reports it
-            }
-        }
-        if (exported == 0) {
-            std::fprintf(stderr,
-                         "olduvai: no sound-effect samples found in %s\n",
-                         args.game_dir.string().c_str());
-            return 1;
-        }
-        std::printf(
-            "Decoded %d sample(s).  Optional next step:\n"
-            "  python3 scripts/bake_hd_sfx.py   (writes the enhanced set to "
-            "hd_sfx/)\n",
-            exported);
-        return 0;
-    }
 
-    if (args.do_verify_cache || args.do_prepare) {
-        const olduvai::prepare::GameFiles gf =
-            olduvai::prepare::detect_game_files(args.game_dir);
-        if (!gf.complete()) {
-            std::fprintf(stderr,
-                "olduvai: cannot %s — game files incomplete in %s:\n%s",
-                args.do_prepare ? "prepare cache" : "verify cache",
-                args.game_dir.string().c_str(), gf.problems().c_str());
-            return 1;
-        }
-        if (args.do_verify_cache) {
-            const olduvai::prepare::CacheStatus st =
-                olduvai::prepare::inspect_cache(gf);
-            const char* word = "missing";
-            int rc = 1;
-            switch (st.state) {
-                case olduvai::prepare::CacheState::kValid:
-                    word = "valid"; rc = 0; break;
-                case olduvai::prepare::CacheState::kStale:
-                    word = "stale"; rc = 1; break;
-                case olduvai::prepare::CacheState::kMissing:
-                    word = "missing"; rc = 1; break;
-                case olduvai::prepare::CacheState::kNoFiles:
-                    word = "no-files"; rc = 1; break;
-            }
-            std::printf("Cache: %s\n", word);
-            std::printf("  key:    %s\n", st.key.c_str());
-            std::printf("  bucket: %s\n", st.bucket.string().c_str());
-            std::printf("  %s\n", st.message.c_str());
-            return rc;
-        }
-        // do_prepare: force a (re)build.
-        return olduvai::prepare::run_prepare(gf, /*verbose=*/true) ? 0 : 1;
-    }
 
     // Detection accepts PREH.SQZ in place of HISTORIK.EXE (GOG / CD
     // releases) — the manual per-name loop would wrongly report those
@@ -558,17 +438,6 @@ int main(int argc, char** argv) {
                         "time).\n");
         }
 
-        // First-run UX: make sure the local cache is prepared for these game
-        // files before the window opens.  On a hit this is silent; on a miss
-        // or key-mismatch it prints "Preparing game data…" and (re)builds.
-        // A prepare failure is non-fatal (the engine decodes on the fly) —
-        // it just means stage-2 HD persistence can't be keyed yet.
-        {
-            const olduvai::prepare::GameFiles gf =
-                olduvai::prepare::detect_game_files(args.game_dir);
-            olduvai::prepare::ensure_prepared(gf);
-        }
-
         // Validate + assemble the GameOptions (app/options_build.cpp): the
         // --enhance parse, the six tuning-flag validations, the cross-field
         // derivations, and the field-by-field copy — the untested other half
@@ -584,7 +453,27 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "%s", bo.error.c_str());
             return bo.exit_code;
         }
-        return olduvai::presentation::run_game(go);
+        // Any decoder can throw on a corrupt or truncated game file
+        // (CurError, LzssError, Pc1Error, DurError, SqzError, ExeTableError —
+        // all std::runtime_error).  load_level catches its own, but the audio
+        // and asset paths do not, so a truncated archive reached std::terminate
+        // and the user saw only "libc++abi: terminating due to uncaught
+        // exception".  The decoders' own messages are good ("archive
+        // truncated: data for entry BONUS.VOC") — they just needed to reach
+        // stderr instead of an abort.  Catch here, at the boundary, rather
+        // than threading error returns through every asset call.
+        try {
+            return olduvai::presentation::run_game(go);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr,
+                         "olduvai: cannot read the game files in %s\n"
+                         "  %s\n"
+                         "The file is present but its contents are not "
+                         "readable — most likely truncated or corrupt.\n"
+                         "Re-copy it from your original media or reinstall.\n",
+                         args.game_dir.string().c_str(), e.what());
+            return 1;
+        }
 #else
         std::printf("This build has no presentation layer (SDL2 missing).\n");
         return 1;

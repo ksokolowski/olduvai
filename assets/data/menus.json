@@ -23,10 +23,9 @@
     "options": {
       "header": "OPTIONS",
       "items": [
-        { "id": "preset", "type": "choice", "label": "Style", "key": "preset", "values": ["dos", "hd", "hd-43"], "value_labels": ["Classic DOS", "Enhanced HD", "Enhanced 4:3"] },
+        { "id": "preset", "type": "choice", "label": "Style", "key": "preset", "values": ["dos", "hd"], "value_labels": ["Classic DOS", "Enhanced HD"] },
         { "id": "audio", "type": "submenu", "label": "Audio", "target": "audio" },
         { "id": "video", "type": "submenu", "label": "Video", "target": "video" },
-        { "id": "enhancements", "type": "submenu", "label": "Enhancements", "target": "enhancements" },
         { "id": "back", "type": "back", "label": "Back" }
       ]
     },
@@ -47,28 +46,6 @@
         { "id": "aspect", "type": "choice", "label": "Aspect", "key": "aspect", "values": ["keep","4:3","stretch"], "value_labels": ["Keep","4:3","Stretch"], "hint": "live" },
         { "id": "render_scale", "type": "choice", "label": "Render scale", "key": "render_scale", "values": [2, 4], "restart": true, "hint": "applies now" },
         { "id": "fullscreen", "type": "toggle", "label": "Fullscreen", "key": "fullscreen" },
-        { "id": "back", "type": "back", "label": "Back" }
-      ]
-    },
-    "enhancements": {
-      "header": "ENHANCEMENTS",
-      "items": [
-        { "id": "all_effects", "type": "action", "label": "All effects", "action": "enhance_all", "hint": "set / clear" },
-        { "id": "smooth_motion", "type": "toggle", "label": "Smooth motion", "key": "enhance.smooth_motion" },
-        { "id": "hd_text", "type": "toggle", "label": "HD text", "key": "enhance.hd_text" },
-        { "id": "hud_overlay", "type": "toggle", "label": "HUD overlay", "key": "enhance.hud_overlay" },
-        { "id": "cave_paintings", "type": "submenu", "label": "Cave Paintings", "target": "cave_paintings", "hint": "4 details" },
-        { "id": "back", "type": "back", "label": "Back" }
-      ]
-    },
-    "cave_paintings": {
-      "header": "CAVE PAINTINGS",
-      "items": [
-        { "id": "all", "type": "action", "label": "All", "action": "cave_paintings_all", "hint": "set / clear" },
-        { "id": "cinematic_cue", "type": "toggle", "label": "Cinematic cue", "key": "enhance.cinematic_cue" },
-        { "id": "fluid_bubbles", "type": "toggle", "label": "Fluid bubbles", "key": "enhance.fluid_bubbles" },
-        { "id": "secret_slide", "type": "toggle", "label": "Secret slide", "key": "enhance.secret_slide" },
-        { "id": "descent_pan", "type": "toggle", "label": "Descent pan", "key": "enhance.descent_pan" },
         { "id": "back", "type": "back", "label": "Back" }
       ]
     },

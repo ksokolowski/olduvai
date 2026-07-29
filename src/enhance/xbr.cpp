@@ -5,7 +5,7 @@
 #include <cstdlib>
 #include <cstddef>
 
-// xBR-style 2× scaler, 9-pixel-neighbourhood variant — port of the reference
+// xBR-style 2x scaler, 9-pixel-neighbourhood variant — port of the reference
 // engine's edge-detection upscaler.  For each source pixel E with cardinal
 // neighbours B (N), D (W), F (E), H (S), each output corner is a 50/50 blend
 // of the two flanking neighbours when they are perceptually similar to each
@@ -13,7 +13,7 @@
 // turns hard pixel-art diagonals into anti-aliased ramps while keeping the
 // pixel-art look (not the over-soft bilinear blur).
 //
-// Similarity uses ITU-R BT.601 luma distance (299/587/114 × 1000) matching
+// Similarity uses ITU-R BT.601 luma distance (299/587/114 x 1000) matching
 // Hyllian's reference xBR; on RGBA we treat all four channels' luma.
 
 namespace olduvai::enhance {

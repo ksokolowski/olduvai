@@ -8,7 +8,7 @@
 #include "enhance/hd_asset_cache.hpp"
 #include "formats/cur.hpp"
 #include "formats/mat.hpp"
-#include "presentation/game_render.hpp"
+#include "presentation/render/game_render.hpp"
 #include "systems/fluid_bubbles.hpp"
 #include "systems/player.hpp"
 #include "systems/secret.hpp"

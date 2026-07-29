@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 // DUR tile-collision table.
 //
-// Exactly 960 bytes: 40 entries × 24 bytes (entries 0-19 = surface tile
+// Exactly 960 bytes: 40 entries x 24 bytes (entries 0-19 = surface tile
 // types, 20-39 = cave tile types).  Each entry holds up to 4 horizontal
 // collision segments of {INT16LE dx, INT16LE dy, UINT16LE width};
 // a dx of -1 terminates the list.  An all-zero (0,0,0) triple is a

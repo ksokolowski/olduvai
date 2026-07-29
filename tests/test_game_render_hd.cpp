@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include <doctest/doctest.h>
 
-#include "presentation/game_render.hpp"
+#include "presentation/render/game_render.hpp"
 #include "systems/player.hpp"
 
 #include <cstdint>
@@ -17,7 +17,7 @@ using olduvai::formats::Sprite;
 using olduvai::formats::SpriteFormat;
 
 namespace {
-// Minimal synthetic sprite: 8×2 monochrome (set bit → opaque colour 15).
+// Minimal synthetic sprite: 8x2 monochrome (set bit → opaque colour 15).
 // Mono is the simplest decode path (1 byte/row, no 5-plane crafting).
 Sprite mono_sprite() {
     Sprite s;
@@ -245,7 +245,7 @@ TEST_CASE("HD RenderTarget blits an upscaled sprite at scaled coordinates") {
         static_cast<std::size_t>(320 * scale) * 200 * scale * 4, 0);
     RenderTarget t{hd.data(), 320 * scale, 200 * scale, scale, &cache, &prof};
     olduvai::presentation::blit_sprite(t, s, pal, 5, 7);
-    // Source pixel (0,0) is opaque → its 2× block lands at (5*2, 7*2)=(10,14)
+    // Source pixel (0,0) is opaque → its 2x block lands at (5*2, 7*2)=(10,14)
     // and stays opaque (alpha re-applied from the opaque source pixel).
     auto at = [&](int x, int y, int c) {
         return hd[(static_cast<std::size_t>(y) * t.w + x) * 4 + c];
@@ -254,7 +254,7 @@ TEST_CASE("HD RenderTarget blits an upscaled sprite at scaled coordinates") {
     // Smooth (omniscale) scaling anti-aliases sprite edges, so a transparent
     // source pixel ADJACENT to opaque colour (the gap at source (1,0), between
     // opaque x0 and x2) is now partially composited — the HD edge-smoothing
-    // fix.  The invariant that still holds: pixels well OUTSIDE the 8×2 sprite
+    // fix.  The invariant that still holds: pixels well OUTSIDE the 8x2 sprite
     // stay fully transparent.
     CHECK(at(10, 60, 3) == 0);    // far below the sprite
     CHECK(at(120, 14, 3) == 0);   // far right of the sprite

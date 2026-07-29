@@ -41,7 +41,7 @@ grep -q "widescreen" "${cfg}/olduvai/play.json" \
     || { echo "first_run: FAIL — HD preset not persisted"; exit 1; }
 
 # 3. Session adoption: the SAME run that answered "Enhanced HD" must render
-#    enhanced (scale 4 → 1280×800 main-menu shot), not just persist it for
+#    enhanced (scale 4 → 1280x800 main-menu shot), not just persist it for
 #    the next launch (the "chose Enhanced, got classic DOS" AppImage report).
 rm -rf "${cfg}/olduvai"
 shot=$(mktemp -u).png

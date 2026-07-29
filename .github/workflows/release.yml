@@ -15,26 +15,35 @@ permissions:
 jobs:
   linux:
     if: github.server_url == 'https://github.com'
-    runs-on: ubuntu-22.04   # oldest runner = lowest glibc floor for the AppImage
+    # The AppImage's glibc floor is whatever the BUILD ENVIRONMENT has, so it
+    # is pinned by a digest-locked CONTAINER, not by the runner label.  This
+    # used to be `runs-on: ubuntu-22.04` with the comment "oldest runner =
+    # lowest glibc floor" — true, but a promise resting on GitHub keeping a
+    # deprecated image alive: ubuntu-22.04 begins deprecation 2026-09-17,
+    # brownouts hard-fail jobs in March/April 2027, removed 2027-04-17.  The
+    # obvious repair then is bumping to ubuntu-24.04, which silently moves the
+    # floor 2.35 -> 2.39 and drops every Ubuntu 22.04 / Mint 21 user — a
+    # compatibility decision disguised as CI housekeeping.
+    #
+    # jammy in a container keeps TODAY'S floor byte-for-byte (glibc 2.35,
+    # cmake 3.22, SDL2 2.0.20) while the runner underneath
+    # stays supported.  Same pattern OpenRCT2 and Krita use for their
+    # AppImages.  build_appimage_linux.sh now ASSERTS the resulting floor, so
+    # this pin is checked rather than trusted.
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982
     steps:
       - uses: actions/checkout@v4
+      # No sudo: the container runs as root.  curl/ca-certificates/file are in
+      # the runner image but not in a bare jammy, and the packaging script
+      # needs all three.
       - name: Toolchain
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq cmake g++ make libsdl2-dev libasound2-dev \
-                                      libfluidsynth3 imagemagick file
-      - name: Build libmt32emu (MT-32 synth — not packaged in Ubuntu, so from source)
-        env:
-          MUNT_TAG: libmt32emu_2_8_3   # pin: bump tag deliberately (LGPL src pointer)
-        run: |
-          git clone --depth 1 --branch "$MUNT_TAG" https://github.com/munt/munt /tmp/munt
-          cmake -S /tmp/munt/mt32emu -B /tmp/mt32emu-build \
-                -DCMAKE_BUILD_TYPE=Release -Dlibmt32emu_SHARED=ON \
-                -DCMAKE_INSTALL_PREFIX=/usr
-          cmake --build /tmp/mt32emu-build -j"$(nproc)"
-          sudo cmake --install /tmp/mt32emu-build
-          sudo ldconfig
-          ldconfig -p | grep 'libmt32emu\.so\.2'   # fail loudly if it didn't land
+          apt-get update -qq
+          apt-get install -y -qq cmake g++ make libsdl2-dev libasound2-dev \
+                                 imagemagick file curl \
+                                 ca-certificates
       - name: Configure
         run: cmake --preset release
       - name: Build
@@ -44,11 +53,16 @@ jobs:
       - name: Package AppImage
         env:
           OLDUVAI_REQUIRE_FLUIDSYNTH: "1"   # release must bundle GM music
-          OLDUVAI_REQUIRE_MT32EMU: "1"      # release must bundle MT-32 (built above)
+          # No REQUIRE_MT32EMU: libmt32emu is vendored and compiled in now
+          # (third_party/mt32emu), so it cannot be missing from a build.
         run: |
           bash packaging/build_appimage_linux.sh
           ver=$(sed -n 's/^ *VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt | head -1)
           mv olduvai-x86_64.AppImage "olduvai-${ver}-linux-x86_64.AppImage"
+      - name: Smoke-run the artifact
+        run: |
+          art=$(ls olduvai-*-linux-x86_64.AppImage)
+          APPIMAGE_EXTRACT_AND_RUN=1 "./${art}" --version
       - name: Manifest (everything that ships inside)
         run: |
           art=$(ls olduvai-*-linux-x86_64.AppImage)
@@ -90,8 +104,16 @@ jobs:
       - name: Test
         shell: cmd
         run: ctest --preset release
+      # msvc-dev-cmd (above) already loaded the VS environment, so this
+      # must NOT call vcvars itself: the runner ships VS Enterprise, not
+      # the BuildTools layout the self-hosted Windows box uses.
+      - name: FluidSynth (minimal, glib-free, static CRT)
+        shell: cmd
+        run: packaging\build_fluidsynth_windows.cmd %CD%\fswork %CD%\build\release
       - name: Package zip
         shell: bash
+        env:
+          OLDUVAI_REQUIRE_FLUIDSYNTH: "1"   # release must bundle GM music
         run: sh packaging/package_windows.sh
       - uses: actions/upload-artifact@v4
         with:
@@ -108,8 +130,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Toolchain
-        run: brew install dylibbundler
+      # No toolchain step: SDL2 is built from pinned source and linked
+      # statically, so there is nothing to bundle and dylibbundler is gone.
       - name: Package universal dmg
         run: sh packaging/make_dmg_macos.sh --universal
       - name: Test (arm64 slice, native)

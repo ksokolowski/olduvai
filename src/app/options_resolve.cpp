@@ -26,6 +26,7 @@ void merge_config(PlaySettings& s, const Config& merged) {
     if (auto it = merged.find("enhance");
         it != merged.end() && !s.cli.enhanced && s.enhance_list.empty()) {
         s.enhance_list = it->second;
+        s.enhance_list_from_config = true;
     }
     if (auto it = merged.find("hd_profile");
         it != merged.end() && !s.cli.hd) {
@@ -55,8 +56,12 @@ void merge_config(PlaySettings& s, const Config& merged) {
     if (auto it = merged.find("pad_deadzone"); it != merged.end())
         s.pad_deadzone = std::atoi(it->second.c_str());
     if (auto it = merged.find("music_device");
-        it != merged.end() && s.music_device == "auto") {
+        it != merged.end() && !s.cli.music_device) {
         s.music_device = it->second;
+    }
+    if (auto it = merged.find("mt32_model");
+        it != merged.end() && s.mt32_model.empty()) {
+        s.mt32_model = it->second;
     }
     if (auto it = merged.find("rom_dir");
         it != merged.end() && s.rom_dir.empty()) {
@@ -67,7 +72,7 @@ void merge_config(PlaySettings& s, const Config& merged) {
         s.soundfont = it->second;
     }
     if (auto it = merged.find("sfx_backend");
-        it != merged.end() && s.sfx_backend == "auto") {
+        it != merged.end() && !s.cli.sfx_backend) {
         s.sfx_backend = it->second;
     }
     // Tuning keys (sentinel defaults; config fills them when the CLI left
@@ -75,9 +80,13 @@ void merge_config(PlaySettings& s, const Config& merged) {
     // bool flags can't tell "default off" from "explicitly off", so they
     // (vsync/fullscreen) are CLI-only by design.
     if (auto it = merged.find("display_mode");
-        it != merged.end() && s.display_mode == "gpu") {
+        it != merged.end() && !s.cli.display_mode) {
         s.display_mode = it->second;
     }
+    // audio_rate / audio_buffer keep the sentinel guard on purpose: 0 means
+    // "device default" and is not a value anyone can meaningfully pass, so
+    // explicit-equals-sentinel carries the same meaning as unset.  That is the
+    // property the six string keys above did NOT have.
     if (auto it = merged.find("audio_rate");
         it != merged.end() && s.audio_rate == 0) {
         s.audio_rate = std::atoi(it->second.c_str());
@@ -87,7 +96,7 @@ void merge_config(PlaySettings& s, const Config& merged) {
         s.audio_buffer = std::atoi(it->second.c_str());
     }
     if (auto it = merged.find("transitions");
-        it != merged.end() && s.transitions == "smooth") {
+        it != merged.end() && !s.cli.transitions) {
         s.transitions = it->second;
     }
     if (auto it = merged.find("aspect");
@@ -98,11 +107,11 @@ void merge_config(PlaySettings& s, const Config& merged) {
         s.aspect = it->second;
     }
     if (auto it = merged.find("hd_font");
-        it != merged.end() && s.hd_font == "freckle") {
+        it != merged.end() && !s.cli.hd_font) {
         s.hd_font = it->second;
     }
     if (auto it = merged.find("banner_fx");
-        it != merged.end() && s.banner_fx == "caveman") {
+        it != merged.end() && !s.cli.banner_fx) {
         s.banner_fx = it->second;
     }
     // F5 bug-report destination (config-only; $OLDUVAI_BUG_DIR still
@@ -120,8 +129,10 @@ void adopt_preset(PlaySettings& s, const std::string& cli_profile,
     apply_profile(pc, preset);
     if (auto it = pc.find("enhanced"); it != pc.end() && !s.cli.enhanced)
         s.enhanced = it->second == "true";
-    if (auto it = pc.find("enhance"); it != pc.end() && !s.cli.enhanced)
+    if (auto it = pc.find("enhance"); it != pc.end() && !s.cli.enhanced) {
         s.enhance_list = it->second;
+        s.enhance_list_from_config = true;
+    }
     if (auto it = pc.find("hd_profile"); it != pc.end() && !s.cli.hd)
         s.hd_profile = it->second;
     if (auto it = pc.find("render_scale"); it != pc.end() && !s.cli.scale)

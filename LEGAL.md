@@ -22,8 +22,8 @@ Nothing here is legal advice; it states what the project is and does.
   byte ranges of them, no data tables copied from the executable, no game
   screenshots — test goldens are SHA-256 hashes, never images.
 - The full content policy is in [CONTRIBUTING.md](CONTRIBUTING.md).
-- The engine reads the data files from **your** copy of the game, prepares a
-  local cache on your machine, and never modifies or redistributes them.
+- The engine reads the data files from **your** copy of the game, in place,
+  and never modifies, copies or redistributes them.
 
 ## The original game
 

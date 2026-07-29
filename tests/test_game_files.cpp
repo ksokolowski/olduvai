@@ -36,7 +36,7 @@ void populate(const fs::path& dir) {
 }
 }  // namespace
 
-TEST_CASE("game_files: complete fileset detects + keys stably") {
+TEST_CASE("game_files: complete fileset detects cleanly") {
     const fs::path dir = scratch() / "complete";
     std::error_code ec; fs::remove_all(dir, ec);
     populate(dir);
@@ -51,27 +51,9 @@ TEST_CASE("game_files: complete fileset detects + keys stably") {
         CHECK(f.checksum != 0);
         CHECK(f.size > 0);
     }
-
-    // The key is non-empty and deterministic for identical content.
-    const std::string k1 = gf.cache_key();
-    CHECK_FALSE(k1.empty());
-    CHECK(k1.size() == 16);   // 64-bit hex
-    const pr::GameFiles gf2 = pr::detect_game_files(dir);
-    CHECK(gf2.cache_key() == k1);
 }
 
-TEST_CASE("game_files: a content change changes the key") {
-    const fs::path dir = scratch() / "changed";
-    std::error_code ec; fs::remove_all(dir, ec);
-    populate(dir);
-    const std::string before = pr::detect_game_files(dir).cache_key();
-
-    write_file(dir / "historik.exe", "EXE-bytes-here-MODIFIED");
-    const std::string after = pr::detect_game_files(dir).cache_key();
-    CHECK(before != after);
-}
-
-TEST_CASE("game_files: missing file → incomplete, no key, clear problem") {
+TEST_CASE("game_files: missing file → incomplete, clear problem") {
     const fs::path dir = scratch() / "missing";
     std::error_code ec; fs::remove_all(dir, ec);
     populate(dir);
@@ -79,7 +61,6 @@ TEST_CASE("game_files: missing file → incomplete, no key, clear problem") {
 
     const pr::GameFiles gf = pr::detect_game_files(dir);
     CHECK_FALSE(gf.complete());
-    CHECK(gf.cache_key().empty());
     CHECK(gf.problems().find("FILESB.VGA") != std::string::npos);
 }
 
@@ -91,7 +72,6 @@ TEST_CASE("game_files: zero-byte file is treated as incomplete") {
 
     const pr::GameFiles gf = pr::detect_game_files(dir);
     CHECK_FALSE(gf.complete());
-    CHECK(gf.cache_key().empty());
     CHECK(gf.problems().find("FILESA.CUR") != std::string::npos);
     CHECK(gf.problems().find("zero") != std::string::npos);
 }

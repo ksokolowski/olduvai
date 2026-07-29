@@ -5,19 +5,86 @@
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG   // the embedded icon is the only image this decodes
 // Vendored single-header: silence its own warnings under -Werror.
+#if defined(__GNUC__) || defined(__clang__)   // MSVC: C4068 unknown pragma
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
 #pragma GCC diagnostic ignored "-Wsign-conversion"
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #include "stb_image.h"
+#if defined(__GNUC__) || defined(__clang__)   // MSVC: C4068 unknown pragma
 #pragma GCC diagnostic pop
+#endif
 
 // Generated TU (cmake/embed_binary.cmake from assets/icon/icon_src.png): the
 // bone project logo, so every window carries the icon without a file lookup.
 extern const unsigned char embedded_icon_png[];
 extern const unsigned long embedded_icon_png_len;
 
+#include <cstdio>
+
+#include "enhance/upscale.hpp"
+
 namespace olduvai::presentation {
+
+void pace_end_of_tick(SDL_Renderer* ren, SDL_Texture* tex, DosTicker& ticker,
+                      bool smooth_vsync_ran, bool vga_scan_enabled, bool hd,
+                      bool& vga_scan_ok, unsigned long* fill_presents,
+                      unsigned long* fill_ticks) {
+    if (smooth_vsync_ran) {
+        // The vsync render-fill already paced this tick to (about) frame_ms
+        // via the panel; keep the ticker in phase without an extra sleep.
+        ticker.arm();
+        return;
+    }
+    if (vga_scan_enabled && !hd && vga_scan_ok) {
+        // Hold-frame scanout: re-present the SAME uploaded frame every vblank
+        // until the tick expires.  Pixel-identical; vsync (implied for
+        // classic) paces each present.  A driver that REFUSED vsync returns
+        // instantly — three consecutive <1.5 ms presents disable the scanout
+        // for this level and fall back to timer pacing.
+        int fast_presents = 0;
+        while (ticker.pending()) {
+            const Uint64 p0 = SDL_GetPerformanceCounter();
+            SDL_RenderClear(ren);
+            SDL_RenderCopy(ren, tex, nullptr, nullptr);
+            SDL_RenderPresent(ren);
+            if (fill_presents != nullptr) ++*fill_presents;
+            const double ms = (SDL_GetPerformanceCounter() - p0) * 1000.0 /
+                              static_cast<double>(SDL_GetPerformanceFrequency());
+            if (ms < 1.5) {
+                if (++fast_presents >= 3) {
+                    vga_scan_ok = false;
+                    std::fprintf(stderr,
+                                 "pacing: vsync appears refused — "
+                                 "vga-scan off, timer pacing\n");
+                    break;
+                }
+            } else {
+                fast_presents = 0;
+            }
+        }
+        if (fill_ticks != nullptr) ++*fill_ticks;
+        if (ticker.pending()) ticker.wait_next();
+        else ticker.advance();
+        return;
+    }
+    // Drift-free absolute-deadline wait at the DOS PIT rate — the old
+    // relative SDL_Delay oversleep-per-frame is what made classic feel
+    // choppier than DOSBox (owner report 2026-07-04).
+    ticker.wait_next();
+}
+
+void upload_native_frame(SDL_Texture* tex, const FrameBuffer& fb, int hd_scale,
+                         const std::string& hd_profile) {
+    if (hd_scale > 1) {
+        const auto up =
+            enhance::upscale_rgba(fb.px, 320, 200, hd_scale, hd_profile);
+        SDL_UpdateTexture(tex, nullptr, up.data(), 320 * hd_scale * 4);
+    } else {
+        SDL_UpdateTexture(tex, nullptr, fb.px.data(), 320 * 4);
+    }
+}
 
 LogicalDims aspect_logical(int scale, const std::string& aspect) {
     if (aspect == "stretch") return {0, 0};
@@ -61,7 +128,7 @@ ScaledWindow create_scaled_window(const char* title, int logical_w,
     const int win_px_h = win_h > 0 ? win_h : logical_h * k;
     ScaledWindow sw;
     // ALLOW_HIGHDPI so SDL_GetRendererOutputSize reports TRUE physical pixels
-    // on HiDPI/Retina displays (e.g. 2560×1600 backing a 1280×800-point
+    // on HiDPI/Retina displays (e.g. 2560x1600 backing a 1280x800-point
     // window).  The scene texture still nearest-scales onto the logical canvas
     // (SDL_RenderSetLogicalSize below), but the output-resolution vector-text
     // overlay (presentation/text_overlay) draws at the physical pixel count, so

@@ -71,10 +71,10 @@ std::vector<std::uint8_t> upscale_rgba(const std::vector<std::uint8_t>& px,
             return eagle_2x(up, w * 2, h * 2);
         }
         if (scale == 3) {
-            // Eagle is strictly 2×-only; fall back to Scale3x (same
+            // Eagle is strictly 2x-only; fall back to Scale3x (same
             // palette-preserving family) — matches the reference engine.
             std::fprintf(stderr,
-                "olduvai: hd-profile 'eagle' has no native 3× form — using "
+                "olduvai: hd-profile 'eagle' has no native 3x form — using "
                 "scale3x for this scale.\n");
             return scale3x(px, w, h);
         }
@@ -89,7 +89,7 @@ std::vector<std::uint8_t> upscale_rgba(const std::vector<std::uint8_t>& px,
         }
         if (scale == 3) {
             std::fprintf(stderr,
-                "olduvai: hd-profile 'xbr' has no native 3× form — using "
+                "olduvai: hd-profile 'xbr' has no native 3x form — using "
                 "scale3x for this scale.\n");
             return scale3x(px, w, h);
         }

@@ -8,7 +8,7 @@
 #include <vector>
 
 namespace {
-// A 4×4 RGBA block with a transparent border ring and an opaque centre.
+// A 4x4 RGBA block with a transparent border ring and an opaque centre.
 std::vector<std::uint8_t> bordered() {
     std::vector<std::uint8_t> px(4 * 4 * 4, 0);
     for (int y = 1; y <= 2; ++y)

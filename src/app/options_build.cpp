@@ -17,28 +17,42 @@ BuildOutcome build_game_options(const CliArgs& args, PlaySettings& ps,
     BuildOutcome oc;
 
     // Build the enhanced-feature set.  --enhanced enables the full bundle;
-    // --enhance a,b enables a named subset (union with --enhanced).  Mirrors
-    // reference tools/play.py _ENHANCEMENT_NAMES.  An unknown name is a hard
-    // error (exit 2), matching the reference.
+    // `--enhance a,b` no longer selects features: --enhanced is all-or-
+    // nothing.  The names are still PARSED, for two reasons.  Users have them
+    // in play.json — the Options menu wrote that key itself — and a name that
+    // no longer means anything must not become a startup failure.
+    //
+    // COMPATIBILITY RULE: a non-empty list means the user wanted enhanced
+    // mode, whatever they listed.  That matters because the menu persisted
+    // subsets as `enhanced=false` PLUS a granular list, relying on the next
+    // launch to reconstruct the umbrella from the flags.  Without this rule
+    // that reconstruction silently vanishes and anyone who ever touched an
+    // enhance toggle boots into DOS mode with no explanation.
     olduvai::presentation::EnhanceFlags enhance_flags;
-    if (ps.enhanced)
-        enhance_flags = olduvai::presentation::EnhanceFlags::all();
     {
+        static const char* const kLegacyNames[] = {
+            "smooth-motion", "cinematic-cue", "hud-overlay", "fluid-bubbles",
+            "secret-slide",  "descent-pan",   "hd-text"};
         std::stringstream ss(ps.enhance_list);
         std::string item;
+        bool any_listed = false;
         while (std::getline(ss, item, ',')) {
             const auto b = item.find_first_not_of(" \t");
             if (b == std::string::npos) continue;
             const auto e = item.find_last_not_of(" \t");
             const std::string name = item.substr(b, e - b + 1);
-            if      (name == "smooth-motion") enhance_flags.smooth_motion = true;
-            else if (name == "cinematic-cue") enhance_flags.cinematic_cue = true;
-            else if (name == "hud-overlay")   enhance_flags.hud_overlay   = true;
-            else if (name == "fluid-bubbles") enhance_flags.fluid_bubbles = true;
-            else if (name == "secret-slide")  enhance_flags.secret_slide  = true;
-            else if (name == "descent-pan")   enhance_flags.descent_pan   = true;
-            else if (name == "hd-text")       enhance_flags.hd_text       = true;
-            else {
+            bool known = false;
+            for (const char* k : kLegacyNames)
+                if (name == k) { known = true; break; }
+            if (known) {
+                any_listed = true;
+            } else if (ps.enhance_list_from_config) {
+                // Not the user's doing — the program wrote this file.  Warn,
+                // skip the token, keep going.
+                oc.warnings.push_back(
+                    "olduvai: ignoring unknown enhance feature '" + name +
+                    "' from the config file\n");
+            } else {
                 oc.ok = false;
                 oc.exit_code = 2;
                 oc.error =
@@ -48,10 +62,12 @@ BuildOutcome build_game_options(const CliArgs& args, PlaySettings& ps,
                 return oc;
             }
         }
+        if (any_listed) ps.enhanced = true;
     }
-    // Umbrella `enhanced` = the HD-render substrate; on if any feature is
-    // requested (so a single --enhance gives the enhanced render path).
-    ps.enhanced = enhance_flags.any();
+    // smooth-motion is the one survivor, and it is derived rather than
+    // chosen: it follows the umbrella here and --transitions classic / --trace
+    // switch it back off below.
+    enhance_flags.smooth_motion = ps.enhanced;
 
     // ── Tuning-flag validation (reject typos like the reference does).
     if (ps.display_mode != "gpu" && ps.display_mode != "cpu") {
@@ -146,6 +162,12 @@ BuildOutcome build_game_options(const CliArgs& args, PlaySettings& ps,
                 "olduvai: --trace set → forcing transitions classic "
                 "(smooth-motion off) for deterministic frames\n");
         }
+        // Set the MODE, not just the flag.  smooth_motion is derived from
+        // `enhanced`, so anything that re-derives it later (a Style change
+        // from the pause menu triggers a re-init that does exactly that)
+        // would otherwise switch smooth motion back on mid-trace.  The
+        // warning above always claimed this; now it is true.
+        ps.transitions = "classic";
         enhance_flags.smooth_motion = false;
     }
 
@@ -185,6 +207,7 @@ BuildOutcome build_game_options(const CliArgs& args, PlaySettings& ps,
     go.music_device = ps.music_device;
     go.midi_port = args.play_midi_port;
     go.rom_dir = ps.rom_dir;
+    go.mt32_model = ps.mt32_model;
     go.soundfont = ps.soundfont;
     go.sfx_backend = ps.sfx_backend;
     go.replay = args.play_replay;

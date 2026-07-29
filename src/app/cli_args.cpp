@@ -16,10 +16,6 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
     auto& game_dir = args.game_dir;
     auto& viewer = args.viewer;
     auto& play = args.play;
-    auto& do_prepare = args.do_prepare;
-    auto& do_decode_sfx = args.do_decode_sfx;
-    auto& do_verify_cache = args.do_verify_cache;
-    auto& do_purge_cache = args.do_purge_cache;
     auto& do_list_midi_ports = args.do_list_midi_ports;
     auto& play_level = args.play_level;
     auto& play_midi_port = args.play_midi_port;
@@ -59,9 +55,17 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
             ps.cli.game_dir = true;
         } else if (arg == "--profile" && i + 1 < argc) {
             profile = argv[++i];
-            if (profile != "dos" && profile != "hd" && profile != "hd-43") {
+            // hd-43 was a profile that differed from hd only by aspect.  It
+            // stays accepted — it is a documented CLI value and someone's
+            // shell alias — but it now resolves to what it always meant.
+            if (profile == "hd-43") {
+                profile = "hd";
+                ps.aspect = "4:3";
+                ps.cli.aspect = true;   // explicit: must beat a saved config
+            }
+            if (profile != "dos" && profile != "hd") {
                 std::fprintf(stderr,
-                    "olduvai: --profile must be 'dos', 'hd', or 'hd-43' "
+                    "olduvai: --profile must be 'dos' or 'hd' "
                     "(got '%s')\n", profile.c_str());
                 return {true, 2, false, false};
             }
@@ -73,14 +77,6 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
             viewer = true;
         } else if (arg == "--play") {
             play = true;
-        } else if (arg == "--prepare") {
-            do_prepare = true;
-        } else if (arg == "--decode-sfx") {
-            do_decode_sfx = true;
-        } else if (arg == "--verify-cache") {
-            do_verify_cache = true;
-        } else if (arg == "--purge-cache") {
-            do_purge_cache = true;
         } else if (arg == "--level" && i + 1 < argc) {
             play_level = std::atoi(argv[++i]);
             if (play_level < 0 || play_level > 8) {
@@ -101,6 +97,7 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
             ps.cli.hd = true;
         } else if (arg == "--music-device" && i + 1 < argc) {
             ps.music_device = argv[++i];
+            ps.cli.music_device = true;
         } else if (arg == "--midi-port" && i + 1 < argc) {
             play_midi_port = argv[++i];
         } else if (arg == "--list-midi-ports") {
@@ -146,19 +143,23 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
             play_fullscreen = true;
         } else if (arg == "--display-mode" && i + 1 < argc) {
             ps.display_mode = argv[++i];
+            ps.cli.display_mode = true;
         } else if (arg == "--audio-rate" && i + 1 < argc) {
             ps.audio_rate = std::atoi(argv[++i]);
         } else if (arg == "--audio-buffer" && i + 1 < argc) {
             ps.audio_buffer = std::atoi(argv[++i]);
         } else if (arg == "--transitions" && i + 1 < argc) {
             ps.transitions = argv[++i];
+            ps.cli.transitions = true;
         } else if (arg == "--aspect" && i + 1 < argc) {
             ps.aspect = argv[++i];
             ps.cli.aspect = true;
         } else if (arg == "--hd-font" && i + 1 < argc) {
             ps.hd_font = argv[++i];
+            ps.cli.hd_font = true;
         } else if (arg == "--banner-fx" && i + 1 < argc) {
             ps.banner_fx = argv[++i];
+            ps.cli.banner_fx = true;
         } else if (arg == "--start-screen" && i + 1 < argc) {
             play_start_screen = std::atoi(argv[++i]);
         } else if (arg == "--window" && i + 1 < argc) {
@@ -170,10 +171,13 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
             }
         } else if (arg == "--rom-dir" && i + 1 < argc) {
             ps.rom_dir = argv[++i];
+        } else if (arg == "--mt32-model" && i + 1 < argc) {
+            ps.mt32_model = argv[++i];
         } else if (arg == "--soundfont" && i + 1 < argc) {
             ps.soundfont = argv[++i];
         } else if (arg == "--sfx-backend" && i + 1 < argc) {
             ps.sfx_backend = argv[++i];
+            ps.cli.sfx_backend = true;
         } else if (arg == "--render-scale" && i + 1 < argc) {
             ps.render_scale = std::atoi(argv[++i]);
             ps.cli.scale = true;

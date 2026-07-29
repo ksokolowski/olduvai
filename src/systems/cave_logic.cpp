@@ -59,7 +59,7 @@ void exit_cave(SystemsState& state) {
     state.player.gravity_flag = 0;
     // Cave-EMERGE animation (owner-ruled divergence) — see
     // SystemsState::cave_emerge_frames.  Enhanced v2 pacing: 9 ticks =
-    // 3 stages × 3-tick holds (1/3 → 2/3 → full brightness of
+    // 3 stages x 3-tick holds (1/3 → 2/3 → full brightness of
     // PLAYER_TURN), player frozen for the duration (frame_runner gate).
     // Classic: 2 lit ticks, draw-only, no freeze (EXE gameplay timing).
     state.cave_emerge_frames = state.enhanced_active

@@ -31,11 +31,12 @@
 #include <vector>
 
 #include "formats/cur.hpp"
+#include "prepare/game_archives.hpp"
 #include "formats/mat.hpp"
 #include "formats/pc1.hpp"
 #include "prepare/exe_tables.hpp"
-#include "presentation/game_render.hpp"
-#include "presentation/l3_end_level.hpp"
+#include "presentation/render/game_render.hpp"
+#include "presentation/sequence/l3_end_level.hpp"
 #include "systems/player.hpp"
 
 using namespace olduvai;
@@ -71,15 +72,9 @@ int main(int argc, char** argv) {
     const std::string dir = argv[1];
     const std::string out = argc > 2 ? argv[2] : "/tmp";
 
-    formats::CurArchive fa(slurp(dir + "/FILESA.CUR"));
-    formats::CurArchive fb_(slurp(dir + "/FILESB.CUR"));
-    formats::CurArchive va(slurp(dir + "/FILESA.VGA"));
-    formats::CurArchive vb(slurp(dir + "/FILESB.VGA"));
-    auto entry = [&](const std::string& n) -> const std::vector<std::uint8_t>* {
-        for (formats::CurArchive* ar : {&fa, &fb_, &va, &vb})
-            if (ar->contains(n)) return &ar->get(n).data;
-        return nullptr;
-    };
+    const olduvai::prepare::GameArchives archives(dir);
+    auto entry = [&](const std::string& n)
+        -> const std::vector<std::uint8_t>* { return archives.entry(n); };
     const std::vector<std::uint8_t> exe = slurp(dir + "/HISTORIK.EXE");
 
     // tile_sprites = ELEML3 (28) + ELEML3B (5) + GROT3 (2)  — bind_screen order.
@@ -134,7 +129,7 @@ int main(int argc, char** argv) {
     // Full-enhanced Phase 1 (substeps=3, NO trim) — built by forcing the
     // descent-pan flag OFF but smooth-motion semantics on is not exposed here,
     // so instead we compute the un-trimmed enhanced length analytically:
-    // 176 logical frames × 3 substeps = 528.  The ON count above must be < 528,
+    // 176 logical frames x 3 substeps = 528.  The ON count above must be < 528,
     // proving the dead tail (static empty screen) was cut.  We also dump the
     // classic (substeps=1) length for reference.
     const int enhanced_full = 176 * 3;

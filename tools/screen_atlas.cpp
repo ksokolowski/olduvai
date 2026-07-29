@@ -11,9 +11,10 @@
 #include <fstream>
 #include "core/rng.hpp"
 #include "formats/cur.hpp"
+#include "prepare/game_archives.hpp"
 #include "formats/dur.hpp"
 #include "prepare/exe_tables.hpp"
-#include "presentation/game_render.hpp"
+#include "presentation/render/game_render.hpp"
 #include "systems/spawning.hpp"
 using namespace olduvai;
 static std::vector<std::uint8_t> slurp(const std::string& p) {
@@ -25,15 +26,9 @@ int main(int /*argc*/, char** argv) {
     const int level = std::atoi(argv[2]);          // internal id
     const int s0 = std::atoi(argv[3]), s1 = std::atoi(argv[4]);
     const auto exe = slurp(dir + "/HISTORIK.EXE");
-    formats::CurArchive fa(slurp(dir + "/FILESA.CUR"));
-    formats::CurArchive fbb(slurp(dir + "/FILESB.CUR"));
-    formats::CurArchive va(slurp(dir + "/FILESA.VGA"));
-    formats::CurArchive vb(slurp(dir + "/FILESB.VGA"));
-    auto entry = [&](const std::string& n) -> const std::vector<std::uint8_t>* {
-        for (formats::CurArchive* ar : {&fa, &fbb, &va, &vb})
-            if (ar->contains(n)) return &ar->get(n).data;
-        return nullptr;
-    };
+    const olduvai::prepare::GameArchives archives(dir);
+    auto entry = [&](const std::string& n)
+        -> const std::vector<std::uint8_t>* { return archives.entry(n); };
     struct Cfg { const char* bg; bool vis; const char* m1; const char* m2;
                  const char* spr; std::uint32_t obj; };
     Cfg cfg = level == 3 ? Cfg{nullptr, false, "ELEML3.MAT", "ELEML3B.MAT", "L3SPR.MAT", 0x47EE}

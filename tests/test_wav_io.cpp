@@ -10,7 +10,7 @@
 #include <filesystem>
 #include <vector>
 
-#include "presentation/wav_io.hpp"
+#include "presentation/audio/wav_io.hpp"
 
 using olduvai::presentation::read_wav16;
 using olduvai::presentation::write_wav16;

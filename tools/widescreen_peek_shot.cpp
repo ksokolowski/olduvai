@@ -32,10 +32,11 @@
 
 #include "core/rng.hpp"
 #include "formats/cur.hpp"
+#include "prepare/game_archives.hpp"
 #include "prepare/exe_tables.hpp"
-#include "presentation/game_render.hpp"
+#include "presentation/render/game_render.hpp"
 #include "presentation/image_out.hpp"
-#include "presentation/widescreen.hpp"
+#include "presentation/render/widescreen.hpp"
 #include "systems/spawning.hpp"
 
 using namespace olduvai;
@@ -57,15 +58,9 @@ int main(int argc, char** argv) {
     const int margin = argc > 4 ? std::atoi(argv[4]) : 18;
 
     const auto exe = slurp(dir + "/HISTORIK.EXE");
-    formats::CurArchive fa(slurp(dir + "/FILESA.CUR"));
-    formats::CurArchive fbb(slurp(dir + "/FILESB.CUR"));
-    formats::CurArchive va(slurp(dir + "/FILESA.VGA"));
-    formats::CurArchive vb(slurp(dir + "/FILESB.VGA"));
-    auto entry = [&](const std::string& n) -> const std::vector<std::uint8_t>* {
-        for (formats::CurArchive* ar : {&fa, &fbb, &va, &vb})
-            if (ar->contains(n)) return &ar->get(n).data;
-        return nullptr;
-    };
+    const olduvai::prepare::GameArchives archives(dir);
+    auto entry = [&](const std::string& n)
+        -> const std::vector<std::uint8_t>* { return archives.entry(n); };
 
     // Asset cfg — mirrors tools/screen_atlas.cpp (levels 1/3/5/7).
     struct Cfg { const char* bg; bool vis; const char* m1; const char* m2;
@@ -124,7 +119,7 @@ int main(int argc, char** argv) {
     if (neigh.left >= 0) { left_fb = compose_screen(neigh.left, false); left = &left_fb; }
     if (neigh.right >= 0) { right_fb = compose_screen(neigh.right, false); right = &right_fb; }
 
-    // Pure-FOND backdrop (320×200 RGBA) for the no-neighbour margin extension —
+    // Pure-FOND backdrop (320x200 RGBA) for the no-neighbour margin extension —
     // the same FOND the center uses, converted to RGBA (no foreground tiles).
     // Surface (visual) levels only; matches the real pipeline's ws_backdrop.
     presentation::FrameBuffer backdrop_fb;

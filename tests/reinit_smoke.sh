@@ -6,8 +6,8 @@
 # Drives the OLDUVAI_REINIT_TEST env hook: starts level 1 at render_scale=2
 # (enhanced/smooth), lets the hook fire on frame 5 (triggers a reinit to
 # render_scale=4), then reads the result file and asserts:
-#   1. Output width  == 1280  (320 × hd_scale 4, logical pixels)
-#   2. Output height == 800   (200 × hd_scale 4)
+#   1. Output width  == 1280  (320 x hd_scale 4, logical pixels)
+#   2. Output height == 800   (200 x hd_scale 4)
 #   3. Pre-reinit player x == post-reinit player x  (state preserved)
 #   4. Pre-reinit player y == post-reinit player y
 #
@@ -41,8 +41,8 @@ fi
 
 # Pin to SDL's dummy video driver unless the caller overrode it.  The reinit
 # hook reports the LOGICAL window size (SDL_GetWindowSize); on a real desktop
-# with a HiDPI scale factor (e.g. a 2× display) that size comes back already
-# scaled (2560×1600 for a 1280×800 logical window), which is a display-server
+# with a HiDPI scale factor (e.g. a 2x display) that size comes back already
+# scaled (2560x1600 for a 1280x800 logical window), which is a display-server
 # artifact, not an engine result.  The dummy driver has no DPI scaling, so the
 # assertions test the reinit logic deterministically on any machine.
 export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}"
@@ -56,6 +56,40 @@ OLDUVAI_REINIT_TEST="${RESULT_FILE}" \
     --game-dir "${GAME_DIR}" \
     --play-frames 240
 STATUS=$?
+
+# Same reinit again, but FULLSCREEN — a structurally different path since
+# 2026-07-27.  Windowed still destroys and recreates the window; fullscreen
+# must NOT, because the window is display-sized there and its 320*scale
+# dimensions mean nothing, while destroying it costs two macOS Spaces
+# animations and seconds of black screen on every enhanced <-> classic switch.
+# Only the renderer's logical size and integer-scale flag actually change.
+#
+# This half was uncovered when the in-place path landed: reinit_smoke drove
+# only the windowed branch, so the gate that "covers exactly this path" would
+# not have noticed the new one breaking.  State must round-trip identically to
+# the windowed run — that is the assertion, not the window size (fullscreen
+# reports the DISPLAY size, which legitimately differs).
+#
+# WHAT THIS DOES NOT COVER, MEASURED.  It asserts the fullscreen path does not
+# corrupt STATE.  It does NOT assert the renderer was reconfigured correctly:
+# deleting the SDL_RenderSetLogicalSize call entirely still passes this test,
+# because a wrong logical size changes what is DRAWN, not what is stored.
+# Catching that needs a pixel check after an in-flight mode switch, and no
+# hook composes "switch mode, then screenshot" today — tracked in
+# docs/internal/BACKLOG.md.  Do not read a green reinit_smoke as proof the
+# fullscreen rendering is right.
+FS_RESULT_FILE="${RESULT_FILE}.fs"
+OLDUVAI_REINIT_TEST="${FS_RESULT_FILE}" \
+    "${BINARY}" \
+    --play --fullscreen --enhanced --hd-profile smooth --render-scale 2 \
+    --game-dir "${GAME_DIR}" \
+    --play-frames 240
+FS_STATUS=$?
+if [ ${FS_STATUS} -ne 0 ]; then
+    echo "reinit_smoke: FAIL — fullscreen run exited with status ${FS_STATUS}"
+    rm -f "${RESULT_FILE}" "${FS_RESULT_FILE}"
+    exit 1
+fi
 
 if [ ${STATUS} -ne 0 ]; then
     echo "reinit_smoke: FAIL — binary exited with status ${STATUS}"
@@ -117,8 +151,27 @@ if [ "${PRE_SUM}" != "${POST_SUM}" ]; then
     FAIL=1
 fi
 
+# The fullscreen run must preserve state exactly as the windowed one does.
+# Fields: w h pre_x pre_y post_x post_y pre_ent post_ent pre_sum post_sum —
+# compare everything EXCEPT the window dimensions, which legitimately differ
+# (fullscreen reports the display size; windowed reports 320*scale x 200*scale).
+# Build the windowed side from the already-parsed fields: RESULT_FILE is
+# deleted right after it is read, above.
+FS_STATE="$(cut -d' ' -f3- "${FS_RESULT_FILE}" 2>/dev/null)"
+WIN_STATE="${PRE_X} ${PRE_Y} ${POST_X} ${POST_Y} ${PRE_ENT} ${POST_ENT} ${PRE_SUM} ${POST_SUM}"
+if [ -z "${FS_STATE}" ]; then
+    echo "reinit_smoke: FAIL — fullscreen run produced no result line"
+    FAIL=1
+elif [ "${FS_STATE}" != "${WIN_STATE}" ]; then
+    echo "reinit_smoke: FAIL — fullscreen reinit did not preserve state like windowed"
+    echo "  windowed:   ${WIN_STATE}"
+    echo "  fullscreen: ${FS_STATE}"
+    FAIL=1
+fi
+rm -f "${FS_RESULT_FILE}"
+
 if [ ${FAIL} -eq 0 ]; then
-    echo "reinit_smoke: PASS"
+    echo "reinit_smoke: PASS (windowed + fullscreen)"
 fi
 
 exit ${FAIL}

@@ -7,12 +7,27 @@ src/
   formats/        — pure decoders: CUR/LZSS archives, MAT sprites, PC1
                     images, DUR collision, MDI music, VOC samples.
                     No SDL, no filesystem — bytes in, structures out.
-  prepare/        — first-run pipeline: game-file detection (checksums),
-                    table readers, local cache writer/loader.
+  prepare/        — game-file detection (checksums) and EXE table readers.
   core/           — game state, constants, RNG, collision bitmap.  No SDL.
   systems/        — player physics, monster AI, spawning, collisions,
                     screen transitions, cave/secret logic.  Headless.
-  presentation/   — SDL2 rendering, audio, input, window/scaling.
+  presentation/   — SDL2 rendering, audio, input, window/scaling.  Split
+                    into seven subdirectories (below); the loop drivers and
+                    the zero-fan-out hubs stay at the top level.
+    render/       — everything that writes pixels: tile/sprite/background
+                    compose, HUD, boss and widescreen presenters,
+                    transitions, frame presenter.
+    menu/         — the menu machine: model/nav/render, settings staging
+                    and apply, pause overlay service, dialogs, text editor,
+                    the F5 report form.
+    audio/        — OPL music/SFX, MIDI sequencing, host MIDI (MT-32 and
+                    General MIDI), resampling.  No outbound edges.
+    input/        — gamepad, autofire, per-frame input, replay/record.
+    level/        — level setup and per-level save/restore.
+    sequence/     — non-interactive sequences: intro/end cinematics, the
+                    L3 trunk descent, loading and tally screens.
+    diag/         — not part of playing the game: F5 bug capture, draw
+                    log, reinit test hook, the asset viewer.
   trace/          — JSONL frame-trace emitter (validation harness client).
   app/            — main loop, CLI (main.cpp; trace_main.cpp is the trace
                     harness binary).
@@ -24,47 +39,9 @@ tests/            — doctest unit tests.  Decoder tests run on synthetic
 ```
 
 Lower layers never include from higher layers. `formats`, `core`, and
-`systems` are SDL-free by construction (enforced by review; a CI include
-lint is planned).
-
-## First-run prepare-and-cache pipeline
-
-Olduvai ships no game-derived data. At first run it reads the user's own
-game files and prepares a local cache:
-
-| Stage | Trigger | Key | Output |
-|---|---|---|---|
-| 1 — prepare | first run / cache miss | game-file checksums + pipeline version | bucket + manifest (decoded-asset cache deferred — see below) |
-| 2 — HD bake | enhanced mode enabled | content hash of stage-1 pixels + algorithm + scale | persisted upscaled blocks on disk |
-
-Cache lives under the platform cache dir, resolved by `src/prepare/
-cache_paths`:
-
-- Linux:   `$XDG_CACHE_HOME/olduvai` (default `~/.cache/olduvai`)
-- macOS:   `~/Library/Caches/olduvai`
-- Windows: `%LOCALAPPDATA%\olduvai\cache`
-- `$OLDUVAI_CACHE_DIR` overrides all of the above (tests, power users).
-
-Layout: `<root>/<key>/manifest.txt` is the stage-1 bucket for one game-file
-set (key = FNV-1a/64 of the five files' digests + sizes + pipeline version);
-`<root>/hd/<contenthash>.bin` are stage-2 HD blocks (raw RGBA + a 16-byte
-header).  Nothing derived from game files is ever written into the
-repository or an installation directory.
-
-CLI: `--prepare` force-builds the bucket; `--verify-cache` reports
-present/valid/stale (exit 0 only when valid); `--purge-cache` deletes the
-whole cache root.  `--play` calls `ensure_prepared` first, printing
-"Preparing game data…" on a miss/stale and reusing silently otherwise.
-
-**Stage-1 decoded-asset cache is deferred (scaffolded).**  A persisted
-decode cache (LZSS/MAT/PC1 → native pixels) is only safe if a cache-load is
-byte-identical to a fresh decode; that round-trip is not yet proven and the
-runtime decode is cheap, so stage 1 currently writes only the keyed bucket +
-manifest (reserving the key scheme) and the engine still decodes assets on
-the fly.  Stage 2 (HD bake) persistence IS live: HD blocks are cosmetic and
-content-addressed, so a disk hit reproduces the exact upscale output and can
-never change gameplay or rendered frames — it only skips recompute.  The HD
-disk layer is gated behind enhanced/HD mode (`HdAssetCache::enable_disk`).
+`systems` are SDL-free by construction. Both rules are enforced by
+`scripts/check_layers.sh` in CI, which derives the layer from the second
+path field — so the `presentation/` subdirectories above do not affect it.
 
 ## Configuration
 

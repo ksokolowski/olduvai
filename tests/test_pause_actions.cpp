@@ -14,9 +14,9 @@
 
 #include "doctest/doctest.h"
 
-#include "presentation/pause_flow.hpp"
-#include "presentation/replay.hpp"
-#include "presentation/save_state.hpp"
+#include "presentation/menu/pause_flow.hpp"
+#include "presentation/input/replay.hpp"
+#include "presentation/level/save_state.hpp"
 
 using namespace olduvai::presentation;
 
@@ -81,11 +81,6 @@ TEST_CASE("restart_level uses the same leave-open pattern") {
 
 namespace {
 
-const char* const kEnhanceKeys[] = {
-    "enhance.smooth_motion", "enhance.hd_text",      "enhance.hud_overlay",
-    "enhance.cinematic_cue", "enhance.fluid_bubbles",
-    "enhance.secret_slide",  "enhance.descent_pan"};
-
 struct PersistRecorder {
     std::vector<std::pair<std::string, std::string>> writes;
     PersistFn fn;
@@ -116,7 +111,6 @@ struct PersistRecorder {
 // Classic-session baseline, seeded the way configure_pause_bind does.
 void seed_classic(PauseBindings& bind) {
     bind.mem["enhanced"] = "false";
-    for (const char* k : kEnhanceKeys) bind.mem[k] = "0";
     bind.mem["hd_profile"] = "native";
     bind.mem["render_scale"] = "2";
     bind.mem["aspect"] = "keep";
@@ -126,18 +120,11 @@ void seed_classic(PauseBindings& bind) {
 // Full-HD baseline (the "hd" preset shape).
 void seed_hd(PauseBindings& bind) {
     bind.mem["enhanced"] = "true";
-    for (const char* k : kEnhanceKeys) bind.mem[k] = "1";
     bind.mem["hd_profile"] = "omniscale";
     bind.mem["render_scale"] = "4";
     bind.mem["aspect"] = "widescreen";
     bind.cur = {true, "omniscale", 4, "auto", "auto"};
 }
-
-// mem iterates alphabetically, so the persisted granular list is the dashed
-// tokens in key order.
-const char* const kFullList =
-    "cinematic-cue,descent-pan,fluid-bubbles,hd-text,hud-overlay,"
-    "secret-slide,smooth-motion";
 
 // Flow rig: PauseBindings + make_pause_flow over a minimal two-screen model
 // ("options" subtree root + a "pause" screen outside it).
@@ -201,17 +188,12 @@ TEST_CASE("Style preset fan-out stages everything, writes nothing") {
     bind.set("preset", "hd");
 
     CHECK(rec.writes.empty());
-    // enhanced first (sessions drain in stage order), then the 7 flags,
-    // then hd_profile / render_scale / aspect.
-    REQUIRE(session.changes().size() == 11);
+    // enhanced first (sessions drain in stage order), then hd_profile /
+    // render_scale / aspect.  The seven per-feature rows are gone: --enhanced
+    // is all-or-nothing, so a preset stages the master and the display keys.
+    REQUIRE(session.changes().size() == 4);
     CHECK(session.changes().front().key == "enhanced");
     CHECK(session.changes().front().new_value == "true");
-    for (const char* k : kEnhanceKeys) {
-        bool staged = false;
-        for (const auto& ch : session.changes())
-            staged |= ch.key == k && ch.new_value == "1";
-        CHECK_MESSAGE(staged, k);
-    }
 }
 
 TEST_CASE("re-clicking the current style nets out to an empty session") {
@@ -252,22 +234,13 @@ TEST_CASE("pause Apply persists the granular list once without master clobber") 
     REQUIRE(r.flow->confirm_open());
     r.flow->handle_key(SettingsFlow::Key::kAccept);   // Apply is pre-selected
 
-    // The staged master flag persists, and the granular list flushes exactly
-    // once — with NO "enhanced=false" companion clobbering the master.
+    // The master flag persists.  There is no granular list any more —
+    // --enhanced is all-or-nothing, so nothing writes an "enhance" key.
     CHECK(r.rec.has("enhanced", "true"));
     CHECK(!r.rec.has("enhanced", "false"));
-    CHECK(r.rec.count("enhance") == 1);
-    CHECK(r.rec.has("enhance", kFullList));
-    // Master before list: stage order is the load-order contract.
-    CHECK(r.rec.index_of("enhanced", "true") < r.rec.index_of("enhance"));
-    // In-session adoption: the applied flags land in the live GameOptions.
+    CHECK(r.rec.count("enhance") == 0);
+    // In-session adoption: smooth-motion follows the umbrella.
     CHECK(r.opts.enhance.smooth_motion);
-    CHECK(r.opts.enhance.hd_text);
-    CHECK(r.opts.enhance.hud_overlay);
-    CHECK(r.opts.enhance.cinematic_cue);
-    CHECK(r.opts.enhance.fluid_bubbles);
-    CHECK(r.opts.enhance.secret_slide);
-    CHECK(r.opts.enhance.descent_pan);
     // Classic→HD crosses the scale boundary → reinit rides the master flag.
     CHECK(r.want_reinit);
     CHECK(r.reinit_req.enhanced);
@@ -285,33 +258,9 @@ TEST_CASE("pause Discard reverts the preset fan-out and writes nothing") {
     CHECK(r.rec.writes.empty());   // play.json untouched — THE Discard bug
     CHECK(r.session.empty());
     CHECK(r.bind.get("enhanced") == "false");
-    CHECK(r.bind.get("enhance.hd_text") == "0");
     CHECK(r.bind.get("hd_profile") == "native");
-    CHECK(!r.opts.enhance.any());
+    CHECK(!r.opts.enhance.smooth_motion);
     CHECK(!r.want_reinit);
-}
-
-TEST_CASE("granular toggle Apply keeps the enhanced=false companion") {
-    FlowRig r;
-    seed_hd(r.bind);
-    r.opts.enhanced = true;
-    r.opts.enhance = EnhanceFlags::all();
-
-    r.stage_and_exit([&] { r.bind.set("enhance.hd_text", "0"); });
-    REQUIRE(r.flow->confirm_open());
-    r.flow->handle_key(SettingsFlow::Key::kAccept);
-
-    // Master NOT staged → the granular write converts a bundle config into
-    // the explicit list, so the companion "enhanced=false" is required.
-    CHECK(r.rec.count("enhance") == 1);
-    CHECK(r.rec.has("enhance",
-                    "cinematic-cue,descent-pan,fluid-bubbles,hud-overlay,"
-                    "secret-slide,smooth-motion"));
-    CHECK(r.rec.has("enhanced", "false"));
-    // In-session adoption: hd_text off, the rest untouched.
-    CHECK(!r.opts.enhance.hd_text);
-    CHECK(r.opts.enhance.smooth_motion);
-    CHECK(!r.want_reinit);   // granular flags are not reinit-class
 }
 
 // ── cheat.god scope (the level-boundary bug) ────────────────────────────────

@@ -51,7 +51,7 @@ struct BossRunResult {
 // `max_frames` > 0 exits after N frames; `shot`/`shot_frame` dump a BMP.
 struct BossEnhanceOptions {
     bool enhanced = false;    // HD-render substrate active (any feature / hd_profile)
-    EnhanceFlags flags;       // per-feature toggles (smooth/cue/hud/hd-text)
+    EnhanceFlags flags;       // what survived the collapse: smooth_motion only
     std::string hd_profile;   // "" native | "omniscale" | "mmpx"
     int render_scale = 2;
     // --hd-font vector face file (default Freckle; "NotoSans-Regular.ttf"

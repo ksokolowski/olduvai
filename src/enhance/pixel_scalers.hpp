@@ -7,7 +7,7 @@
 // they keep the original DOS palette intact and round transparency
 // cleanly.  Ports of the reference engine's
 // formats/upscale/{classical,eagle}.py.  Part of the opt-in enhanced
-// path — default rendering stays native 320×200.
+// path — default rendering stays native 320x200.
 #pragma once
 
 #include <cstdint>
@@ -19,15 +19,15 @@ namespace olduvai::enhance {
 std::vector<std::uint8_t> nearest_scale(const std::vector<std::uint8_t>& rgba,
                                         int w, int h, int scale);
 
-// AdvanceMAME Scale2x — RGBA in, 2W×2H RGBA out.
+// AdvanceMAME Scale2x — RGBA in, 2Wx2H RGBA out.
 std::vector<std::uint8_t> scale2x(const std::vector<std::uint8_t>& rgba,
                                   int w, int h);
 
-// AdvanceMAME Scale3x — RGBA in, 3W×3H RGBA out.
+// AdvanceMAME Scale3x — RGBA in, 3Wx3H RGBA out.
 std::vector<std::uint8_t> scale3x(const std::vector<std::uint8_t>& rgba,
                                   int w, int h);
 
-// Eagle 2x (Dirk Stevens, public domain) — RGBA in, 2W×2H RGBA out.
+// Eagle 2x (Dirk Stevens, public domain) — RGBA in, 2Wx2H RGBA out.
 std::vector<std::uint8_t> eagle_2x(const std::vector<std::uint8_t>& rgba,
                                    int w, int h);
 

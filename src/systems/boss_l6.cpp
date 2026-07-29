@@ -106,7 +106,7 @@ void tick_l6_boss_post_render(L6BossState& boss) {
 //     00 00 01 00 02 00 01 00 00 00)
 //   hit reaction (:01c9-0201):
 //     part A: base + 0 (:01d1 — H1 body, NO table offset)
-//     part B: base + 6 (:01f0 `add ax,6` — H4[3] SHOCKED strip, 96×57,
+//     part B: base + 6 (:01f0 `add ax,6` — H4[3] SHOCKED strip, 96x57,
 //             also covers the right shoulder next to the head)
 // Engine mapping: base+0..2 → H1/H2/H3.MAT[0]; base+3..6 → H4.MAT[0..3].
 // Outside the window the EXE draws nothing and the VGA frame persists

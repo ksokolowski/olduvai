@@ -15,9 +15,11 @@
 #include <SDL.h>
 #include <string>
 
+#include "presentation/render/game_render.hpp"
+
 namespace olduvai::presentation {
 
-// Largest integer multiple of (logical_w × logical_h) that fits the
+// Largest integer multiple of (logical_w x logical_h) that fits the
 // desktop usable area; never below 1.
 int desktop_integer_scale(int logical_w, int logical_h);
 
@@ -34,7 +36,7 @@ struct ScaledWindow {
     SDL_Renderer* ren = nullptr;
 };
 
-// A streaming RGBA32 texture of size w×h on `ren` — the pixel format and
+// A streaming RGBA32 texture of size wxh on `ren` — the pixel format and
 // access every scene / overlay / intro / pause texture uses.  Blend mode is
 // left at the SDL default; callers that need SDL_BLENDMODE_BLEND (overlays)
 // set it themselves after.
@@ -50,6 +52,22 @@ inline SDL_Texture* create_stream_tex(SDL_Renderer* ren, int w, int h) {
 // create_scaled_window calls it; standalone SDL windows (viewer) call it
 // directly.
 void set_window_icon(SDL_Window* win);
+
+// Upload a 320x200 native frame into `tex`, upscaling first when HD is on.
+//
+// The six sites that do this — the two end-sequence holds, the boss
+// loading/tally and pause composes, and the title intro and pause composes —
+// were byte-for-byte the same nine lines.
+//
+// Deliberately NOT general.  Three other upload sites look similar and are
+// excluded: two push an ALREADY-upscaled buffer with no upscale step, one
+// strides by fb.w rather than 320, and frame_presenter interposes the HUD bars
+// between upscale and upload.  Covering those needs a parameter that selects
+// behaviour, and a helper that needs a mode flag is two helpers — the flag
+// becomes the thing that drifts.  320x200-native-in, texture-out, no options.
+void upload_native_frame(SDL_Texture* tex, const FrameBuffer& fb, int hd_scale,
+                         const std::string& hd_profile);
+
 
 // Window at the integer-fit size + accelerated renderer (software
 // fallback) with nearest-neighbour scaling onto the logical canvas.
@@ -116,5 +134,26 @@ private:
     double next_ = 0.0;
     unsigned long long freq_ = 0;
 };
+
+// End-of-tick pacing, shared by both drivers.  Three ways to land on the next
+// 18.2065 Hz tick:
+//   * smooth-motion already filled the tick via vsync -> just re-arm;
+//   * --vga-scan classic -> re-present the SAME frame every vblank until the
+//     tick expires (the software twin of VGA scanning VRAM at 70 Hz);
+//   * otherwise -> drift-free absolute-deadline wait.
+//
+// `vga_scan_ok` is in/out: three consecutive sub-1.5 ms presents mean the
+// driver refused vsync, and the scanout disables itself for the rest of the
+// level rather than spinning.  A default has to degrade, not hang.
+//
+// The counters are OPTIONAL and are the only thing that differed between the
+// two copies — game_app reports them under OLDUVAI_PACE_TRACE, the boss does
+// not.  They are output sinks, not a mode: passing nullptr changes what is
+// COUNTED, never what is done.
+void pace_end_of_tick(SDL_Renderer* ren, SDL_Texture* tex, DosTicker& ticker,
+                      bool smooth_vsync_ran, bool vga_scan_enabled, bool hd,
+                      bool& vga_scan_ok,
+                      unsigned long* fill_presents = nullptr,
+                      unsigned long* fill_ticks = nullptr);
 
 }  // namespace olduvai::presentation

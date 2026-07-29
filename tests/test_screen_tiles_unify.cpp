@@ -37,8 +37,8 @@
 #include "formats/cur.hpp"
 #include "formats/mat.hpp"
 #include "prepare/exe_tables.hpp"
-#include "presentation/screen_tiles.hpp"
-#include "presentation/tile_patterns.hpp"
+#include "presentation/render/screen_tiles.hpp"
+#include "presentation/render/tile_patterns.hpp"
 
 namespace fs = std::filesystem;
 using olduvai::formats::CurArchive;

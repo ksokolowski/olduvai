@@ -62,6 +62,10 @@
     {
       "name": "asan",
       "configurePreset": "asan",
+      "environment": {
+        "ASAN_OPTIONS": "detect_stack_use_after_return=1",
+        "UBSAN_OPTIONS": "print_stacktrace=1"
+      },
       "output": {
         "outputOnFailure": true
       }

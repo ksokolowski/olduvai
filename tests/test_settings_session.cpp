@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-#include "presentation/settings_session.hpp"
+#include "presentation/menu/settings_session.hpp"
 
 #include <cstdio>
 #include <string>

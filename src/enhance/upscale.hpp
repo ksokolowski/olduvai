@@ -33,14 +33,14 @@ bool is_supported_hd_profile(const std::string& profile);
 // alpha the pipeline already produced).
 bool profile_preserves_palette(const std::string& profile);
 
-// RGBA in (w×h), RGBA out (w*scale × h*scale).  Dispatches by profile:
+// RGBA in (wxh), RGBA out (w*scale x h*scale).  Dispatches by profile:
 //   native        identity (HD disabled upstream; returns input)
 //   retro         nearest-neighbour (crisp blocky pixels)
-//   smooth        Scale2x (×2) / Scale3x (×3) / Scale2x² (×4)
-//   eagle         Eagle 2× (×2; chained for ×4; ×3 → Scale3x)
-//   xbr           xBR-style 2× blend (×2; chained for ×4; ×3 → Scale3x)
-//   mmpx          MMPX (×2, doubled for ×4)
-//   omniscale     OmniScale (native ×2/×3/×4)
+//   smooth        Scale2x (x2) / Scale3x (x3) / Scale2x² (x4)
+//   eagle         Eagle 2x (x2; chained for x4; x3 → Scale3x)
+//   xbr           xBR-style 2x blend (x2; chained for x4; x3 → Scale3x)
+//   mmpx          MMPX (x2, doubled for x4)
+//   omniscale     OmniScale (native x2/x3/x4)
 // scale 1 returns the input unchanged.  An unsupported/unimplemented
 // profile name throws std::invalid_argument — callers MUST validate via
 // is_supported_hd_profile() at startup so this is never reached at runtime.

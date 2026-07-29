@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-#include "presentation/confirm_dialog.hpp"
+#include "presentation/menu/confirm_dialog.hpp"
 
 #include <cstdio>
 #include <string>

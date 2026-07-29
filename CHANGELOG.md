@@ -5,6 +5,195 @@ lands; 0.x releases are beta.
 
 ## Unreleased
 
+## 0.9.5 — 2026-07-29
+
+Audio reaches every platform for the first time, and the things that were
+supposed to prove it started actually proving it.
+
+- **There are two presentation styles now, not three.** "Enhanced 4:3" is
+  gone from the Style menu; there is Classic DOS and Enhanced HD, and the
+  aspect is chosen in Video where the other display settings live. It was
+  never really a third style — it was Enhanced HD with one display setting
+  changed. `--profile hd-43` still works and does what it always did.
+
+  Picking Enhanced no longer overrides an aspect you chose deliberately: if
+  you had 4:3 or Stretch set, it stays. Coming from Classic it still gives you
+  widescreen.
+
+- **Fixed: switching from Enhanced to Classic mid-game kept the smooth
+  motion**, and with it suppressed the classic VGA scanout that Classic mode
+  is supposed to use. Starting the game in Enhanced and switching to Classic
+  from the Options menu left it in a half-and-half state; starting in Classic
+  was always correct. Both are right now.
+
+- **The menus are built into the game rather than read from a file.** The
+  engine no longer looks for `data/menus.json` at startup, and the packages no
+  longer ship it — the menu layout is compiled in when the game is built. If a
+  menu definition is ever wrong, the build now fails instead of the game
+  starting up without menus. (The file is still how menus are authored, and is
+  where translations would go; it is simply read when the game is built rather
+  than when you run it.)
+
+- **Fixed: the main menu was missing on a bare install.** If the game ran
+  without its `data` folder beside it, the title screen had no main menu at
+  all and the game would not get past the intro — while the in-game pause menu
+  and the boss pause menu both worked fine, because only the main menu had
+  been left without its built-in fallback copy.
+
+- **Fixed: six command-line options were silently ignored when you had a
+  saved setting.** `--music-device`, `--sfx-backend`, `--display-mode`,
+  `--transitions`, `--hd-font` and `--banner-fx` lost to `play.json` whenever
+  the value you typed happened to be the default one — so there was no way to
+  say, for example, "ignore my saved AdLib setting and pick the best audio
+  device" (`--music-device auto`), because that request looked identical to
+  not asking at all. The command line now wins whenever you actually type the
+  option, and your saved settings still apply when you do not.
+
+- **Fixed: a corrupt or truncated game file crashed instead of explaining
+  itself.** If one of your game files was damaged — a partial copy, a bad
+  download — the engine aborted with `libc++abi: terminating due to uncaught
+  exception` and nothing else. It now exits cleanly and tells you which file
+  and what is wrong with it, for example *"archive truncated: data for entry
+  BONUS.VOC"*, and suggests re-copying it from your original media.
+
+- **Enhanced mode is now all-or-nothing.** The seven per-effect toggles
+  (smooth motion, HD text, HUD overlay, cinematic cue, fluid bubbles, secret
+  slide, descent pan) are gone from the Options menu, and `--enhance <list>`
+  no longer picks a subset — any name you list simply turns enhanced mode on.
+  If you had some effects off, they come back on; nothing else changes, and
+  classic DOS mode is untouched.
+
+  The reason is the entry above. Seven switches is 128 combinations, and only
+  two were ever tested: everything off and everything on. The other 126
+  shipped with no coverage at all, and at least one of them visibly broke the
+  pause menu. Offering a choice we could not check was worse than not
+  offering it. If you want HD without the smooth sub-frame motion,
+  `--transitions classic` still does exactly that.
+
+- **Fixed: the Level 6 victory drop was not smoothed in enhanced mode.** After
+  the giant is beaten, the caveman slides down to the floor — and that slide
+  stepped in visible jerks while everything else in enhanced mode moved
+  smoothly. The interpolation was in fact running; it just could not be seen,
+  because it moved the sprite in whole original-resolution pixels. At the
+  enhanced render scale that is sixteen screen pixels per step, so the three
+  in-between frames it drew could only land on three of them. It now positions
+  the falling sprite the same way the boss fight positions the player, which
+  has always been smooth, so the drop finally looks like the rest of the game.
+
+- **Fixed: the Dark Woods trunk-descent cinematic ran slowly in enhanced mode.**
+  The level-end sequence where the platform grinds down the giant trunk played
+  noticeably slower than it should, then snapped back to normal speed the
+  moment it finished. In enhanced mode the two descent phases were drawing
+  every frame **three times over** — the same image, pixel for pixel, each one
+  re-running the full HD upscale of the whole widescreen picture. Three times
+  the most expensive work in the renderer, for something already on screen.
+  On a fast machine that was merely wasteful; on a real display each redundant
+  redraw missed the screen refresh it was aiming at, and the delay tripled.
+
+  Nothing about how the cinematic looks has changed — the frames it shows are
+  the same frames, in the same order, for the same total time. It simply stops
+  drawing each of them twice more. The camera pan in the middle genuinely does
+  move between sub-frames, and it still renders every one of them.
+
+- **Fixed: in widescreen, the ending was stretched — and stayed stretched.**
+  Finishing the game in widescreen showed the win ending horizontally
+  distorted, and the distortion did not stop there: it carried on through the
+  logo intro that follows, all the way back to the main menu. The ending and
+  the game-over screen are drawn at the original picture width, but the game
+  had left the display on the wider widescreen canvas, so that narrow picture
+  was pulled across the full width instead of being placed inside it. Nothing
+  reset the canvas until the main menu did, which is why it outlasted the
+  ending itself. The boss fights already restored the picture shape before
+  their own end sequences; now the rest of the game does too.
+
+- **Fixed: the Level 4 triceratops lost its rider for one frame.** After
+  beating the Level 4 boss, the caveman rides the triceratops off — and on the
+  very last frame before the screen faded out, he vanished while the dinosaur
+  carried on alone. That frame is also the image the fade works from, so the
+  fade began from a picture with nobody on the mount. The rider is now held on
+  through the final frame, so the ride reads continuously into the fade.
+
+- **Fixed: things near the screen edges disappeared during cave transitions in
+  widescreen.** Entering or leaving a cave with widescreen enabled made
+  scenery close to the left and right edges — the spikes on Level 1's second
+  screen are the clearest example — flicker away or come out clipped for the
+  length of the fade, then return correctly once it finished. In widescreen
+  the game rebuilds the strips either side of the main picture from the level
+  layout, and during a transition that rebuild painted over the objects
+  already drawn there. Those strips now keep their contents for the whole
+  transition.
+
+- **Fixed: the pause menu could come out shredded in widescreen.** With
+  widescreen on and enhanced HD text off — reachable by unticking "HD text" in
+  the Options menu, or with `--enhance smooth-motion` — the pause menu's text
+  was drawn diagonally across the screen instead of inside its panel. The menu
+  is drawn into a wider-than-normal buffer in widescreen, and the bitmap text
+  routine still assumed the standard 320-pixel width, so every line of pixels
+  landed in the wrong place and anything past the old width was cut off. The
+  boss pause menu had the same fault. Nothing was wrong with your settings —
+  the combination simply had no test covering it, because every existing
+  screenshot test runs with HD text on, which uses a different text path.
+- **MT-32 and General MIDI now work on macOS and Windows.** Both synths were
+  loaded at runtime and only ever shipped in the Linux AppImage, so macOS and
+  Windows users silently fell back to AdLib — music still played, so nothing
+  looked wrong. MT-32 emulation is now built into the binary on every
+  platform, and General MIDI ships beside it. The Linux build carries the same
+  self-contained FluidSynth as the others instead of the distribution's, which
+  also makes the AppImage smaller (49 bundled libraries down to 39).
+- **General MIDI now finds your SoundFont on macOS and Windows.** The search
+  only ever looked in Linux locations, so installing a SoundFont the
+  documented way (`brew install scummvm`) left GM silent with no explanation.
+- **MT-32 now finds your ROMs on Windows.** The search looked in `$HOME`,
+  which Windows does not normally set, so the only place that worked was a
+  `mt32-roms` folder next to `olduvai.exe` — fine for the portable zip, but
+  there was nowhere to put ROMs that survived unzipping a new version over the
+  old one. It now looks in `%LOCALAPPDATA%\olduvai\mt32-roms` first, the same
+  place it already looked for SoundFonts. The folder beside the executable
+  still works, and nothing changes on macOS or Linux.
+- **MT-32 now works on Linux with mixed-case ROM filenames.** The lookup
+  required every ROM in a set to share one letter case; combining a legacy
+  dump with a MAME-versioned one — the common case — matched nothing, and
+  MT-32 was simply unavailable. macOS and Windows were unaffected only
+  because their filesystems ignore case.
+- **You can now choose the MT-32 model**, and the game says which it loaded:
+  `--mt32-model auto|cm32l|mt32`. With both ROM sets present it used to pick
+  CM-32L silently, so two machines could sound different with nothing to
+  explain why.
+- **When a music backend cannot start, the game now says why** — whether the
+  synth is missing or only the SoundFont/ROMs are, and where it looked. The
+  old message listed every possibility at once, which made a broken install
+  indistinguishable from an unconfigured one.
+- **Switching Enhanced ↔ Classic while fullscreen is now instant.** It used to
+  drop out of fullscreen to a black window for several seconds on every
+  switch.
+- **The macOS app is simpler and starts reliably on current macOS.** It no
+  longer carries a separate SDL2 library, and the packaging step that produced
+  an app which would hang on macOS 26 is gone.
+- **The HD upscale cache no longer fills your disk.** Enhanced mode wrote
+  every upscaled asset to a cache directory that had no size limit, no
+  eviction and no expiry, so it only ever grew: one machine reached **411 MB
+  across 2680 files** simply by trying the different HD profiles, of which the
+  actual prepared game data was 4 KB.
+
+  It is gone, and the reason is that it was never earning its place. The cache
+  existed to avoid repeating the upscale on every launch — worth doing when
+  that work is slow, as it was in the Python reference implementation this
+  behaviour was proven against first. It is not slow here. Starting with a
+  completely empty cache, using the most expensive upscaler at widescreen, the
+  worst single frame took **25 ms against a 55 ms budget** and no frame was
+  ever late; upscaling as you go simply does not cost you anything you can
+  see. The engine already keeps each upscaled asset in memory for the rest of
+  the session, so the disk copy was only ever saving work between runs — work
+  that turns out to be free.
+
+  Removed with it: `--prepare`, `--verify-cache`, `--purge-cache` and
+  `--decode-sfx`, which existed only to manage or fill that directory. If you
+  have a cache directory from an earlier version, this release deletes it for
+  you on first start — for some people that is several hundred megabytes.
+- The Linux AppImage keeps a **stated compatibility floor** (glibc 2.35 —
+  Ubuntu 22.04, Mint 21, Debian 12 and newer), now enforced by the build
+  rather than inherited from whichever machine happened to build it.
+
 ## 0.9.4 — 2026-07-26
 
 - **Pause overlay in Enhanced widescreen** now shows the game properly

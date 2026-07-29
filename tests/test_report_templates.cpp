@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
-#include "presentation/report_templates.hpp"
+#include "presentation/diag/report_templates.hpp"
 
 using namespace olduvai::presentation;
 

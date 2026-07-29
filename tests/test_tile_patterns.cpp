@@ -8,7 +8,7 @@
 
 #include <algorithm>
 
-#include "presentation/tile_patterns.hpp"
+#include "presentation/render/tile_patterns.hpp"
 
 using olduvai::presentation::LevelRenderAssets;
 using olduvai::presentation::tile_patterns::extend_columns_to_top;

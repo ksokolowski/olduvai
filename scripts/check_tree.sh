@@ -64,6 +64,33 @@ if [ -n "$missing" ]; then
     fail=1
 fi
 
+# Unicode homoglyphs: characters that LOOK like ASCII but are not.  U+2212
+# MINUS SIGN is indistinguishable from '-' and U+00D7 MULTIPLICATION SIGN from
+# 'x' at a glance, so one copied out of a comment into an expression is a
+# baffling compile error, and one copied into a string literal ships the wrong
+# glyph silently.  They also render badly in the gitea/GitHub diff views.
+#
+# Scoped to LIVE code: third_party is upstream, and docs/internal/archive is
+# dated snapshots that the planning policy says are never rewritten.
+#
+# Deliberately NARROW: this is not a no-Unicode rule.  The copyright headers
+# carry a Polish name, the UI strings use real typography, and the comment
+# separators are house style.  Only the confusable-with-ASCII pair is banned.
+# Built with printf so this script does not itself contain the characters it
+# bans (which would make the rule flag its own source).
+mult=$(printf '\303\227')      # U+00D7 MULTIPLICATION SIGN
+minus=$(printf '\342\210\222')  # U+2212 MINUS SIGN
+homoglyphs=$(git grep -l -e "$mult" -e "$minus" -- \
+                 '*.cpp' '*.hpp' '*.h' '*.sh' '*.cmake' '*.py' '*.cmd' \
+             | grep -v '^third_party/' \
+             | grep -v '^docs/internal/archive/' || true)
+if [ -n "$homoglyphs" ]; then
+    echo "check_tree: Unicode homoglyph (U+00D7 'x' / U+2212 '-') in:" >&2
+    echo "$homoglyphs" >&2
+    echo "  use plain ASCII 'x' and '-' in code and comments." >&2
+    fail=1
+fi
+
 if [ "$fail" -eq 0 ]; then
     echo "check_tree: OK"
 fi

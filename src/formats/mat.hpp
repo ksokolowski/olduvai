@@ -6,10 +6,10 @@
 //   UINT16BE count
 //   per sprite: UINT16BE width, UINT16BE height, UINT16BE iSize
 //     iSize == 0 → raw pixel data follows:
-//         monochrome container: ceil(w/8) × h bytes (1bpp, single plane)
-//         colour container:     ceil(w/8) × 5 × h bytes (5 bitplanes)
+//         monochrome container: ceil(w/8) x h bytes (1bpp, single plane)
+//         colour container:     ceil(w/8) x 5 x h bytes (5 bitplanes)
 //     iSize > 0  → iSize bytes of PackBits-compressed data inflating to
-//         ceil(w/8) × 5 × h bytes
+//         ceil(w/8) x 5 x h bytes
 //
 // 5-plane pixel layout is NON-INTERLEAVED (contiguous plane blocks):
 //   plane0..plane3 = bits 0..3 of the 4-bit colour index, then a 1-bit
@@ -38,7 +38,7 @@ struct Sprite {
     SpriteFormat format = SpriteFormat::Ilbm5;
     std::vector<std::uint8_t> raw_pixels;  // uncompressed plane data
 
-    // Decode to width × height indexed pixels (row-major).
+    // Decode to width x height indexed pixels (row-major).
     std::vector<IndexedPixel> decode_indexed() const;
 };
 

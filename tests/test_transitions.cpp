@@ -161,7 +161,7 @@ TEST_CASE("L7-style screen-9 cave entry raises cave_warp_pending (fade signal)")
 }
 
 // ── Cave-EMERGE reveal (Enhanced #18 v2) — pacing arm + freeze/cancel ──
-// Enhanced arms 9 ticks (3 stages × 3-tick holds, frozen); classic arms
+// Enhanced arms 9 ticks (3 stages x 3-tick holds, frozen); classic arms
 // 2 draw-only ticks (EXE gameplay timing untouched).  A real hit or a
 // death during the frozen ticks cancels the emerge cleanly.
 

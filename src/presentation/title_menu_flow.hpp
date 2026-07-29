@@ -17,9 +17,9 @@
 #include <functional>
 #include <optional>
 
-#include "presentation/audio.hpp"        // SdlAudio
+#include "presentation/audio/audio.hpp"        // SdlAudio
 #include "presentation/game_app.hpp"     // GameOptions
-#include "presentation/save_state.hpp"   // SaveState
+#include "presentation/level/save_state.hpp"   // SaveState
 #include "presentation/window_util.hpp"  // ScaledWindow
 
 namespace olduvai::presentation {

@@ -3,7 +3,6 @@
 #include "prepare/game_files.hpp"
 
 #include "formats/unsqz.hpp"
-#include "prepare/cache_paths.hpp"
 
 #include <array>
 #include <cctype>
@@ -66,24 +65,18 @@ fs::path resolve_subdir(const fs::path& dir, const std::string& want) {
 // The compressed-executable container name CD-era distributions use.
 constexpr const char* kSqzName = "PREH.SQZ";
 
+}  // namespace
+
+// Hoisted out of the anonymous namespace above: this is the whole-file reader
+// the rest of the engine had privately re-implemented eight more times.  It
+// lives in prepare/ because that is the lowest layer every caller
+// (presentation, app) may legally include.
 std::vector<std::uint8_t> slurp_file(const fs::path& p) {
     std::ifstream in(p, std::ios::binary);
     if (!in) return {};
     return {std::istreambuf_iterator<char>(in),
             std::istreambuf_iterator<char>()};
 }
-
-// Fold a 64-bit value into an FNV-1a running hash, byte by byte (low-first),
-// so the result is endianness-independent.
-void fnv_mix_u64(std::uint64_t& h, std::uint64_t v) {
-    for (int b = 0; b < 8; ++b) {
-        h ^= static_cast<std::uint8_t>(v & 0xFF);
-        h *= kFnvPrime;
-        v >>= 8;
-    }
-}
-
-}  // namespace
 
 const std::vector<std::string>& required_game_files() {
     static const std::vector<std::string> files = {
@@ -235,18 +228,5 @@ std::vector<std::uint8_t> load_game_executable(const fs::path& game_dir) {
     return {};
 }
 
-std::string GameFiles::cache_key() const {
-    if (!complete()) return {};
-    std::uint64_t h = kFnvOffset;
-    fnv_mix_u64(h, static_cast<std::uint64_t>(kPipelineVersion));
-    for (const auto& f : files) {
-        fnv_mix_u64(h, f.checksum);
-        fnv_mix_u64(h, static_cast<std::uint64_t>(f.size));
-    }
-    char buf[17];
-    std::snprintf(buf, sizeof(buf), "%016llx",
-                  static_cast<unsigned long long>(h));
-    return std::string(buf);
-}
 
 }  // namespace olduvai::prepare

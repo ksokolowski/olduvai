@@ -82,14 +82,54 @@ TEST_CASE("options: CLI flags beat config on every flagged key") {
     CHECK(s.config_game_dir == false);
 }
 
-TEST_CASE("options: sentinel-guarded keys yield only at their defaults") {
+// These six keys are guarded on the CLI FLAG, not on the field's value.  The
+// old form compared the field against its own default to infer "the user said
+// nothing" — sound in the reference's argparse, where an unset value is None,
+// and wrong here, where the parse loop writes real defaults.  Under the old
+// form an explicit `--music-device auto` lost to a saved play.json and there
+// was no way to ask for the default from the command line.
+TEST_CASE("options: an unflagged key yields to the config") {
     PlaySettings s;
-    s.music_device = "opl";     // CLI moved it off the sentinel
     merge_config(s, {{"music_device", "gm-builtin"},
-                     {"display_mode", "cpu"}, {"transitions", "classic"}});
-    CHECK(s.music_device == "opl");         // sentinel left → kept
-    CHECK(s.display_mode == "cpu");         // still at default → config wins
+                     {"display_mode", "cpu"}, {"transitions", "classic"},
+                     {"sfx_backend", "opl"}, {"hd_font", "noto"},
+                     {"banner_fx", "fire"}});
+    CHECK(s.music_device == "gm-builtin");
+    CHECK(s.display_mode == "cpu");
     CHECK(s.transitions == "classic");
+    CHECK(s.sfx_backend == "opl");
+    CHECK(s.hd_font == "noto");
+    CHECK(s.banner_fx == "fire");
+}
+
+TEST_CASE("options: an explicit CLI value beats the config") {
+    PlaySettings s;
+    s.music_device = "opl";  s.cli.music_device = true;
+    s.display_mode = "cpu";  s.cli.display_mode = true;
+    merge_config(s, {{"music_device", "gm-builtin"}, {"display_mode", "gpu"}});
+    CHECK(s.music_device == "opl");
+    CHECK(s.display_mode == "cpu");
+}
+
+// The regression the old form could not express: the explicit value IS the
+// default.  Every one of these was silently overridden before.
+TEST_CASE("options: an explicit CLI value that equals the default still wins") {
+    PlaySettings s;
+    s.music_device = "auto";     s.cli.music_device = true;
+    s.sfx_backend  = "auto";     s.cli.sfx_backend  = true;
+    s.display_mode = "gpu";      s.cli.display_mode = true;
+    s.transitions  = "smooth";   s.cli.transitions  = true;
+    s.hd_font      = "freckle";  s.cli.hd_font      = true;
+    s.banner_fx    = "caveman";  s.cli.banner_fx    = true;
+    merge_config(s, {{"music_device", "gm-builtin"}, {"sfx_backend", "opl"},
+                     {"display_mode", "cpu"},       {"transitions", "classic"},
+                     {"hd_font", "noto"},           {"banner_fx", "fire"}});
+    CHECK(s.music_device == "auto");
+    CHECK(s.sfx_backend == "auto");
+    CHECK(s.display_mode == "gpu");
+    CHECK(s.transitions == "smooth");
+    CHECK(s.hd_font == "freckle");
+    CHECK(s.banner_fx == "caveman");
 }
 
 TEST_CASE("options: style_answered — the ask-once gate") {

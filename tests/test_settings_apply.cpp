@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-#include "presentation/settings_apply.hpp"
-#include "presentation/settings_seed.hpp"
+#include "presentation/menu/settings_apply.hpp"
+#include "presentation/menu/settings_seed.hpp"
 
 #include <cstdio>
 #include <map>
@@ -69,9 +69,17 @@ int main() {
     // ── apply_preset: fan-out order + values ──
     struct Rec : MenuBindings {
         std::vector<std::pair<std::string, std::string>> calls;
-        std::string get(const std::string&) override { return {}; }
+        // apply_preset READS the current aspect (it must not clobber a
+        // deliberate 4:3/stretch), so get() has to answer honestly — a stub
+        // returning {} would make that case pass without testing anything.
+        std::map<std::string, std::string> mem;
+        std::string get(const std::string& k) override {
+            auto it = mem.find(k);
+            return it == mem.end() ? std::string{} : it->second;
+        }
         void set(const std::string& k, const std::string& v) override {
             calls.emplace_back(k, v);
+            mem[k] = v;
         }
     } rec;
     auto has = [&rec](const char* k, const char* v) {
@@ -88,19 +96,25 @@ int main() {
     REQUIRE(has("hd_profile", "omniscale"));
     REQUIRE(has("render_scale", "4"));
     REQUIRE(has("aspect", "widescreen"));
-    REQUIRE(has("enhance.smooth_motion", "1"));
-    REQUIRE(has("enhance.descent_pan", "1"));
 
+    // Style sets the MODE.  A deliberate aspect chosen in Video is a display
+    // setting and must survive a Style change — this is what the separate
+    // hd-43 preset used to express, now expressed by not clobbering it.
     rec.calls.clear();
-    apply_preset(rec, "hd-43");
-    REQUIRE(has("aspect", "4:3"));
+    rec.mem["aspect"] = "4:3";
+    apply_preset(rec, "hd");
+    REQUIRE(!has("aspect", "widescreen"));
+    // ...but coming from classic ("keep") it still lands on widescreen.
+    rec.calls.clear();
+    rec.mem["aspect"] = "keep";
+    apply_preset(rec, "hd");
+    REQUIRE(has("aspect", "widescreen"));
 
     rec.calls.clear();
     apply_preset(rec, "dos");
     REQUIRE(rec.calls.front().first == "enhanced");
     REQUIRE(rec.calls.front().second == "false");
     REQUIRE(has("aspect", "keep"));
-    REQUIRE(has("enhance.smooth_motion", "0"));
     // dos deliberately leaves hd_profile/render_scale untouched: the master
     // flag alone forces compose scale 1 (hd_scale_for); not staging them
     // avoids spurious Reinit noise in the confirm dialog.
@@ -146,57 +160,6 @@ int main() {
     REQUIRE(classify_change_in_set("enhanced", "true", classic2, {}) ==
             ApplyTier::Reinit);
 
-    // ── encode_enhance_persist: the shared enhance.* Apply encoding ──
-    {
-        // Preset drain (master staged): only the FIRST enhance.* key
-        // flushes, the list covers every "1" flag in mem (alphabetical,
-        // dashed), and there is NO enhanced=false companion — the staged
-        // master's own persisted value must stand.
-        std::map<std::string, std::string> mem = {
-            {"enhance.cinematic_cue", "1"}, {"enhance.descent_pan", "1"},
-            {"enhance.fluid_bubbles", "1"}, {"enhance.hd_text", "1"},
-            {"enhance.hud_overlay", "1"},   {"enhance.secret_slide", "1"},
-            {"enhance.smooth_motion", "1"}, {"hd_profile", "omniscale"}};
-        std::vector<StagedChange> staged = {
-            {"enhanced", "enhanced", "false", "true"},
-            {"enhance.smooth_motion", "", "0", "1"},
-            {"enhance.hd_text", "", "0", "1"},
-            {"hd_profile", "", "native", "omniscale"}};
-        auto w = encode_enhance_persist(mem, staged, "enhance.smooth_motion");
-        REQUIRE(w.size() == 1);
-        REQUIRE(w[0].first == "enhance");
-        REQUIRE(w[0].second ==
-                "cinematic-cue,descent-pan,fluid-bubbles,hd-text,"
-                "hud-overlay,secret-slide,smooth-motion");
-        // Later enhance.* keys of the same drain: already flushed → nothing.
-        REQUIRE(encode_enhance_persist(mem, staged, "enhance.hd_text")
-                    .empty());
-
-        // Granular drain (master NOT staged): the flush converts a bundle
-        // config into the explicit list, so the companion is required.
-        mem["enhance.hd_text"] = "0";
-        staged = {{"enhance.hd_text", "", "1", "0"}};
-        w = encode_enhance_persist(mem, staged, "enhance.hd_text");
-        REQUIRE(w.size() == 2);
-        REQUIRE(w[0].first == "enhance");
-        REQUIRE(w[0].second ==
-                "cinematic-cue,descent-pan,fluid-bubbles,"
-                "hud-overlay,secret-slide,smooth-motion");
-        REQUIRE(w[1].first == "enhanced");
-        REQUIRE(w[1].second == "false");
-
-        // dos preset (all flags off, master staged): empty list, no
-        // companion.
-        for (auto& [k, v] : mem)
-            if (k.rfind("enhance.", 0) == 0) v = "0";
-        staged = {{"enhanced", "enhanced", "true", "false"},
-                  {"enhance.smooth_motion", "", "1", "0"}};
-        w = encode_enhance_persist(mem, staged, "enhance.smooth_motion");
-        REQUIRE(w.size() == 1);
-        REQUIRE(w[0].first == "enhance");
-        REQUIRE(w[0].second.empty());
-    }
-
     // seed_settings_mem: the shared Options-baseline seeding (CC3 phase 4,
     // slice 2).  A minimal bind with the mem/cur field shape is enough —
     // the template only touches those two members.
@@ -219,7 +182,6 @@ int main() {
         REQUIRE(b.mem["fullscreen"] == "0");
         REQUIRE(b.mem["music_volume"] == "100");
         REQUIRE(b.mem["sfx_volume"] == "100");
-        REQUIRE(b.mem["enhance.smooth_motion"] == "0");
 
         // Enhanced widescreen session: preset derives to "hd", flags map 1:1.
         FakeBind b2;
@@ -231,7 +193,7 @@ int main() {
         s2.sfx_backend = "opl";
         s2.aspect = "widescreen";
         s2.fullscreen = true;
-        s2.flags = EnhanceFlags::all();
+        s2.flags.smooth_motion = true;
         seed_settings_mem(b2, s2);
         REQUIRE(b2.cur.enhanced == true);
         REQUIRE(b2.cur.hd_profile == "smooth");
@@ -242,16 +204,15 @@ int main() {
         REQUIRE(b2.mem["aspect"] == "widescreen");
         REQUIRE(b2.mem["preset"] == "hd");
         REQUIRE(b2.mem["fullscreen"] == "1");
-        REQUIRE(b2.mem["enhance.hd_text"] == "1");
-        REQUIRE(b2.mem["enhance.descent_pan"] == "1");
 
-        // 4:3 enhanced derives the hd-43 preset row.
+        // Enhanced at 4:3 is still the "hd" row: aspect is a Video setting,
+        // not a mode, so it no longer changes which Style row is selected.
         FakeBind b3;
         SettingsSeed s3;
         s3.enhanced = true;
         s3.aspect = "4:3";
         seed_settings_mem(b3, s3);
-        REQUIRE(b3.mem["preset"] == "hd-43");
+        REQUIRE(b3.mem["preset"] == "hd");
     }
 
     return 0;

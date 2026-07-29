@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "presentation/resample.hpp"
+#include "presentation/audio/resample.hpp"
 
 using olduvai::presentation::resample_linear_u8;
 

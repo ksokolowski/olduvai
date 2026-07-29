@@ -13,14 +13,22 @@
 #include <string>
 #include <vector>
 
-#include "presentation/game_render.hpp"
+#include "presentation/render/game_render.hpp"
 #include "systems/player.hpp"
 
 // GCC's -Wdangling-reference misfires on get_static_wide_bg_hd: it returns a
 // reference to the compose CACHE, but the {} temporaries among its arguments
 // make the heuristic suspect the return binds to one. Clang has no such
 // warning (an unknown -W name in the pragma would itself warn there).
-#if defined(__GNUC__) && !defined(__clang__)
+//
+// The VERSION check is load-bearing, not belt-and-braces: -Wdangling-reference
+// arrived in GCC 13, and the AppImage builds in an ubuntu:22.04 container on
+// g++-11 (packaging/build_appimage_linux.sh pins jammy for the glibc 2.35
+// floor).  There the pragma names an option GCC has never heard of and GCC
+// says so — "unknown option after '#pragma GCC diagnostic' kind [-Wpragmas]",
+// once per compile of this TU, in the release job's log.  Guarding on the
+// compiler without guarding on the version trades one warning for another.
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13
 #pragma GCC diagnostic ignored "-Wdangling-reference"
 #endif
 

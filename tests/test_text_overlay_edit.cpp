@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
-#include "presentation/text_overlay_edit.hpp"
+#include "presentation/menu/text_overlay_edit.hpp"
 
 #include <cstdio>
 

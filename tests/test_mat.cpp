@@ -45,7 +45,7 @@ TEST_CASE("monochrome file (font container) parses 1bpp glyphs") {
 }
 
 TEST_CASE("uncompressed 5-plane sprite decodes colour index + mask") {
-    // count=1; 8x1 sprite, isize=0 → 5 planes × 1 byte each.
+    // count=1; 8x1 sprite, isize=0 → 5 planes x 1 byte each.
     // pixel 0: colour 0b1010 = 10, opaque.  pixel 1: colour 5, opaque.
     // pixel 2: transparent (mask 0) regardless of plane bits.
     std::vector<std::uint8_t> data;
@@ -69,7 +69,7 @@ TEST_CASE("uncompressed 5-plane sprite decodes colour index + mask") {
 }
 
 TEST_CASE("packbits-compressed sprite inflates to 5-plane size") {
-    // 8x1 sprite → expected raw = 5 bytes.  Compressed: repeat 0xFF ×5
+    // 8x1 sprite → expected raw = 5 bytes.  Compressed: repeat 0xFF x5
     // (control 0xFC = 257-252 = 5).
     std::vector<std::uint8_t> data;
     u16be(data, 1);

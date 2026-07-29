@@ -8,12 +8,16 @@
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 // Vendored single-header: silence its own warnings under -Werror.
+#if defined(__GNUC__) || defined(__clang__)   // MSVC: C4068 unknown pragma
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #include "stb_image_write.h"
+#if defined(__GNUC__) || defined(__clang__)   // MSVC: C4068 unknown pragma
 #pragma GCC diagnostic pop
+#endif
 
 namespace olduvai::presentation {
 

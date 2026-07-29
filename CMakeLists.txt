@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.21)
 project(olduvai
-    VERSION 0.9.4
+    VERSION 0.9.5
     DESCRIPTION "Native recreation of the Prehistorik (1991) engine"
     LANGUAGES CXX C)
 
@@ -40,11 +40,66 @@ if(OLDUVAI_WERROR AND NOT MSVC)
     add_compile_options(-Werror)
 endif()
 
+# ── Vendored code is not held to our warning bar ────────────────────────────
+#
+# MEASURED on the 2026-07-26 pre-tag dry run: 193 compiler warnings across the
+# four platform jobs, of which 90 came from code we did not write — SDL2's own
+# ObjC (50, macOS deprecations), doctest (31, MSVC C5285), FluidSynth (9,
+# MSVC).  Our own warnings were outnumbered on every platform but Linux, which
+# is precisely the failure mode: a real warning in our code arrives in a wall
+# of noise nobody reads, and the log looked from the outside like "FluidSynth
+# throws hundreds of warnings" when FluidSynth throws nine.
+#
+# The line, and it is deliberate: **compiler warnings OFF for vendored code,
+# sanitizers ON.**  A warning in upstream's source is upstream's business and
+# we will not patch it — the same argument that keeps mt32emu verbatim below
+# (a local patch is re-work at every re-sync and the LGPL source pointer has
+# to stay honest).  A SANITIZER hit is a different thing: it is a real defect
+# that will crash OUR binary, so the vendored tree stays instrumented, with
+# only the one narrow, documented exception at mt32emu's shift-base.
+#
+# This generalises what RtMidi.cpp already did per-file since 2026-07.  Use it
+# for every vendored target; do NOT hand-roll `-w` at a new call site.
+function(olduvai_silence_vendored_target tgt)
+    if(NOT TARGET ${tgt})
+        return()
+    endif()
+    if(MSVC)
+        target_compile_options(${tgt} PRIVATE /w)
+    else()
+        target_compile_options(${tgt} PRIVATE -w)
+    endif()
+endfunction()
+
+# Vendored HEADERS are a separate problem: doctest is not a target we own, it
+# is #included into OUR translation units, so a target-level flag cannot reach
+# it.  SYSTEM include directories are the mechanism that can — the compiler
+# suppresses diagnostics from headers found there.  MSVC needs the /external
+# switches turned on explicitly before /external:I means anything.
+if(MSVC)
+    add_compile_options(/external:W0)
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 19.29)
+        add_compile_options(/external:anglebrackets-)
+    endif()
+endif()
+
 # Address + UB sanitizers for a verification build (local runs and the CI
 # sanitize lane).  UB is made FATAL (-fno-sanitize-recover) so ctest fails on
 # any hit instead of scrolling past a warning.  Forces LTO off (IPO+ASan
 # interact badly) and keeps frame pointers for readable stacks.  Use a
 # separate build tree: cmake --preset asan (build/asan)
+#
+# Half the lane lives in CMakePresets.json, not here: the RUNTIME options
+# (ASAN_OPTIONS/UBSAN_OPTIONS) are set on the asan *test* preset, because two
+# defaults are off and silently cost detection —
+# detect_stack_use_after_return=1 (without it a real stack-use-after-return is
+# simply not reported, on clang as well as g++) and UBSAN print_stacktrace=1
+# (without it a fatal UB report is one line with no frames, which is what
+# -fno-sanitize-recover gets you today).  Running an asan-built test binary
+# directly, rather than through `ctest --preset asan`, gets neither.
+# Deliberately NOT set: symbolize (already default), halt_on_error/
+# abort_on_error (already default), print_stacktrace in ASAN_OPTIONS (not an
+# ASan flag — silently ignored), and detect_leaks (hard-aborts on macOS/arm64).
 option(OLDUVAI_SANITIZE "Build with -fsanitize=address,undefined" OFF)
 if(OLDUVAI_SANITIZE)
     add_compile_options(-fsanitize=address,undefined
@@ -132,12 +187,11 @@ add_library(olduvai_formats
     src/enhance/upscale.cpp
     src/enhance/hd_asset_cache.cpp
     src/enhance/hd_text.cpp
-    src/presentation/text_editor.cpp
+    src/presentation/menu/text_editor.cpp
     src/enhance/enhanced_hud.cpp
     src/prepare/exe_tables.cpp
-    src/prepare/cache_paths.cpp
     src/prepare/game_files.cpp
-    src/prepare/prepare.cpp
+    src/prepare/game_archives.cpp
     src/systems/player.cpp
     src/systems/monster_ai.cpp
     src/systems/spawning.cpp
@@ -154,7 +208,8 @@ add_library(olduvai_formats
     src/systems/boss_l6.cpp
     src/systems/fluid_bubbles.cpp
 )
-target_include_directories(olduvai_formats PUBLIC src third_party/stb)
+target_include_directories(olduvai_formats PUBLIC src)
+target_include_directories(olduvai_formats SYSTEM PUBLIC third_party/stb)
 
 # HD bake compression (OPTIONAL).  The upscaled cache stores palette art as
 # 32-bit RGBA — ~17 distinct colours in a 4 MB frame — so deflate takes the
@@ -198,7 +253,7 @@ if(OLDUVAI_FUZZ)
             "OLDUVAI_FUZZ requires -DOLDUVAI_SANITIZE=ON so the parsers are instrumented")
     endif()
     add_executable(fuzz_formats tests/fuzz/fuzz_formats.cpp
-        src/presentation/midi_seq.cpp)
+        src/presentation/audio/midi_seq.cpp)
     target_compile_options(fuzz_formats PRIVATE -fsanitize=fuzzer)
     target_link_options(fuzz_formats PRIVATE -fsanitize=fuzzer)
     target_link_libraries(fuzz_formats PRIVATE olduvai_formats)
@@ -207,61 +262,70 @@ endif()
 # ── presentation (SDL2; optional so headless format work still builds) ─────
 find_package(SDL2 QUIET)
 # Single point of truth for which SDL2 flavour every target links.
+#
+# OLDUVAI_STATIC_SDL used to be Windows-only.  It is now honoured wherever a
+# static SDL2 is available, because the macOS release wants it too: SDL2 was
+# the LAST third-party dylib in the .app (libmt32emu is vendored, FluidSynth
+# is dlopen'd and staged by hand), and linking it in removes the bundling step
+# altogether — along with dylibbundler, whose install-name rewriting produces
+# a binary that SIGKILLs or hangs on macOS 26.  Measured: byte-identical audio
+# and pixel output, zero third-party dylibs, and a bundle with no
+# Contents/libs at all.  SDL2 is zlib-licensed, so static linking carries no
+# relinking obligation (FluidSynth stays dynamic precisely because LGPL §6
+# does).
 set(OLDUVAI_SDL2 SDL2::SDL2)
-if(WIN32 AND OLDUVAI_STATIC_SDL AND TARGET SDL2::SDL2-static)
+if(OLDUVAI_STATIC_SDL AND TARGET SDL2::SDL2-static)
     set(OLDUVAI_SDL2 SDL2::SDL2-static)
 endif()
 if(SDL2_FOUND)
     add_library(olduvai_presentation
-        src/presentation/banners.cpp
-        src/presentation/viewer.cpp
-        src/presentation/gamepad.cpp
-        src/presentation/game_render.cpp
-        src/presentation/sprite_blit.cpp
-        src/presentation/bg_compose.cpp
-        src/presentation/level_save.cpp
-        src/presentation/level_setup.cpp
-        src/presentation/pause_flow.cpp
-        src/presentation/pause_service.cpp
-    src/presentation/report_form.cpp
-    src/presentation/tile_patterns.cpp
-        src/presentation/screen_tiles.cpp
+        src/presentation/render/banners.cpp
+        src/presentation/diag/viewer.cpp
+        src/presentation/input/gamepad.cpp
+        src/presentation/render/game_render.cpp
+        src/presentation/render/sprite_blit.cpp
+        src/presentation/render/bg_compose.cpp
+        src/presentation/level/level_save.cpp
+        src/presentation/level/level_setup.cpp
+        src/presentation/menu/pause_flow.cpp
+        src/presentation/menu/pause_service.cpp
+    src/presentation/diag/report_form.cpp
+    src/presentation/render/tile_patterns.cpp
+        src/presentation/render/screen_tiles.cpp
         src/presentation/game_app.cpp
-        src/presentation/hud_render.cpp
-        src/presentation/debug_overlay.cpp
-        src/presentation/screens.cpp
-        src/presentation/text_overlay.cpp
+        src/presentation/render/hud_render.cpp
+        src/presentation/diag/debug_overlay.cpp
+        src/presentation/sequence/screens.cpp
+        src/presentation/render/text_overlay.cpp
         src/presentation/title_menu_flow.cpp
-        src/presentation/transition_players.cpp
-        src/presentation/widescreen_presenter.cpp
+        src/presentation/sequence/transition_players.cpp
+        src/presentation/render/widescreen_presenter.cpp
         src/presentation/window_util.cpp
         src/presentation/boss_app.cpp
-        src/presentation/boss_render.cpp
-        src/presentation/audio.cpp
-        src/presentation/host_midi.cpp
-        src/presentation/opl_sfx.cpp
-        src/presentation/midi_seq.cpp
-        src/presentation/replay.cpp
+        src/presentation/render/boss_render.cpp
+        src/presentation/audio/audio.cpp
+        src/presentation/audio/host_midi.cpp
+        src/presentation/audio/opl_sfx.cpp
+        src/presentation/audio/midi_seq.cpp
+        src/presentation/input/replay.cpp
         src/presentation/image_out.cpp
-        src/presentation/draw_log.cpp
-        src/presentation/end_sequence.cpp
-        src/presentation/frame_input.cpp
-        src/presentation/frame_presenter.cpp
-        src/presentation/reinit_test_hook.cpp
-        src/presentation/bug_capture.cpp
-        src/presentation/mini_json.cpp
-        src/presentation/menu.cpp
-        src/presentation/menu_model.cpp
-        src/presentation/menu_render.cpp
-        src/presentation/text_overlay_edit.cpp
-        src/presentation/settings_apply.cpp
-        src/presentation/settings_session.cpp
-        src/presentation/settings_flow.cpp
-        src/presentation/confirm_dialog.cpp
-        src/presentation/save_state.cpp
-        src/presentation/widescreen.cpp
-        src/presentation/boss_widescreen.cpp
-        src/presentation/l3_end_level.cpp
+        src/presentation/diag/draw_log.cpp
+        src/presentation/sequence/end_sequence.cpp
+        src/presentation/input/frame_input.cpp
+        src/presentation/render/frame_presenter.cpp
+        src/presentation/diag/reinit_test_hook.cpp
+        src/presentation/diag/bug_capture.cpp
+        src/presentation/menu/menu.cpp
+        src/presentation/menu/menu_render.cpp
+        src/presentation/menu/text_overlay_edit.cpp
+        src/presentation/menu/settings_apply.cpp
+        src/presentation/menu/settings_session.cpp
+        src/presentation/menu/settings_flow.cpp
+        src/presentation/menu/confirm_dialog.cpp
+        src/presentation/level/save_state.cpp
+        src/presentation/render/widescreen.cpp
+        src/presentation/render/boss_widescreen.cpp
+        src/presentation/sequence/l3_end_level.cpp
         third_party/nuked_opl3/opl3.c)
     target_include_directories(olduvai_presentation
         PUBLIC src third_party/stb
@@ -298,7 +362,7 @@ if(SDL2_FOUND)
     # the container's authored FF 7F voice patches (byte-parity with the
     # reference renderer via tools/opl_music_dump), always available with
     # no external dependency.  (The former libADLMIDI submodule is removed.)
-    target_sources(olduvai_presentation PRIVATE src/presentation/opl_music.cpp)
+    target_sources(olduvai_presentation PRIVATE src/presentation/audio/opl_music.cpp)
 
     # ── Host MIDI output: vendored RtMidi (CoreMIDI / ALSA / WinMM) ────
     # Opt-in (--music-device host-midi / --list-midi-ports).  Default ON, but
@@ -346,14 +410,83 @@ if(SDL2_FOUND)
     if(_olduvai_rtmidi_on)
         target_sources(olduvai_presentation PRIVATE
             third_party/rtmidi/RtMidi.cpp)
-        target_include_directories(olduvai_presentation PRIVATE third_party)
+        target_include_directories(olduvai_presentation SYSTEM PRIVATE third_party)
         target_compile_definitions(olduvai_presentation PRIVATE
             OLDUVAI_HAVE_RTMIDI=1)
-        # RtMidi's own source trips -Wall/-Wextra; keep our warnings clean by
-        # not promoting them to errors there (we never error on warnings, but
-        # silence the noise on the vendored TU).
-        set_source_files_properties(third_party/rtmidi/RtMidi.cpp PROPERTIES
-            COMPILE_OPTIONS "-w")
+        # RtMidi's own source trips -Wall/-Wextra.  This is the per-SOURCE
+        # form of olduvai_silence_vendored_target: RtMidi.cpp is compiled
+        # straight into olduvai_presentation rather than as its own target, so
+        # a target-level flag would silence OUR sources too.  Same policy, and
+        # `/w` is spelled for MSVC because that build compiles it as well.
+        if(MSVC)
+            set_source_files_properties(third_party/rtmidi/RtMidi.cpp
+                PROPERTIES COMPILE_OPTIONS "/w")
+        else()
+            set_source_files_properties(third_party/rtmidi/RtMidi.cpp
+                PROPERTIES COMPILE_OPTIONS "-w")
+        endif()
+    endif()
+
+    # ── libmt32emu (Roland MT-32 / CM-32L), vendored and compiled in ────────
+    #
+    # It used to be dlopen'd, and that shipped a real defect for four public
+    # releases: it reached Linux AppImage users only.  macOS and Windows
+    # packages carried nothing, so those users silently fell back to OPL —
+    # music still played, so nobody reported it.  Fixing that by PACKAGING ran
+    # into a different hazard per platform (a leaf-name dlopen cannot see
+    # inside a .app; rewriting a Homebrew dylib's install name invalidates its
+    # ad-hoc signature and makes the next dlopen a SIGKILL rather than a
+    # fallback; dylibbundler -od erases the directory you stage into; munt
+    # publishes no Windows DLL at all).  Compiled in, none of that exists.
+    # ScummVM has carried this same Munt source for over a decade for the same
+    # reason.  Provenance, licence and re-sync steps:
+    # third_party/mt32emu/OLDUVAI-VENDORING.md
+    #
+    # Off-switch kept because it is a real user-facing capability, not a
+    # detail: -DOLDUVAI_WITH_MT32EMU=OFF drops it and mt32-builtin then
+    # reports unavailable, exactly as an absent dlopen'd library used to.
+    option(OLDUVAI_WITH_MT32EMU
+           "Build vendored libmt32emu (MT-32/CM-32L emulation)" ON)
+    if(OLDUVAI_WITH_MT32EMU AND
+       EXISTS ${CMAKE_SOURCE_DIR}/third_party/mt32emu/CMakeLists.txt)
+        # Static: this is an implementation detail of our binary, not a
+        # shared library we ship.  EXCLUDE_FROM_ALL so `--target all` does not
+        # build munt's install/package targets.
+        set(libmt32emu_SHARED OFF CACHE BOOL "" FORCE)
+        add_subdirectory(third_party/mt32emu EXCLUDE_FROM_ALL)
+        # munt's LA32 mixer doubles samples with `IntSampleEx(x) << 1` on
+        # values that are routinely negative (src/Synth.cpp, DACInputMode_NICE
+        # in produceLA32Output).  Left-shifting a negative is UB in C++17 —
+        # and DEFINED in C++20 as exactly the wraparound every compiler
+        # already emits, which is why this has shipped in Munt for years.
+        # Our asan lane makes UB fatal (-fno-sanitize-recover), so the process
+        # aborted the moment MT-32 rendered a sample; the ending_shot gate
+        # added the same day caught it, because it opens audio.
+        #
+        # ONLY shift-base is disabled, and only for this target: every other
+        # UBSan check still instruments the vendored code, so a genuine bug in
+        # it — one that would be our problem too — still fails the lane.  The
+        # blunter -fno-sanitize=undefined would have hidden those.
+        #
+        # NOT patched locally: the source here is verbatim upstream, which is
+        # what makes re-syncing a directory copy and keeps the LGPL source
+        # pointer honest.  A local patch is permitted (LGPL-2.1 §2, with
+        # notices) but every one is re-work at each re-sync, and editing
+        # sample arithmetic risks moving the MT-32 output we gate on.
+        # Reporting it upstream is the fix that costs us nothing to keep.
+        if(OLDUVAI_SANITIZE)
+            target_compile_options(mt32emu PRIVATE -fno-sanitize=shift-base)
+        endif()
+        # Vendored: its warnings are upstream's, and we do not patch this tree
+        # (see the verbatim-copy argument above).  The sanitizer instrumenting
+        # it is NOT relaxed by this — only the one shift-base exception is.
+        olduvai_silence_vendored_target(mt32emu)
+        target_link_libraries(olduvai_presentation PRIVATE mt32emu)
+        target_compile_definitions(olduvai_presentation PRIVATE
+            OLDUVAI_VENDORED_MT32EMU=1)
+        message(STATUS "MT-32 emulation: vendored libmt32emu (compiled in)")
+    else()
+        message(STATUS "MT-32 emulation: OFF")
     endif()
 
     # Scenario-authoring atlas (uses the presentation compositor).
@@ -387,10 +520,18 @@ else()
 endif()
 
 # ── app ─────────────────────────────────────────────────────────────────────
-add_executable(olduvai src/app/main.cpp src/app/config.cpp
+add_executable(olduvai src/app/main.cpp src/app/config.cpp src/app/legacy_cache.cpp
                        src/app/options_resolve.cpp src/app/cli_args.cpp
                        src/app/options_build.cpp)
-target_link_libraries(olduvai PRIVATE olduvai_formats)
+# olduvai_formats is linked here for the SDL-less build.  When SDL2 is found,
+# olduvai_presentation is linked below and already carries olduvai_formats
+# PUBLIC, so naming it here too puts the same archive on the link line twice
+# and Apple's ld says so on every single build: "ignoring duplicate libraries:
+# 'libolduvai_formats.a'".  Harmless, and exactly the kind of permanent noise
+# that trains people to skim link output.
+if(NOT SDL2_FOUND)
+    target_link_libraries(olduvai PRIVATE olduvai_formats)
+endif()
 target_compile_definitions(olduvai PRIVATE
     OLDUVAI_VERSION="${PROJECT_VERSION}")
 if(WIN32 AND OLDUVAI_SDL2 STREQUAL "SDL2::SDL2" AND TARGET SDL2::SDL2)
@@ -448,12 +589,13 @@ target_link_libraries(mdi_dump PRIVATE olduvai_formats)
 # main menu's exact title styling.  `cmake --build --preset release --target olduvai_logo`
 add_executable(olduvai_logo EXCLUDE_FROM_ALL tools/logo_render.cpp)
 target_link_libraries(olduvai_logo PRIVATE olduvai_formats)
-target_include_directories(olduvai_logo PRIVATE src third_party/stb)
+target_include_directories(olduvai_logo PRIVATE src)
+target_include_directories(olduvai_logo SYSTEM PRIVATE third_party/stb)
 
 add_executable(opl_music_dump EXCLUDE_FROM_ALL tools/opl_music_dump.cpp
-    src/presentation/opl_music.cpp
+    src/presentation/audio/opl_music.cpp
     third_party/nuked_opl3/opl3.c)
-target_include_directories(opl_music_dump PRIVATE third_party/nuked_opl3)
+target_include_directories(opl_music_dump SYSTEM PRIVATE third_party/nuked_opl3)
 target_link_libraries(opl_music_dump PRIVATE olduvai_formats)
 
 # ── tests (doctest, vendored single header) ─────────────────────────────────
@@ -482,6 +624,7 @@ add_executable(olduvai_tests EXCLUDE_FROM_ALL
     tests/test_boss_l2.cpp
     tests/test_boss_l4.cpp
     tests/test_boss_l6.cpp
+    tests/test_snap_lerp.cpp
     tests/test_mdi.cpp
     tests/test_transitions.cpp
     tests/test_screen_topology.cpp
@@ -489,53 +632,48 @@ add_executable(olduvai_tests EXCLUDE_FROM_ALL
     tests/test_hd_asset_cache.cpp
     tests/test_hd_asset_cache_disk.cpp
     tests/test_fluid_bubbles.cpp
-    tests/test_cache_paths.cpp
     tests/test_game_files.cpp
-    tests/test_prepare.cpp
     tests/test_menu.cpp
     tests/test_menu_model.cpp
     tests/test_save_state.cpp
     tests/test_soundfont_pick.cpp
+    tests/test_rom_dirs.cpp
     tests/test_resample.cpp
     tests/test_wav_io.cpp
     tests/test_opl_music.cpp
     tests/test_options_resolve.cpp
     tests/test_options_build.cpp
-    src/app/config.cpp
+    src/app/config.cpp src/app/legacy_cache.cpp
     src/app/options_resolve.cpp
     src/app/options_build.cpp
-    src/presentation/opl_music.cpp
+    src/presentation/audio/opl_music.cpp
     third_party/nuked_opl3/opl3.c
-    src/presentation/mini_json.cpp
-    src/presentation/menu.cpp
-    src/presentation/menu_model.cpp
-    src/presentation/save_state.cpp
+    src/presentation/menu/menu.cpp
+    src/presentation/level/save_state.cpp
 )
 target_compile_definitions(olduvai_tests PRIVATE
     OLDUVAI_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
-# Bundle the menu model next to the binary for runtime discovery.
-# configure_file (not file(COPY)) so edits to assets/data/menus.json re-copy on the
-# next build instead of going stale until a manual re-configure.
-configure_file(${CMAKE_SOURCE_DIR}/assets/data/menus.json
-               ${CMAKE_BINARY_DIR}/data/menus.json COPYONLY)
-
-# ALSO compile the menu model into the binary (raw string literal) so a
-# lone executable still has its pause menu — the on-disk data/menus.json
-# (searched first at runtime) remains the override for customisation.
+# Build the MenuModel from assets/data/menus.json AT BUILD TIME.  The JSON
+# stays the authoring format — a far better place to edit menus than C++
+# initialisers, and where translations would live — it is simply read here
+# instead of by a JSON parser inside the shipped binary.  Nothing is copied
+# next to the executable any more: there is no runtime load to feed.
+#
+# A malformed menus.json now fails the BUILD, which is where a typo in a menu
+# definition belongs, rather than degrading to a menu-less executable.
 add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/generated/menus_embedded.cpp
+    OUTPUT ${CMAKE_BINARY_DIR}/generated/menu_model_data.cpp
     COMMAND ${CMAKE_COMMAND}
             -DIN=${CMAKE_SOURCE_DIR}/assets/data/menus.json
-            -DOUT=${CMAKE_BINARY_DIR}/generated/menus_embedded.cpp
-            -DSYMBOL=embedded_menus_json
-            -P ${CMAKE_SOURCE_DIR}/cmake/embed_text.cmake
+            -DOUT=${CMAKE_BINARY_DIR}/generated/menu_model_data.cpp
+            -P ${CMAKE_SOURCE_DIR}/cmake/gen_menu_model.cmake
     DEPENDS ${CMAKE_SOURCE_DIR}/assets/data/menus.json
-            ${CMAKE_SOURCE_DIR}/cmake/embed_text.cmake
-    COMMENT "Embedding data/menus.json")
+            ${CMAKE_SOURCE_DIR}/cmake/gen_menu_model.cmake
+    COMMENT "Generating the menu model from data/menus.json")
 if(SDL2_FOUND)
     target_sources(olduvai_presentation PRIVATE
-        ${CMAKE_BINARY_DIR}/generated/menus_embedded.cpp)
+        ${CMAKE_BINARY_DIR}/generated/menu_model_data.cpp)
 endif()
 
 # Embed the project icon (the bone logo PNG) so every window can carry it at
@@ -557,26 +695,26 @@ if(SDL2_FOUND)
         ${CMAKE_BINARY_DIR}/generated/icon_embedded.cpp)
 endif()
 # olduvai_tests compiles menu_model.cpp directly (it does not link the
-# presentation lib), so it needs the generated embedded-model TU too.  Without
-# it the load_menus_embedded reference only linked because LTO dead-stripped
-# it — a works-by-accident graph the OLDUVAI_SANITIZE lane (LTO off) caught.
+# presentation lib), so it needs the generated model TU too.  Without it the
+# built_in_menu_model reference only linked because LTO dead-stripped it — a
+# works-by-accident graph the OLDUVAI_SANITIZE lane (LTO off) caught.
 target_sources(olduvai_tests PRIVATE
-    ${CMAKE_BINARY_DIR}/generated/menus_embedded.cpp)
-target_include_directories(olduvai_tests PRIVATE third_party
-                                                 third_party/nuked_opl3)
+    ${CMAKE_BINARY_DIR}/generated/menu_model_data.cpp)
+target_include_directories(olduvai_tests SYSTEM PRIVATE third_party
+                                                        third_party/nuked_opl3)
 target_link_libraries(olduvai_tests PRIVATE olduvai_formats)
 add_test(NAME unit COMMAND olduvai_tests)
 
 # Pure (no-SDL) settings-apply tier classifier test.
 add_executable(test_settings_apply EXCLUDE_FROM_ALL
     tests/test_settings_apply.cpp
-    src/presentation/settings_apply.cpp)
+    src/presentation/menu/settings_apply.cpp)
 target_include_directories(test_settings_apply PRIVATE src)
 add_test(NAME settings_apply COMMAND test_settings_apply)
 
 add_executable(test_settings_session EXCLUDE_FROM_ALL
     tests/test_settings_session.cpp
-    src/presentation/settings_session.cpp)
+    src/presentation/menu/settings_session.cpp)
 target_include_directories(test_settings_session PRIVATE src)
 add_test(NAME settings_session COMMAND test_settings_session)
 
@@ -585,10 +723,10 @@ add_test(NAME settings_session COMMAND test_settings_session)
 # apply/discard resolution through the injected hooks.
 add_executable(test_settings_flow EXCLUDE_FROM_ALL
     tests/test_settings_flow.cpp
-    src/presentation/settings_flow.cpp
-    src/presentation/settings_apply.cpp
-    src/presentation/settings_session.cpp
-    src/presentation/confirm_dialog.cpp)
+    src/presentation/menu/settings_flow.cpp
+    src/presentation/menu/settings_apply.cpp
+    src/presentation/menu/settings_session.cpp
+    src/presentation/menu/confirm_dialog.cpp)
 target_include_directories(test_settings_flow PRIVATE src)
 add_test(NAME settings_flow COMMAND test_settings_flow)
 
@@ -596,7 +734,7 @@ add_test(NAME settings_flow COMMAND test_settings_flow)
 # widescreen.cpp's transitive includes pull no SDL, so this links SDL-free.
 add_executable(test_widescreen EXCLUDE_FROM_ALL
     tests/test_widescreen.cpp
-    src/presentation/widescreen.cpp)
+    src/presentation/render/widescreen.cpp)
 target_include_directories(test_widescreen PRIVATE src)
 add_test(NAME widescreen COMMAND test_widescreen)
 
@@ -604,15 +742,15 @@ add_test(NAME widescreen COMMAND test_widescreen)
 # compose_widescreen reflect_pure invariants — Task 6).
 add_executable(test_boss_widescreen EXCLUDE_FROM_ALL
     tests/test_boss_widescreen.cpp
-    src/presentation/boss_widescreen.cpp
-    src/presentation/widescreen.cpp)
+    src/presentation/render/boss_widescreen.cpp
+    src/presentation/render/widescreen.cpp)
 target_include_directories(test_boss_widescreen PRIVATE src)
 add_test(NAME boss_widescreen COMMAND test_boss_widescreen)
 
 add_executable(test_confirm_dialog EXCLUDE_FROM_ALL
     tests/test_confirm_dialog.cpp
-    src/presentation/confirm_dialog.cpp
-    src/presentation/settings_session.cpp)
+    src/presentation/menu/confirm_dialog.cpp
+    src/presentation/menu/settings_session.cpp)
 target_include_directories(test_confirm_dialog PRIVATE src)
 add_test(NAME confirm_dialog COMMAND test_confirm_dialog)
 
@@ -622,8 +760,8 @@ add_test(NAME confirm_dialog COMMAND test_confirm_dialog)
 # Skips (77) when game data is absent — golden_trace.sh pattern.
 add_executable(test_screen_tiles EXCLUDE_FROM_ALL
     tests/test_screen_tiles_unify.cpp
-    src/presentation/screen_tiles.cpp
-    src/presentation/tile_patterns.cpp)
+    src/presentation/render/screen_tiles.cpp
+    src/presentation/render/tile_patterns.cpp)
 target_include_directories(test_screen_tiles PRIVATE src)
 target_link_libraries(test_screen_tiles PRIVATE olduvai_formats)
 target_compile_definitions(test_screen_tiles PRIVATE
@@ -644,12 +782,14 @@ set_tests_properties(sqz_parity PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(test_text_editor EXCLUDE_FROM_ALL tests/test_text_editor.cpp)
 target_link_libraries(test_text_editor PRIVATE olduvai_formats)
-target_include_directories(test_text_editor PRIVATE third_party src)
+target_include_directories(test_text_editor PRIVATE src)
+target_include_directories(test_text_editor SYSTEM PRIVATE third_party)
 add_test(NAME text_editor COMMAND test_text_editor)
 
 add_executable(test_report_templates EXCLUDE_FROM_ALL tests/test_report_templates.cpp)
 target_link_libraries(test_report_templates PRIVATE olduvai_formats)
-target_include_directories(test_report_templates PRIVATE third_party src)
+target_include_directories(test_report_templates PRIVATE src)
+target_include_directories(test_report_templates SYSTEM PRIVATE third_party)
 add_test(NAME report_templates COMMAND test_report_templates)
 
 # SDL-dependent presentation tests (headless via the dummy video driver).
@@ -662,15 +802,18 @@ if(SDL2_FOUND)
         tests/test_tile_patterns.cpp
         tests/test_midi_seq.cpp
         tests/test_opl_sfx.cpp
-        tests/test_pause_actions.cpp)
-    target_include_directories(olduvai_sdl_tests PRIVATE third_party)
+        tests/test_pause_actions.cpp
+        tests/test_hud_render_stride.cpp
+        tests/test_smooth_subpixel.cpp)
+    target_include_directories(olduvai_sdl_tests SYSTEM PRIVATE third_party)
     target_link_libraries(olduvai_sdl_tests PRIVATE olduvai_presentation
                                                     ${OLDUVAI_SDL2})
     add_test(NAME sdl_unit COMMAND olduvai_sdl_tests)
 
     add_executable(test_text_overlay_edit EXCLUDE_FROM_ALL
         tests/test_text_overlay_edit.cpp)
-    target_include_directories(test_text_overlay_edit PRIVATE third_party src)
+    target_include_directories(test_text_overlay_edit PRIVATE src)
+    target_include_directories(test_text_overlay_edit SYSTEM PRIVATE third_party)
     target_link_libraries(test_text_overlay_edit PRIVATE olduvai_presentation
                                                          ${OLDUVAI_SDL2})
     add_test(NAME text_overlay_edit COMMAND test_text_overlay_edit)
@@ -689,10 +832,26 @@ if(SDL2_FOUND)
     # prefix and ctest tried to exec the script directly.  On Windows that is
     # BAD_COMMAND ("inappropriate file type or format"), reported as *Not Run*,
     # which ctest counts as a FAILURE and which failed the v0.9.4 release job.
+    set(_olduvai_shell_tests ON)
     if(WIN32)
         find_program(OLDUVAI_TEST_SH NAMES sh bash)
+        # ...and finding NOTHING is that same bug one layer further down.
+        # find_program leaves the literal OLDUVAI_TEST_SH-NOTFOUND in the
+        # variable, all 18 .sh tests register with THAT as their command, and
+        # ctest reports every one as *Not Run* — which it counts as a FAILURE.
+        # So the tests specifically designed to skip cleanly (77) on a runner
+        # with no game files instead failed the whole job.  A test that cannot
+        # launch must not be registered: no interpreter, no registration.
+        if(NOT OLDUVAI_TEST_SH)
+            set(_olduvai_shell_tests OFF)
+        endif()
     endif()
+endif()
 
+# The shell-driven half of the suite.  Split out of the SDL2 block above (same
+# condition, plus an interpreter) so a host without sh drops it as a unit
+# instead of registering 18 unlaunchable tests.
+if(SDL2_FOUND AND _olduvai_shell_tests)
     add_test(NAME audio_render
         COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/audio_render.sh"
                 "$<TARGET_FILE:olduvai>")
@@ -878,11 +1037,93 @@ if(SDL2_FOUND)
     set_tests_properties(boss_replay_record PROPERTIES
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
+
+    # Win-ending compose gate.  end_sequence.cpp shipped with its own written
+    # precondition unmet ("GATE FIRST: game-over/ending have no goldens"), so
+    # the last thing a player ever sees was rendered by untested code.  Covers
+    # the ending; the game-over half needs a hook of its own (BACKLOG §6).
+    add_test(NAME ending_shot
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/ending_shot.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(ending_shot PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # Asset-viewer compose gate.  viewer.cpp was the only file in the tree
+    # measuring 0.0% coverage BOTH with and without assets — a shipped,
+    # user-reachable feature no test executed.  The hooks it needs
+    # (--viewer-frames/--viewer-shot) already existed, unwired.
+    add_test(NAME viewer_shot
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/viewer_shot.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(viewer_shot PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+endif()
+
+# ── Test-gate honesty: label the data-gated tests ──────────────────────────
+#
+# Most of this suite needs the user's own game files and skips (77) without
+# them, and NO CI runner has them.  That split was invisible: `ctest` prints
+# "100% tests passed out of N" counting every skip as a pass, so the suite
+# reads as fully green on a machine where most of it never executed.  This is
+# the measured reason duplication keeps recurring — the helpers that get
+# copied all live on asset-load and present paths, which no always-green test
+# touches (docs/internal/BACKLOG.md §1).
+#
+#   ctest -L assets    → only the data-gated tests (needs game files)
+#   ctest -LE assets   → only the always-green tests, i.e. what CI really runs
+#   scripts/gate_local.sh → the full local gate; a SKIP there is a FAILURE
+#
+# The label is DERIVED from SKIP_RETURN_CODE, never hand-listed: a hand-kept
+# list of 18 names is precisely the thing that drifts, and a new gated test
+# would silently join the invisible set.  Must run after the last add_test —
+# DIRECTORY PROPERTY TESTS only sees what has been registered so far.
+get_property(_olduvai_tests DIRECTORY PROPERTY TESTS)
+set(_olduvai_gated 0)
+foreach(_test IN LISTS _olduvai_tests)
+    get_test_property(${_test} SKIP_RETURN_CODE _olduvai_skip_rc)
+    if(_olduvai_skip_rc STREQUAL "77")
+        set_property(TEST ${_test} APPEND PROPERTY LABELS assets)
+        math(EXPR _olduvai_gated "${_olduvai_gated} + 1")
+    endif()
+endforeach()
+list(LENGTH _olduvai_tests _olduvai_total)
+
+# Ratchet.  Not decoration: it converts "quietly added another test CI cannot
+# see" into a configure error someone has to answer for.  SDL2-less builds
+# register only the two non-SDL gated tests (screen_tiles, sqz_parity) — as do
+# builds with no shell interpreter, since the other 18 are all .sh-driven.
+if(SDL2_FOUND AND _olduvai_shell_tests)
+    set(_olduvai_gated_expected 20)
+else()
+    set(_olduvai_gated_expected 2)
+endif()
+if(NOT _olduvai_gated EQUAL _olduvai_gated_expected)
+    message(FATAL_ERROR
+        "Data-gated test count changed: ${_olduvai_gated}, expected "
+        "${_olduvai_gated_expected}.  If that is intended, update "
+        "_olduvai_gated_expected in CMakeLists.txt AND the KPI row in "
+        "docs/internal/BACKLOG.md §5.  If it is not, the new test needs to "
+        "run without the user's game files.")
+endif()
+math(EXPR _olduvai_always_green "${_olduvai_total} - ${_olduvai_gated}")
+message(STATUS
+    "Olduvai tests: ${_olduvai_total} registered, ${_olduvai_gated} need game "
+    "files, ${_olduvai_always_green} run anywhere (what CI sees)")
+if(SDL2_FOUND AND NOT _olduvai_shell_tests)
+    # Printed, never silent: dropping 18 tests is exactly the kind of thing
+    # that should be visible in a build log rather than inferred from a count.
+    message(STATUS
+        "Olduvai tests: the 18 shell-driven tests are NOT registered — no "
+        "sh/bash on PATH.  Install Git for Windows or MSYS2 to run them.")
 endif()
 
 # Bundle the HD font (OFL) next to the binary for runtime discovery.
 # configure_file (not file(COPY)) — same stale-copy hazard class that bit
-# build/data/menus.json: file(COPY) only runs at configure time.
+# the former build/data/menus.json: file(COPY) only runs at configure time.
 configure_file(${CMAKE_SOURCE_DIR}/assets/fonts/FreckleFace-Regular.ttf
                ${CMAKE_BINARY_DIR}/fonts/FreckleFace-Regular.ttf COPYONLY)
 configure_file(${CMAKE_SOURCE_DIR}/assets/fonts/FreckleFace-LICENSE.txt
@@ -895,7 +1136,7 @@ configure_file(${CMAKE_SOURCE_DIR}/assets/fonts/NotoSans-LICENSE.txt
 # ── macOS app bundle (opt-in; `cmake --build --preset release --target olduvai_app`) ──
 if(APPLE AND SDL2_FOUND)
     add_executable(olduvai_app MACOSX_BUNDLE EXCLUDE_FROM_ALL
-        src/app/main.cpp src/app/config.cpp src/app/options_resolve.cpp
+        src/app/main.cpp src/app/config.cpp src/app/legacy_cache.cpp src/app/options_resolve.cpp
         src/app/cli_args.cpp src/app/first_run.cpp src/app/options_build.cpp)
     set_target_properties(olduvai_app PROPERTIES
         OUTPUT_NAME "Olduvai"
@@ -916,9 +1157,7 @@ if(APPLE AND SDL2_FOUND)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_BINARY_DIR}/fonts
             $<TARGET_BUNDLE_CONTENT_DIR:olduvai_app>/Resources/fonts
-        COMMAND ${CMAKE_COMMAND} -E copy
-            ${CMAKE_SOURCE_DIR}/assets/data/menus.json
-            $<TARGET_BUNDLE_CONTENT_DIR:olduvai_app>/Resources/data/menus.json)
+        )
 endif()
 
 # ── developer build aggregates ──────────────────────────────────────────────

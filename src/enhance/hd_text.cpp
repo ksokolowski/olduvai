@@ -10,10 +10,14 @@
 #define STB_TRUETYPE_IMPLEMENTATION
 #define STBTT_STATIC
 // Vendored single-header: silence its own -Wunused-function under -Werror.
+#if defined(__GNUC__) || defined(__clang__)   // MSVC: C4068 unknown pragma
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
+#endif
 #include "stb_truetype.h"
+#if defined(__GNUC__) || defined(__clang__)   // MSVC: C4068 unknown pragma
 #pragma GCC diagnostic pop
+#endif
 
 namespace olduvai::enhance {
 
@@ -71,7 +75,7 @@ bool HdText::load(const std::string& exe_dir, int scale,
     const float cap_at_100 = static_cast<float>(y1 - y0);
     probe_scale_ = probe;
     probe_cap_px_ = cap_at_100 > 0 ? cap_at_100 : 70.0f;
-    // Default active size: 8 px native × the HD compose scale.
+    // Default active size: 8 px native x the HD compose scale.
     set_cap_px(kTargetCapPx * scale);
     return true;
 }

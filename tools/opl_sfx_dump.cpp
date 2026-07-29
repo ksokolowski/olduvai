@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include "presentation/opl_sfx.hpp"
+#include "presentation/audio/opl_sfx.hpp"
 
 int main(int argc, char** argv) {
     if (argc < 3) {

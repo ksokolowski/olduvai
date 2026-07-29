@@ -22,15 +22,19 @@
 #include <vector>
 
 #include "enhance/hd_text.hpp"
-#include "presentation/banner_fx.hpp"
+#include "presentation/render/banner_fx.hpp"
 
+#if defined(__GNUC__) || defined(__clang__)   // MSVC: C4068 unknown pragma
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
+#if defined(__GNUC__) || defined(__clang__)   // MSVC: C4068 unknown pragma
 #pragma GCC diagnostic pop
+#endif
 
 namespace {
 

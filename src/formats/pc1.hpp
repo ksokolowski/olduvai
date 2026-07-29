@@ -13,7 +13,7 @@
 //
 // BODY planes are INTERLEAVED per scan line: each row stores nPlanes
 // groups of ceil(width/8) bytes (plane 0 = bit 0 of the colour index).
-// Bit 7 (MSB) = leftmost pixel.  Typical content: 320×200, 4 planes.
+// Bit 7 (MSB) = leftmost pixel.  Typical content: 320x200, 4 planes.
 
 #pragma once
 
@@ -39,7 +39,7 @@ struct Pc1Image {
     std::uint16_t width = 0;
     std::uint16_t height = 0;
     std::vector<Rgb> palette;            // 16 entries, 8-bit components
-    std::vector<std::uint8_t> pixels;    // width × height palette indices
+    std::vector<std::uint8_t> pixels;    // width x height palette indices
 };
 
 // `data` must already be LZSS-decompressed (CurArchive handles that).

@@ -102,7 +102,7 @@ TEST_CASE("uncompressed 8x2, 4 interleaved planes decode") {
 
 TEST_CASE("packbits BODY decompresses (compression=1)") {
     // 8x1, 4 planes → 4 raw bytes, all 0xFF → every pixel idx 15.
-    // PackBits: repeat 0xFF ×4 (control 0xFD = 257-253 = 4).
+    // PackBits: repeat 0xFF x4 (control 0xFD = 257-253 = 4).
     const auto img = parse_pc1(iff({{"BMHD", bmhd(8, 1, 4, 1)},
                                     {"CMAP", cmap16()},
                                     {"BODY", {0xFD, 0xFF}}}));

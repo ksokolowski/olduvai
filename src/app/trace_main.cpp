@@ -17,10 +17,6 @@
 #include "systems/frame_runner.hpp"
 #include "systems/spawning.hpp"
 using namespace olduvai;
-static std::vector<std::uint8_t> slurp(const char* p) {
-    std::ifstream in(p, std::ios::binary);
-    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-}
 int main(int argc, char** argv) {
     if (argc != 3) return 2;
     // Accept a GOG install root (data/PREH layout) like the main binary.
@@ -36,7 +32,7 @@ int main(int argc, char** argv) {
     core::install_game_tables(gtables);
 
     // Collision: L1 screen 0 tiles stamped with LEVEL1.DUR.
-    formats::CurArchive fa(slurp((dir + "/FILESA.CUR").c_str()));
+    formats::CurArchive fa(olduvai::prepare::slurp_file((dir + "/FILESA.CUR").c_str()));
     const auto dur = formats::parse_dur(fa.get("LEVEL1.DUR").data);
     const auto tiles = prepare::read_tile_table(exe, 1);
     systems::SystemsState st;

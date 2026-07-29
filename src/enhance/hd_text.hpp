@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 // HD vector text — TrueType glyph rendering (stb_truetype) for the
 // enhanced HUD.  The font auto-sizes so the capital height lands at
-// 8 px native × target scale, matching the locked design's metric.
+// 8 px native x target scale, matching the locked design's metric.
 
 #pragma once
 

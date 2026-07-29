@@ -4,7 +4,7 @@
 // Compiles widescreen.cpp directly; FrameBuffer's transitive includes pull no
 // SDL, so this links without SDL2.
 
-#include "presentation/widescreen.hpp"
+#include "presentation/render/widescreen.hpp"
 
 #include <cstdio>
 

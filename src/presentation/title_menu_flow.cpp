@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-#include "presentation/gamepad.hpp"
+#include "presentation/input/gamepad.hpp"
 
 #include <SDL.h>
 
@@ -25,33 +25,33 @@
 
 #include "core/rng.hpp"
 #include "formats/cur.hpp"
-#include "prepare/cache_paths.hpp"
 #include "prepare/exe_tables.hpp"
 #include "prepare/game_files.hpp"
-#include "presentation/debug_overlay.hpp"
-#include "presentation/game_render.hpp"
-#include "presentation/tile_patterns.hpp"
-#include "presentation/hud_render.hpp"
-#include "presentation/dialog_key_map.hpp"
-#include "presentation/l3_end_level.hpp"
-#include "presentation/menu.hpp"
-#include "presentation/menu_model.hpp"
-#include "presentation/menu_nav.hpp"
-#include "presentation/banner_fx.hpp"
-#include "presentation/menu_render.hpp"
-#include "presentation/save_state.hpp"
-#include "presentation/replay.hpp"
-#include "presentation/audio.hpp"
+#include "presentation/diag/debug_overlay.hpp"
+#include "presentation/render/game_render.hpp"
+#include "presentation/render/tile_patterns.hpp"
+#include "presentation/render/hud_render.hpp"
+#include "presentation/menu/dialog_key_map.hpp"
+#include "presentation/sequence/l3_end_level.hpp"
+#include "presentation/menu/menu.hpp"
+#include "presentation/menu/menu_model.hpp"
+#include "presentation/menu/pause_flow.hpp"
+#include "presentation/menu/menu_nav.hpp"
+#include "presentation/render/banner_fx.hpp"
+#include "presentation/menu/menu_render.hpp"
+#include "presentation/level/save_state.hpp"
+#include "presentation/input/replay.hpp"
+#include "presentation/audio/audio.hpp"
 #include "presentation/boss_app.hpp"
-#include "presentation/boss_widescreen.hpp"   // boss_ws_margin (shared margin math)
-#include "presentation/bug_capture.hpp"
-#include "presentation/screen_tiles.hpp"
-#include "presentation/screens.hpp"
-#include "presentation/smooth_present.hpp"
-#include "presentation/text_overlay.hpp"
-#include "presentation/transition_players.hpp"
-#include "presentation/widescreen_presenter.hpp"
-#include "presentation/widescreen.hpp"
+#include "presentation/render/boss_widescreen.hpp"   // boss_ws_margin (shared margin math)
+#include "presentation/diag/bug_capture.hpp"
+#include "presentation/render/screen_tiles.hpp"
+#include "presentation/sequence/screens.hpp"
+#include "presentation/render/smooth_present.hpp"
+#include "presentation/render/text_overlay.hpp"
+#include "presentation/sequence/transition_players.hpp"
+#include "presentation/render/widescreen_presenter.hpp"
+#include "presentation/render/widescreen.hpp"
 #include "presentation/window_util.hpp"
 #include "systems/frame_runner.hpp"
 #include "systems/screen_topology.hpp"
@@ -67,15 +67,15 @@
 
 #include "enhance/enhanced_hud.hpp"
 #include "enhance/hd_text.hpp"
-#include "presentation/confirm_dialog.hpp"
+#include "presentation/menu/confirm_dialog.hpp"
 #include "presentation/enhance_flags.hpp"
-#include "presentation/menu_script_util.hpp"
-#include "presentation/settings_apply.hpp"
-#include "presentation/settings_preview.hpp"
-#include "presentation/settings_seed.hpp"
-#include "presentation/settings_flow.hpp"
-#include "presentation/staging_bindings.hpp"
-#include "presentation/settings_session.hpp"
+#include "presentation/diag/menu_script_util.hpp"
+#include "presentation/menu/settings_apply.hpp"
+#include "presentation/menu/settings_preview.hpp"
+#include "presentation/menu/settings_seed.hpp"
+#include "presentation/menu/settings_flow.hpp"
+#include "presentation/menu/staging_bindings.hpp"
+#include "presentation/menu/settings_session.hpp"
 #include "enhance/mmpx.hpp"
 #include "enhance/omniscale.hpp"
 #include "enhance/upscale.hpp"
@@ -91,13 +91,6 @@
 namespace olduvai::presentation {
 namespace {
 
-// File-local copy of run_game's tiny private helper (parse_f/parse_i come
-// from parse_util.hpp — the former local copies collided with it).
-std::vector<std::uint8_t> slurp(const std::filesystem::path& p) {
-    std::ifstream in(p, std::ios::binary);
-    return {std::istreambuf_iterator<char>(in),
-            std::istreambuf_iterator<char>()};
-}
 
 }  // namespace
 
@@ -159,15 +152,7 @@ void run_title_menu(TitleMenuCtx& ctx) {
                     return false;
                 }
             }
-            if (hd_scale > 1) {
-                const auto up = enhance::upscale_rgba(f.px, 320, 200,
-                                                      hd_scale,
-                                                      rt.hd_profile);
-                SDL_UpdateTexture(itex, nullptr, up.data(),
-                                  320 * hd_scale * 4);
-            } else {
-                SDL_UpdateTexture(itex, nullptr, f.px.data(), 320 * 4);
-            }
+            upload_native_frame(itex, f, hd_scale, rt.hd_profile);
             SDL_RenderClear(sw.ren);
             SDL_RenderCopy(sw.ren, itex, nullptr, nullptr);
             SDL_RenderPresent(sw.ren);
@@ -180,8 +165,8 @@ void run_title_menu(TitleMenuCtx& ctx) {
                    (k[SDL_SCANCODE_RETURN] != 0 && enter_skip_allowed()) ||
                    k[SDL_SCANCODE_LCTRL] != 0 || gamepad::fire_held();
         };
-        formats::CurArchive iva(slurp(opts.game_dir / "FILESA.VGA"));
-        formats::CurArchive ifa(slurp(opts.game_dir / "FILESA.CUR"));
+        formats::CurArchive iva(prepare::slurp_file(opts.game_dir / "FILESA.VGA"));
+        formats::CurArchive ifa(prepare::slurp_file(opts.game_dir / "FILESA.CUR"));
         auto show = [&](const char* name, int hold_frames) {
             if (quit_requested || intro_to_menu || shot_mode || script_mode ||
                 !iva.contains(name))
@@ -261,17 +246,7 @@ void run_title_menu(TitleMenuCtx& ctx) {
                         formats::parse_pc1(ar->get("FOND1.PC1").data).palette;
                     break;
                 }
-            std::optional<MenuModel> mm;
-            {
-                std::string base;
-                if (char* p = SDL_GetBasePath()) { base = p; SDL_free(p); }
-                for (const std::string& cand : {base + "data/menus.json",
-                                                base + "../Resources/data/menus.json",
-                                                std::string("data/menus.json")}) {
-                    try { mm = load_menus(cand); } catch (...) { mm.reset(); }
-                    if (mm) break;
-                }
-            }
+            std::optional<MenuModel> mm = load_menu_model();
             if (mm) {
                 // SettingsSession + ConfirmDialog for the main-menu Options batch
                 // staging flow (§8.6).  Mirrors the in-game Pause wiring exactly.
@@ -379,15 +354,6 @@ void run_title_menu(TitleMenuCtx& ctx) {
                 SettingsFlow::Hooks main_hooks;
                 main_hooks.persist = [&](const std::string& k,
                                          const std::string& v) {
-                    // enhance.* keys persist as ONE "enhance" config list
-                    // (plus the master companion when the master is not
-                    // staged) — see encode_enhance_persist.
-                    if (k.rfind("enhance.", 0) == 0) {
-                        for (const auto& [pk, pv] : encode_enhance_persist(
-                                 mbind.mem, main_session.changes(), k))
-                            mbind.save(pk, pv);
-                        return;
-                    }
                     mbind.save(k, v);
                 };
                 main_hooks.classify = [&](const std::string& k,
@@ -422,11 +388,6 @@ void run_title_menu(TitleMenuCtx& ctx) {
                                       ch.new_value == "1";
                     } else if (ch.key == "aspect") {
                         rt.aspect = ch.new_value;   // live-previewed; keep rt
-                    } else if (ch.key.rfind("enhance.", 0) == 0) {
-                        // Adopt into rt so Start Game (and the session) uses
-                        // the applied flags.
-                        set_enhance_flag(rt.enhance, ch.key.substr(8),
-                                         ch.new_value == "1");
                     }
                     // volume/fullscreen already live-previewed; no rt field.
                 };
@@ -447,7 +408,7 @@ void run_title_menu(TitleMenuCtx& ctx) {
                     const int new_scale =
                         hd_scale_for(rt.enhanced, rt.hd_profile, rt.render_scale);
                     if (new_scale != hd_scale) {
-                        hd = rt.enhanced && rt.hd_profile != "native";
+                        hd = hd_active(rt.enhanced, rt.hd_profile);
                         hd_scale = new_scale;
                         if (!rebuild_window(hd_scale)) {
                             std::fprintf(stderr,
@@ -465,7 +426,7 @@ void run_title_menu(TitleMenuCtx& ctx) {
                             quit_requested = true;
                             return;
                         }
-                        if (hd && (rt.enhance.hd_text || rt.enhance.hud_overlay))
+                        if (hd)
                             menu_font.load(fbase, hd_scale, rt.hd_font);
                     }
                     // Rebuild audio if device/backend changed.
@@ -579,9 +540,7 @@ void run_title_menu(TitleMenuCtx& ctx) {
                     // enhance.* into rt mid-loop — a pre-loop latch kept the
                     // classic bitmap glyphs after applying Enhanced HD (see
                     // tests/title_style_apply.sh).
-                    const bool menu_use_vector =
-                        hd && menu_font.ok() &&
-                        (rt.enhance.hd_text || rt.enhance.hud_overlay);
+                    const bool menu_use_vector = hd && menu_font.ok();
                     FrameBuffer pf = bg;
                     // In enhanced mode the slab + accent bar come from draw_menu
                     // (native, upscaled) and the glyphs from the vector overlay;
@@ -597,13 +556,7 @@ void run_title_menu(TitleMenuCtx& ctx) {
                                   /*draw_text=*/!menu_use_vector, menu_bone,
                                   &menu_bone_pal);
                     }
-                    if (hd_scale > 1) {
-                        const auto up = enhance::upscale_rgba(pf.px, 320, 200,
-                                                              hd_scale, rt.hd_profile);
-                        SDL_UpdateTexture(itex, nullptr, up.data(), 320 * hd_scale * 4);
-                    } else {
-                        SDL_UpdateTexture(itex, nullptr, pf.px.data(), 320 * 4);
-                    }
+                    upload_native_frame(itex, pf, hd_scale, rt.hd_profile);
                     SDL_RenderClear(sw.ren);
                     // Widescreen: OWN the geometry — compute the wide margin
                     // from the window aspect (same math as the in-game path:

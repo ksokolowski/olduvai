@@ -8,7 +8,7 @@
 // copied verbatim from a source pixel — no blending — so the DOS palette and
 // binary transparency survive untouched.  Ports of the reference engine's
 // classical scalers (nearest / scale2x / scale3x, AdvanceMAME
-// algorithm, https://www.scale2x.it/algorithm) and Eagle 2× (Dirk
+// algorithm, https://www.scale2x.it/algorithm) and Eagle 2x (Dirk
 // Stevens 1997, public domain;
 // https://en.wikipedia.org/wiki/Pixel-art_scaling_algorithms#Eagle).
 
@@ -102,7 +102,7 @@ std::vector<std::uint8_t> scale2x(const std::vector<std::uint8_t>& rgba,
 
 std::vector<std::uint8_t> scale3x(const std::vector<std::uint8_t>& rgba,
                                   int w, int h) {
-    // 3×3 neighbourhood:
+    // 3x3 neighbourhood:
     //   A B C
     //   D E F
     //   G H I
@@ -158,7 +158,7 @@ std::vector<std::uint8_t> scale3x(const std::vector<std::uint8_t>& rgba,
 
 std::vector<std::uint8_t> eagle_2x(const std::vector<std::uint8_t>& rgba,
                                    int w, int h) {
-    // 3×3 neighbourhood:
+    // 3x3 neighbourhood:
     //   S T U
     //   V C W
     //   X Y Z

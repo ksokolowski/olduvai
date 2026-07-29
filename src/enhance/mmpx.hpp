@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// MMPX 2× pixel-art upscaler — "Style-Preserving Pixel Art
+// MMPX 2x pixel-art upscaler — "Style-Preserving Pixel Art
 // Magnification", Morgan McGuire & Mara Gagiu (2021); transcribed from
 // the MIT-licensed C99 reference implementation.  Part of the opt-in
-// enhanced mode (default rendering stays native 320×200).
+// enhanced mode (default rendering stays native 320x200).
 
 #pragma once
 
@@ -12,7 +12,7 @@
 
 namespace olduvai::enhance {
 
-// RGBA in, 2W×2H RGBA out.
+// RGBA in, 2Wx2H RGBA out.
 std::vector<std::uint8_t> mmpx_2x(const std::vector<std::uint8_t>& rgba,
                                   int w, int h);
 

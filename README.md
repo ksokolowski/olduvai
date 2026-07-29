@@ -29,7 +29,7 @@ copy of the game: see [Getting the game](#getting-the-game) and
 
 ## Status
 
-**Beta — 0.9.4.** The full game is playable natively: all seven levels,
+**Beta — 0.9.5.** The full game is playable natively: all seven levels,
 the three boss fights, caves, secret rooms, flight sequences and the
 ending. Behaviour is validated frame-by-frame against an independent
 reference implementation — a 12-scenario cross-engine corpus plus a
@@ -51,18 +51,19 @@ deadline scheduler), with a VGA-style hold-frame scanout for CRT-smooth
 presentation and whole-pixel integer scaling in fullscreen. Known,
 deliberate deviations are individually documented.
 
-**Enhanced when you want it.** The `hd` profile (and granular
-`--enhance` flags) adds: HD sprite upscaling (OmniScale, xBR, MMPX,
-Eagle, smooth, retro), true widescreen with live level margins and
-panorama transitions, smooth 60 FPS motion interpolation, vector text
-and enhanced HUD, and a set of hand-crafted animation extensions
-(cave descent/emerge sequences, teleport clouds, descent dust, and
-more). `hd-43` keeps the enhanced pipeline at the classic 4:3 aspect.
+**Enhanced when you want it.** The `hd` profile (`--enhanced`) adds: HD
+sprite upscaling (OmniScale, xBR, MMPX, Eagle, smooth, retro), true
+widescreen with live level margins and panorama transitions, smooth 60 FPS
+motion interpolation, vector text and enhanced HUD, and a set of
+hand-crafted animation extensions (cave descent/emerge sequences, teleport
+clouds, descent dust, and more). It is all-or-nothing by design — see the
+0.9.5 changelog for why. For the classic 4:3 look, add `--aspect 4:3`.
 
 **Audio.** OPL/AdLib FM synthesis is built in — an EXE-faithful AdLib
 driver on the vendored Nuked-OPL3 core, with no external dependency.
-Roland MT-32 (libmt32emu — needs your own ROM images) and
-General MIDI (FluidSynth + SoundFont) load at runtime, plus host MIDI
+Roland MT-32 emulation is built in too (vendored libmt32emu — supply your
+own ROM images). General MIDI (FluidSynth + SoundFont) loads at runtime,
+plus host MIDI
 out for real hardware. Data-driven sound effects follow the selected
 backend.
 
@@ -93,7 +94,7 @@ Olduvai reads the original data files from your own copy of the game:
   `FILESA.CUR`, `FILESB.CUR`, `FILESA.VGA`, `FILESB.VGA`, `HISTORIK.EXE`.
   Point `--game-dir` at wherever they live.
 
-On first run the engine prepares everything it needs into a local cache on
+The engine reads the game files it needs directly on
 your machine; your original files are never modified.
 
 ## Downloads
@@ -166,7 +167,7 @@ flags). Common keys: `game_dir`, `music_device` (`auto`, `opl`,
 toggles, and gamepad mapping: `pad_jump`, `pad_attack`, `pad_pause`,
 `pad_confirm`, `pad_back` (SDL button names — `a`, `b`, `x`, `y`,
 `start`, `back`, `leftshoulder`, …) plus `pad_deadzone` (default 8000). Built-in profiles: `dos` (byte-faithful), `hd` (enhanced
-widescreen), `hd-43` (enhanced at 4:3).
+widescreen).
 
 ## How it was built
 

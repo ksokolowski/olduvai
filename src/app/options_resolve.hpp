@@ -25,6 +25,11 @@ struct PlaySettings {
     std::string autofire = "off";
     bool enhanced = false;
     std::string enhance_list;            // --enhance a,b,c (granular subset)
+    // True when enhance_list came from play.json rather than the command line.
+    // The two must fail differently: a typo the user just typed is worth
+    // rejecting outright, but a stale token in a config file the Options menu
+    // itself wrote must never be able to stop the game from starting.
+    bool enhance_list_from_config = false;
     std::string hd_profile;
     int render_scale = 4;                // default 4 → omniscale 1280x800
     std::string game_dir;                // string mirror of main's fs::path
@@ -33,6 +38,8 @@ struct PlaySettings {
     int pad_deadzone = 8000;
     std::string music_device = "auto";
     std::string rom_dir;
+    // MT-32 vs CM-32L: different machines, different sound.
+    std::string mt32_model;   // "" = auto
     std::string soundfont;
     std::string sfx_backend = "auto";    // pair to music device
     std::string display_mode = "gpu";    // gpu (GPU scale) | cpu (software)
@@ -52,6 +59,19 @@ struct PlaySettings {
         bool scale = false;
         bool aspect = false;
         bool game_dir = false;
+        // These six used to be inferred by comparing the field against its own
+        // default — the reference's argparse `default=None` idiom, which only
+        // works because an unset argparse value is None rather than the
+        // default.  Here the parse loop writes real defaults, so an explicit
+        // `--music-device auto` was indistinguishable from saying nothing, and
+        // a saved play.json silently won.  Same defect the aspect guard below
+        // was added for after the 0.9.2 regression; these are the rest of it.
+        bool music_device = false;
+        bool sfx_backend = false;
+        bool display_mode = false;
+        bool transitions = false;
+        bool hd_font = false;
+        bool banner_fx = false;
     } cli;
 
     // Outputs of merge_config().

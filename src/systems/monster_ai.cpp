@@ -142,7 +142,7 @@ void update_monster(Entity& e, int px, int py, int frame,
                 // 3-in-20 random direction flip.  // +0x0D0A
                 const int rng = (frame * 7 + e.x * 13 + e.y) % 20;
                 if (rng == 2 || rng == 12 || rng == 16) e.direction ^= 1;
-                // Player tracking within Y window +10/−5.  // +0x0D37
+                // Player tracking within Y window +10/-5.  // +0x0D37
                 if (py + 10 > e.y && py - 5 < e.y) {
                     e.direction = (e.x + 20 >= px) ? 1 : 0;
                 }
@@ -361,7 +361,7 @@ void update_bird(Entity& e, int px) {
 
 void update_chimp(Entity& e) {
     // CHIMP (3-state) and CHIMP_L5 snowman (6-state windup + KO slide).
-    // Projectile: constant −12 px/frame, despawn at x < −70.
+    // Projectile: constant -12 px/frame, despawn at x < -70.
     e.draw_dy = 0;
 
     if (e.obj_type == ObjType::ChimpL5) {
@@ -650,7 +650,7 @@ void update_breakable_rock_l3(Entity& e) {
 
 void update_projectile_l3(Entity& e, int px) {
     // TYPE 0x1e launcher + falling projectile.  States: 0 reset/re-aim,
-    // 1 fire left (−6/f), 2 idle, 3 fire right (+6/f); gravity 7 px/frame.
+    // 1 fire left (-6/f), 2 idle, 3 fire right (+6/f); gravity 7 px/frame.
     const int si = e.init_x, di = e.init_y;
 
     if (e.state == 0) {

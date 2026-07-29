@@ -48,7 +48,9 @@ Roland `gm.dls` set), Linux has no built-in GM synth, so the engine renders GM
 with FluidSynth and a SoundFont it discovers. Auto-discovery order (an explicit
 `--soundfont <file>` or the `soundfont` config key always overrides):
 
-1. `~/.config/olduvai/soundfonts/`  (drop any SoundFont here to force it)
+1. `~/.config/olduvai/soundfonts/`  (a font here beats every system copy — but
+   it must use one of the four names below; an arbitrarily-named file is not
+   discovered, use `--soundfont` for that)
 2. system dirs — `/usr/share/sounds/sf2`, `/usr/share/soundfonts`,
    `/usr/share/scummvm` — preferring, in order:
    `Roland_SC-55.sf2` → `GeneralUser-GS.sf2` → `FluidR3_GM.sf2` → `default-GM.sf2`.
@@ -64,9 +66,44 @@ The engine then auto-selects it with no configuration. A purely
 clean-provenance alternative is **GeneralUser GS** (freely redistributable);
 drop `GeneralUser-GS.sf2` in `~/.config/olduvai/soundfonts/`.
 
+## Do not test the raw binary against a newer host
+
+`build/appimage/olduvai` is compiled inside the pinned jammy container, so it
+was built against **that** SDL2 and FluidSynth. Running it directly on a newer
+distro links it to the host's much newer copies instead — a combination that
+never ships, because the AppImage bundles the libraries it was built against.
+
+Measured on Ubuntu 26.04 (FluidSynth 2.4.8), same MIDI, same SoundFont:
+
+| what was run | GM renders |
+|---|---|
+| container-built binary, bare on the host | **segfaults ~50% of runs** |
+| natively built binary | 8/8 clean |
+| the shipped AppImage (bundled FluidSynth) | clean |
+
+So an intermittent GM crash while poking at `build/appimage/olduvai` is an
+artefact of the test setup, not a defect — and it cost an afternoon once. Test
+the **AppImage**, or build natively.
+
 ## Limitation — glibc floor
 
-An AppImage runs only on distros whose glibc is **>= the build host's**. Built
-on a bleeding-edge system it runs on bleeding-edge distros only. For broad
-portability, build inside an old-baseline container (e.g. Ubuntu 22.04) — a
-planned follow-up, along with CI that builds the AppImage on tag.
+An AppImage runs only on distros whose glibc is **>= the build host's**, so the
+build environment decides who can run the result.
+
+The released AppImage targets **glibc 2.35** — Ubuntu 22.04, Linux Mint 21,
+Debian 12 and newer, and any Steam Deck (SteamOS has been 2.37+ since 3.5).
+That is pinned by building inside a digest-locked `ubuntu:22.04` container
+rather than by a runner label, because runner images are retired on GitHub's
+schedule: `ubuntu-22.04` begins deprecation 2026-09-17 and is removed
+2027-04-17, and the natural repair — bumping to `ubuntu-24.04` — would raise
+the floor to 2.39 and drop those users without anyone noticing.
+
+The floor is **asserted, not assumed**: `build_appimage_linux.sh` reads the
+highest `GLIBC_` version required by every ELF it is about to pack and fails
+if it exceeds the declared maximum. Raising `OLDUVAI_GLIBC_MAX` drops distros,
+so it is a reviewed edit, not a fix for a red build.
+
+Not covered by a 2.35 floor: RHEL/Alma/Rocky 9 (2.34) and Debian 11 (2.31).
+Going lower is not simply a matter of an older container — Debian bullseye
+fails on four independent counts, including `linuxdeploy` itself requiring
+GLIBC_2.34.

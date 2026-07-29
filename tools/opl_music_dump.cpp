@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-#include "presentation/opl_music.hpp"
+#include "presentation/audio/opl_music.hpp"
 
 namespace {
 

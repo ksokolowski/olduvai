@@ -36,7 +36,7 @@ the signing service accounts.
 
 Olduvai makes **no network connections** and collects **no data** of any
 kind. It reads the game files you point it at, writes its settings to your
-user configuration directory, its cache to your user cache directory, and
+user configuration directory, and
 bug reports only when you press F5 — all local, nothing transmitted. There
 is no telemetry, no update check, no account. The engine can be removed by
 deleting the binary and those local directories (see the README's Settings

@@ -14,7 +14,7 @@
 #include <vector>
 
 namespace {
-// 4×4 RGBA test card with a diagonal edge (forces scaler smoothing).
+// 4x4 RGBA test card with a diagonal edge (forces scaler smoothing).
 std::vector<std::uint8_t> test_card() {
     std::vector<std::uint8_t> px(4 * 4 * 4, 0);
     for (int y = 0; y < 4; ++y)
@@ -29,7 +29,7 @@ std::vector<std::uint8_t> test_card() {
     return px;
 }
 
-// 6×6 card engineered so every implemented scaler diverges:
+// 6x6 card engineered so every implemented scaler diverges:
 //   • a hard diagonal step (drives scale2x / eagle corner copies and
 //     omniscale's gradient blend), AND
 //   • an isolated pair of luma-CLOSE colours flanking a center whose
@@ -226,7 +226,7 @@ TEST_CASE("is_supported_hd_profile matches the catalog") {
 }
 
 TEST_CASE("upscale_rgba: alpha preserved by palette scalers on transparent border") {
-    // 4×4 opaque square centred in transparency — exercises alpha handling.
+    // 4x4 opaque square centred in transparency — exercises alpha handling.
     std::vector<std::uint8_t> px(4 * 4 * 4, 0);
     for (int y = 1; y <= 2; ++y)
         for (int x = 1; x <= 2; ++x) {
