@@ -77,7 +77,14 @@ EnhancedHudLayout compute_enhanced_hud_layout(
     add_text(0, r2, "Food", kWhite);
     const int a_v =
         std::max(text.measure("Score"), text.measure("Food")) + label_gap;
-    std::snprintf(buf, sizeof buf, "%06ld", std::min(state.score, 999999L));
+    // CLAMPED at both ends, not just the top: %06ld on a NEGATIVE long can
+    // write 20 bytes into this 16-byte buffer, which is what GCC's
+    // -Wformat-truncation (via -Wformat=2) reports — std::min alone leaves the
+    // lower bound at LONG_MIN, so the compiler cannot see a 6-digit result.
+    // Score is never negative in play; saying so here makes it true by
+    // construction rather than by assumption.
+    const long score_shown = std::min(std::max(state.score, 0L), 999999L);
+    std::snprintf(buf, sizeof buf, "%06ld", score_shown);
     add_text(a_v, r1, buf, kWhite);
     const int score_w = text.measure(buf);
     add_box(a_v, bar_y, bar_w, bar_h);

@@ -125,9 +125,12 @@ void draw_hud(FrameBuffer& fb, systems::SystemsState& state,
         return;
     }
 
-    // Score — 6 digits @ (48, 8).
+    // Score — 6 digits @ (48, 8).  Clamped at BOTH ends: %06ld on a negative
+    // long writes up to 20 bytes into this 16-byte buffer, which GCC's
+    // -Wformat-truncation reports because std::min alone leaves the lower
+    // bound at LONG_MIN.  Same fix as enhanced_hud.cpp's copy of this line.
     std::snprintf(buf, sizeof buf, "%06ld",
-                  std::min(state.score, 999999L));
+                  std::min(std::max(state.score, 0L), 999999L));
     draw_text(fb, charset, pal, 48, 8, buf);
 
     // Food bar @ (128, 0) with the cap-46 writeback.

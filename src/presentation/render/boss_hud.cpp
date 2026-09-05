@@ -70,8 +70,13 @@ BossHudBar capture_boss_hud_bar(std::vector<std::uint8_t>& bg) {
 
 void BossHud::draw_classic_lives(FrameBuffer& fb) const {
     if (charset_ == nullptr || palette_ == nullptr) return;
+    // Clamped at BOTH ends.  std::max fixes the lower bound, but %02d on an
+    // unbounded int can write 10 bytes into these 8, which GCC's
+    // -Wformat-truncation reports.  The HUD field is two digits wide by design
+    // (the EXE's own lives cap is 99), so saying 99 here is the display
+    // contract, not a guess.
     char buf[8];
-    std::snprintf(buf, sizeof buf, "%02d", std::max(0, *lives_));
+    std::snprintf(buf, sizeof buf, "%02d", std::min(std::max(0, *lives_), 99));
     draw_text(fb, *charset_, *palette_, 48, 8, buf);
 }
 
@@ -103,7 +108,9 @@ void BossHud::draw_into(std::vector<std::uint8_t>& buf, int bw, int bh,
     // to ox(150) so it clears the energy bar at all aspect ratios.
     if (draw_lives) {
         char vbuf[16];
-        std::snprintf(vbuf, sizeof vbuf, "LIVES: %02d", std::max(0, *lives_));
+        // Same two-ended clamp as draw_classic_lives above, same reason.
+        std::snprintf(vbuf, sizeof vbuf, "LIVES: %02d",
+                      std::min(std::max(0, *lives_), 99));
         hd_text.draw(buf, bw, bh, ox(0), base_y, vbuf, 235, 235, 235);
     } else {
         hd_text.draw(buf, bw, bh, ox(0), base_y, "LIVES:", 235, 235, 235);

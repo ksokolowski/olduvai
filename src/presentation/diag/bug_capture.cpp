@@ -93,6 +93,19 @@ const char* level_main_func(int internal) {
 // Local time, formatted.  The two callers below differed in nothing but the
 // format string — including the platform #if, which is the part least worth
 // having twice.
+// The strftime-format attribute, not a pragma: it tells GCC/Clang that `fmt`
+// IS a format string, which both silences -Wformat-nonliteral at the strftime
+// call below AND starts checking the two callers' literals — strictly more
+// checking than before, where the wrapper was an opaque hole.
+//
+// -Wformat=2 (which implies -Wformat-nonliteral) was adopted in 56fb90d as
+// "0 sites, measured".  It was 0 sites ON CLANG: this diagnostic is GCC-only
+// here, and that commit said so — "the GCC-only corners of -Wformat=2 are
+// covered by inspection; CI's first g++ -Werror run remains the formal
+// verdict".  This is that run, and inspection had missed one.
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((format(strftime, 1, 0)))
+#endif
 std::string local_time(const char* fmt) {
     std::time_t now = std::time(nullptr);
     std::tm tmv{};
@@ -102,7 +115,19 @@ std::string local_time(const char* fmt) {
     localtime_r(&now, &tmv);
 #endif
     char buf[32];
+    // The format attribute above makes GCC CHECK the two callers' literals,
+    // but it does not stop -Wformat-nonliteral firing here on the forwarded
+    // parameter, so this one call is scoped out.  Safe by construction: both
+    // callers below pass string literals, and `fmt` reaches strftime by no
+    // other path.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
     std::strftime(buf, sizeof buf, fmt, &tmv);
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     return std::string(buf);
 }
 
