@@ -4,6 +4,8 @@
 
 #include <string>
 
+#include "presentation/env_num.hpp"
+
 namespace olduvai::presentation {
 
 bool hd_active(bool enhanced, const std::string& hd_profile) {
@@ -40,8 +42,12 @@ ApplyTier classify_change(const std::string& key, const std::string& new_value,
     }
 
     if (key == "render_scale") {
+        // Pre-seeded per parse_int's contract (it leaves `rs` untouched on
+        // failure).  The previous form initialised `rs` and then immediately
+        // overwrote it via stoi, or returned without reading it — a dead store
+        // either way — and used an exception for ordinary control flow.
         int rs = cur.render_scale;
-        try { rs = std::stoi(new_value); } catch (...) { return ApplyTier::PersistOnly; }
+        if (!parse_int(new_value, rs)) return ApplyTier::PersistOnly;
         if (rs == cur.render_scale) return ApplyTier::PersistOnly;
         const int now = hd_scale_for(cur.enhanced, cur.hd_profile, cur.render_scale);
         const int next = hd_scale_for(cur.enhanced, cur.hd_profile, rs);
@@ -73,11 +79,12 @@ ApplyTier classify_change_in_set(
         } else if (k == "hd_profile") {
             target.hd_profile = v;
         } else if (k == "render_scale") {
-            // Deliberate swallow: a malformed staged value simply keeps the
-            // current render_scale.  There is nothing to report — the menu
-            // cannot produce one, and a stray play.json value should not spam.
-            // NOLINTNEXTLINE(bugprone-empty-catch)
-            try { target.render_scale = std::stoi(v); } catch (...) {}
+            // A malformed staged value simply keeps the current render_scale:
+            // the menu cannot produce one, and a stray play.json value should
+            // not spam.  That policy is now the callee's contract — parse_int
+            // leaves its target untouched on failure — rather than an empty
+            // catch block that had to be explained and silenced.
+            parse_int(v, target.render_scale);
         }
     };
     for (const auto& [k, v] : staged) overlay(k, v);

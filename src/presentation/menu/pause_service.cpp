@@ -13,7 +13,7 @@ namespace olduvai::presentation {
 int PauseService::wire_bind_(const External& x) {
     const PauseBindWireDeps wire{x.god_active, x.audio, x.sw, x.opts,
                                  &session_, x.want_reinit, x.reinit_req,
-                                 x.logical_w, x.logical_h, x.hd_scale,
+                                 x.lsz, x.hd_scale,
                                  x.display_level};
     configure_pause_bind(bind_, wire);
     return 0;

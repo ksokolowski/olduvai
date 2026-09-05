@@ -3,14 +3,21 @@
 #include "cli_args.hpp"
 
 #include <cstdio>
-#include <cstdlib>
+#include "parse_num.hpp"
 #include <string>
 
 namespace olduvai::app {
 
-namespace fs = std::filesystem;
 
 ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) {
+    // argv numbers are explicit user intent: report and fail rather than let
+    // atoi's silent 0 through.  Returns false once it has printed the reason.
+    const auto num = [](const char* flag, const char* text, int& dst) -> bool {
+        if (parse_int(text, dst)) return true;
+        std::fprintf(stderr,
+            "olduvai: %s expects a whole number (got '%s')\n", flag, text);
+        return false;
+    };
     // Alias the result fields so the parse loop below is the verbatim lexer
     // that used to live in main() — every "--flag" string is untouched.
     auto& game_dir = args.game_dir;
@@ -43,6 +50,93 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
     auto& render_audio = args.render_audio;
     auto& render_audio_out = args.render_audio_out;
     auto& render_audio_secs = args.render_audio_secs;
+
+    // Three argument shapes repeat verbatim down the chain below — a
+    // whole-number flag that parses strictly and exits 2 naming the flag,
+    // a settings string that stamps its cli.* override, and a plain string
+    // store.  Each used to be its own else-if (~2-3 complexity points plus
+    // nesting apiece); a table walk per shape replaces them (§3.10, the
+    // move merge_config's families went).  A shape match REQUIRES a value
+    // to be present (i + 1 < argc) — without one the name falls through to
+    // the unknown-argument handler, exactly as the chained form did.
+    struct IntFlag { const char* name; int* dst; bool* cli; };
+    const IntFlag kIntFlags[] = {
+        {"--audio-rate", &ps.audio_rate, nullptr},
+        {"--audio-buffer", &ps.audio_buffer, nullptr},
+        {"--start-screen", &play_start_screen, nullptr},
+        {"--render-scale", &ps.render_scale, &ps.cli.scale},
+        {"--play-frames", &play_frames, nullptr},
+        {"--play-shot-frame", &play_shot_frame, nullptr},
+        {"--viewer-frames", &viewer_frames, nullptr},
+    };
+    struct StrFlag { const char* name; std::string* dst; bool* cli; };
+    const StrFlag kStrFlags[] = {
+        {"--display-mode", &ps.display_mode, &ps.cli.display_mode},
+        {"--aspect", &ps.aspect, &ps.cli.aspect},
+        {"--hd-font", &ps.hd_font, &ps.cli.hd_font},
+        {"--banner-fx", &ps.banner_fx, &ps.cli.banner_fx},
+        {"--transitions", &ps.transitions, &ps.cli.transitions},
+        {"--hd-profile", &ps.hd_profile, &ps.cli.hd},
+        {"--music-device", &ps.music_device, &ps.cli.music_device},
+        {"--sfx-backend", &ps.sfx_backend, &ps.cli.sfx_backend},
+    };
+    struct PlainStrFlag { const char* name; std::string* dst; };
+    const PlainStrFlag kPlainStrFlags[] = {
+        {"--midi-port", &play_midi_port},
+        {"--replay", &play_replay},
+        {"--trace", &play_trace},
+        {"--record-inputs", &play_record_inputs},
+        {"--rom-dir", &ps.rom_dir},
+        {"--mt32-model", &ps.mt32_model},
+        {"--soundfont", &ps.soundfont},
+        {"--play-shot", &play_shot},
+        {"--viewer-shot", &viewer_shot},
+        {"--render-audio", &render_audio},
+        {"--render-audio-out", &render_audio_out},
+    };
+    const auto find_int = [&](const std::string& a) -> const IntFlag* {
+        for (const auto& f : kIntFlags)
+            if (a == f.name) return &f;
+        return nullptr;
+    };
+    const auto find_str = [&](const std::string& a) -> const StrFlag* {
+        for (const auto& f : kStrFlags)
+            if (a == f.name) return &f;
+        return nullptr;
+    };
+    const auto find_plain = [&](const std::string& a) -> const PlainStrFlag* {
+        for (const auto& f : kPlainStrFlags)
+            if (a == f.name) return &f;
+        return nullptr;
+    };
+    // Boolean flags: one name, one destination, one value to store.  The
+    // cli.* stamp is only wanted where a saved config key would otherwise
+    // win — the args.* session fields never read config, so they pass
+    // nullptr and take the value unconditionally.
+    struct BoolFlag { const char* name; bool* dst; bool value; bool* cli; };
+    const BoolFlag kBoolFlags[] = {
+        {"--no-config", &no_config, true, nullptr},
+        {"--save-config", &save_config, true, nullptr},
+        {"--viewer", &viewer, true, nullptr},
+        {"--play", &play, true, nullptr},
+        {"--list-midi-ports", &do_list_midi_ports, true, nullptr},
+        {"--cheats", &play_cheats, true, nullptr},
+        {"--god", &play_god, true, nullptr},
+        {"--debug-collision", &play_debug_collision, true, nullptr},
+        {"--debug-entities", &play_debug_entities, true, nullptr},
+        {"--debug-perf", &play_debug_perf, true, nullptr},
+        {"--vga-scan", &ps.vga_scan, true, &ps.cli.vga_scan},
+        {"--no-vga-scan", &ps.vga_scan, false, &ps.cli.vga_scan},
+        {"--vsync", &play_vsync, true, nullptr},
+        {"-f", &play_fullscreen, true, nullptr},
+        {"--fullscreen", &play_fullscreen, true, nullptr},
+        {"--enhanced", &ps.enhanced, true, &ps.cli.enhanced},
+    };
+    const auto find_bool = [&](const std::string& a) -> const BoolFlag* {
+        for (const auto& f : kBoolFlags)
+            if (a == f.name) return &f;
+        return nullptr;
+    };
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         bool known = true;
@@ -50,6 +144,21 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
             return {true, 0, true, false};
         } else if (arg == "--version") {
             return {true, 0, false, true};
+        } else if (const IntFlag* f =
+                       i + 1 < argc ? find_int(arg) : nullptr) {
+            if (!num(f->name, argv[++i], *f->dst))
+                return {true, 2, false, false};
+            if (f->cli != nullptr) *f->cli = true;
+        } else if (const StrFlag* f =
+                       i + 1 < argc ? find_str(arg) : nullptr) {
+            *f->dst = argv[++i];
+            *f->cli = true;
+        } else if (const PlainStrFlag* f =
+                       i + 1 < argc ? find_plain(arg) : nullptr) {
+            *f->dst = argv[++i];
+        } else if (const BoolFlag* f = find_bool(arg)) {
+            *f->dst = f->value;
+            if (f->cli != nullptr) *f->cli = true;
         } else if (arg == "--game-dir" && i + 1 < argc) {
             game_dir = argv[++i];
             ps.cli.game_dir = true;
@@ -69,16 +178,9 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
                     "(got '%s')\n", profile.c_str());
                 return {true, 2, false, false};
             }
-        } else if (arg == "--no-config") {
-            no_config = true;
-        } else if (arg == "--save-config") {
-            save_config = true;
-        } else if (arg == "--viewer") {
-            viewer = true;
-        } else if (arg == "--play") {
-            play = true;
         } else if (arg == "--level" && i + 1 < argc) {
-            play_level = std::atoi(argv[++i]);
+            if (!num("--level", argv[++i], play_level))
+                return {true, 2, false, false};
             if (play_level < 0 || play_level > 8) {
                 std::fprintf(stderr,
                     "olduvai: --level must be 0 (intro/title), 1-7 (play "
@@ -86,32 +188,9 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
                     "(got '%s')\n", argv[i]);
                 return {true, 2, false, false};
             }
-        } else if (arg == "--enhanced") {
-            ps.enhanced = true;
-            ps.cli.enhanced = true;
         } else if (arg == "--enhance" && i + 1 < argc) {
             ps.enhance_list = argv[++i];
             ps.cli.enhanced = true;   // an explicit subset also overrides config
-        } else if (arg == "--hd-profile" && i + 1 < argc) {
-            ps.hd_profile = argv[++i];
-            ps.cli.hd = true;
-        } else if (arg == "--music-device" && i + 1 < argc) {
-            ps.music_device = argv[++i];
-            ps.cli.music_device = true;
-        } else if (arg == "--midi-port" && i + 1 < argc) {
-            play_midi_port = argv[++i];
-        } else if (arg == "--list-midi-ports") {
-            do_list_midi_ports = true;
-        } else if (arg == "--replay" && i + 1 < argc) {
-            play_replay = argv[++i];
-        } else if (arg == "--trace" && i + 1 < argc) {
-            play_trace = argv[++i];
-        } else if (arg == "--record-inputs" && i + 1 < argc) {
-            play_record_inputs = argv[++i];
-        } else if (arg == "--cheats") {
-            play_cheats = true;
-        } else if (arg == "--god") {
-            play_god = true;
         } else if (arg == "--autofire") {
             ps.autofire = "fast";
             ps.cli.autofire = true;
@@ -125,78 +204,26 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
         } else if (arg == "--no-autofire") {
             ps.autofire = "off";
             ps.cli.autofire = true;
-        } else if (arg == "--debug-collision") {
-            play_debug_collision = true;
-        } else if (arg == "--debug-entities") {
-            play_debug_entities = true;
-        } else if (arg == "--debug-perf") {
-            play_debug_perf = true;
-        } else if (arg == "--vga-scan") {
-            ps.vga_scan = true;
-            ps.cli.vga_scan = true;
-        } else if (arg == "--no-vga-scan") {
-            ps.vga_scan = false;
-            ps.cli.vga_scan = true;
-        } else if (arg == "--vsync") {
-            play_vsync = true;
-        } else if (arg == "-f" || arg == "--fullscreen") {
-            play_fullscreen = true;
-        } else if (arg == "--display-mode" && i + 1 < argc) {
-            ps.display_mode = argv[++i];
-            ps.cli.display_mode = true;
-        } else if (arg == "--audio-rate" && i + 1 < argc) {
-            ps.audio_rate = std::atoi(argv[++i]);
-        } else if (arg == "--audio-buffer" && i + 1 < argc) {
-            ps.audio_buffer = std::atoi(argv[++i]);
-        } else if (arg == "--transitions" && i + 1 < argc) {
-            ps.transitions = argv[++i];
-            ps.cli.transitions = true;
-        } else if (arg == "--aspect" && i + 1 < argc) {
-            ps.aspect = argv[++i];
-            ps.cli.aspect = true;
-        } else if (arg == "--hd-font" && i + 1 < argc) {
-            ps.hd_font = argv[++i];
-            ps.cli.hd_font = true;
-        } else if (arg == "--banner-fx" && i + 1 < argc) {
-            ps.banner_fx = argv[++i];
-            ps.cli.banner_fx = true;
-        } else if (arg == "--start-screen" && i + 1 < argc) {
-            play_start_screen = std::atoi(argv[++i]);
         } else if (arg == "--window" && i + 1 < argc) {
             const std::string wh = argv[++i];
             const auto xpos = wh.find_first_of("xX");
-            if (xpos != std::string::npos) {
-                play_window_w = std::atoi(wh.substr(0, xpos).c_str());
-                play_window_h = std::atoi(wh.substr(xpos + 1).c_str());
+            if (xpos == std::string::npos ||
+                !parse_int(wh.substr(0, xpos), play_window_w) ||
+                !parse_int(wh.substr(xpos + 1), play_window_h)) {
+                std::fprintf(stderr,
+                    "olduvai: --window expects WxH, e.g. 896x400 (got '%s')\n",
+                    wh.c_str());
+                return {true, 2, false, false};
             }
-        } else if (arg == "--rom-dir" && i + 1 < argc) {
-            ps.rom_dir = argv[++i];
-        } else if (arg == "--mt32-model" && i + 1 < argc) {
-            ps.mt32_model = argv[++i];
-        } else if (arg == "--soundfont" && i + 1 < argc) {
-            ps.soundfont = argv[++i];
-        } else if (arg == "--sfx-backend" && i + 1 < argc) {
-            ps.sfx_backend = argv[++i];
-            ps.cli.sfx_backend = true;
-        } else if (arg == "--render-scale" && i + 1 < argc) {
-            ps.render_scale = std::atoi(argv[++i]);
-            ps.cli.scale = true;
-        } else if (arg == "--play-frames" && i + 1 < argc) {
-            play_frames = std::atoi(argv[++i]);
-        } else if (arg == "--play-shot" && i + 1 < argc) {
-            play_shot = argv[++i];
-        } else if (arg == "--play-shot-frame" && i + 1 < argc) {
-            play_shot_frame = std::atoi(argv[++i]);
-        } else if (arg == "--viewer-frames" && i + 1 < argc) {
-            viewer_frames = std::atoi(argv[++i]);
-        } else if (arg == "--viewer-shot" && i + 1 < argc) {
-            viewer_shot = argv[++i];
-        } else if (arg == "--render-audio" && i + 1 < argc) {
-            render_audio = argv[++i];
-        } else if (arg == "--render-audio-out" && i + 1 < argc) {
-            render_audio_out = argv[++i];
+        } else if (arg == "--render-sfx" && i + 1 < argc) {
+            args.render_sfx = argv[++i];
         } else if (arg == "--render-audio-secs" && i + 1 < argc) {
-            render_audio_secs = std::atof(argv[++i]);
+            if (!parse_double(argv[++i], render_audio_secs)) {
+                std::fprintf(stderr,
+                    "olduvai: --render-audio-secs expects a number "
+                    "(got '%s')\n", argv[i]);
+                return {true, 2, false, false};
+            }
         } else {
             known = false;
         }

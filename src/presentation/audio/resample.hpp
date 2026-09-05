@@ -120,31 +120,10 @@ inline void apply_edge_fade(std::vector<std::int16_t>& pcm, int rate,
     }
 }
 
-// s16 variant — same linear interpolation, used for the HD SFX bake WAVs
-// (already 16-bit) when the bake rate differs from the device rate.
-inline std::vector<std::int16_t> resample_linear_s16(
-    const std::vector<std::int16_t>& src, int src_rate, int dst_rate) {
-    if (src.empty() || src_rate <= 0 || dst_rate <= 0) return {};
-    if (src_rate == dst_rate) return src;
-    const std::size_t out_len =
-        src.size() * static_cast<std::size_t>(dst_rate) /
-        static_cast<std::size_t>(src_rate);
-    std::vector<std::int16_t> out(out_len);
-    for (std::size_t i = 0; i < out_len; ++i) {
-        const std::uint64_t pos =
-            (static_cast<std::uint64_t>(i) * static_cast<std::uint64_t>(src_rate)
-             << 32) /
-            static_cast<std::uint64_t>(dst_rate);
-        const std::size_t i0 =
-            std::min(static_cast<std::size_t>(pos >> 32), src.size() - 1);
-        const std::size_t i1 = std::min(i0 + 1, src.size() - 1);
-        const std::int32_t frac =
-            static_cast<std::int32_t>((pos & 0xFFFFFFFFu) >> 17);  // 15-bit
-        const std::int32_t a = src[i0];
-        const std::int32_t b = src[i1];
-        out[i] = static_cast<std::int16_t>(a + (((b - a) * frac) >> 15));
-    }
-    return out;
-}
+// (An s16 twin of resample_linear_u8 lived here — the same fixed-point loop
+// with a different sample conversion.  It was the HD SFX bake's, and the bake
+// was deleted in a730c00; the helper outlived it with no caller and no test,
+// then rode the directory split into this file.  Deleted 2026-08-02: it read
+// as duplication of the live resampler when it was really a leftover.)
 
 }  // namespace olduvai::presentation

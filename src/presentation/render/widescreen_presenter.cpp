@@ -54,7 +54,7 @@ void dump_steady_wide(const std::uint8_t* px, int w, int h) {
 // the same math.  Emits the ultrawide-cap warning once (boss_ws_margin caps
 // silently, so the warn condition is recomputed on the uncapped margin here).
 int WidescreenPresenter::compute_margin(int ow, int oh) const {
-    if (*ctx_.aspect != "widescreen" || !ctx_.hd || ow <= 0 || oh <= 0)
+    if (*ctx_.aspect != "widescreen" || !hd() || ow <= 0 || oh <= 0)
         return 0;
     const char* fm = std::getenv("OLDUVAI_WS_FORCE_MARGIN");
     if (fm == nullptr) {
@@ -85,16 +85,16 @@ int WidescreenPresenter::compute_margin(int ow, int oh) const {
 
 WidescreenPresenter::WidescreenPresenter(WidescreenShellCtx ctx)
     : ctx_(std::move(ctx)) {
-    SDL_GetRendererOutputSize(ctx_.ren, &ow0_, &oh0_);
+    SDL_GetRendererOutputSize(ren(), &ow0_, &oh0_);
     margin_ = compute_margin(ow0_, oh0_);
-    active_ = (*ctx_.aspect == "widescreen") && ctx_.hd && margin_ > 0;
+    active_ = (*ctx_.aspect == "widescreen") && hd() && margin_ > 0;
     native_w_ = 320 + 2 * margin_;   // wide native width
     // The classic streaming texture (owned by the shell) stays 320*hd_scale
     // wide for EVERY non-widescreen path — unchanged.  Widescreen present
     // uses its own WIDE texture wtex_.
     if (active_) {
-        wtex_ = create_stream_tex(ctx_.ren, native_w_ * ctx_.hd_scale,
-                                  200 * ctx_.hd_scale);
+        wtex_ = create_stream_tex(ren(), native_w_ * hd_scale(),
+                                  200 * hd_scale());
     }
 }
 
@@ -116,17 +116,51 @@ void WidescreenPresenter::set_draw_banners(
 // native HUD x into the wide domain (x + margin) then scale to output, with
 // the glyph cap sized against the WIDE logical width so glyphs are not
 // oversized.  Moved verbatim from run_platform_level (CC2d).
+// Clear, copy the wide texture, overlay the vector HUD text.  Three sites had
+// this written out; see the header.  The font-cap save/restore lives inside
+// draw_wide_hud_text, so there is nothing else shared to hoist.
+// The wide foreground pass — see the header for why the clip setup that
+// precedes it stays at the call sites.
+void WidescreenPresenter::draw_wide_foreground(RenderTarget& wrt) {
+    presentation::draw_entities(wrt, *ctx_.state, *ctx_.render,
+                                /*draw_player=*/true);
+    // Lava bubbles are intentionally reflected INTO the margin (L7) — un-clip
+    // before that pass so the no-neighbour clip above does not erase them.
+    wrt.clip_x_lo = -(1 << 28);
+    wrt.clip_x_hi = 1 << 28;
+    // Reflect L7 lava bubbles onto the mirrored lava in the no-neighbour
+    // margin (no-op on other levels).
+    presentation::draw_mirrored_lava_bubbles(
+        wrt, *ctx_.state, *ctx_.render, /*mirror_left=*/!left_ok_,
+        /*mirror_right=*/!right_ok_);
+    if (ctx_.draw_overlay_tail) ctx_.draw_overlay_tail(wrt);
+    draw_margin_monsters(wrt);   // Tier-1 living margins
+}
+
+void WidescreenPresenter::show_wide_with_hud(
+    const enhance::EnhancedHudLayout& hud_layout, bool draw_hud_overlay) {
+    SDL_RenderClear(ren());
+    SDL_RenderCopy(ren(), wtex_, nullptr, nullptr);
+    if (draw_hud_overlay && hd_text().ok()) {
+        int ow = 0, oh = 0;
+        if (overlay().begin(ren(), hd_text(), ow, oh)) {
+            draw_wide_hud_text(overlay().buffer(), ow, oh, hud_layout);
+            overlay().flush(ren(), lsz().w(), lsz().h());
+        }
+    }
+}
+
 void WidescreenPresenter::draw_wide_hud_text(
     std::vector<std::uint8_t>& b, int ow, int oh,
     const enhance::EnhancedHudLayout& L) {
     const int cap = 8 * ow / native_w_;
-    ctx_.hd_text->set_cap_px(cap > 0 ? cap : 1);
+    hd_text().set_cap_px(cap > 0 ? cap : 1);
     const double sx = static_cast<double>(ow) / native_w_;
     const double sy = oh / 200.0;
     for (const auto& t : L.texts) {
         const int x = static_cast<int>((t.x + margin_) * sx + 0.5);
         const int y = static_cast<int>(t.baseline_y * sy + 0.5);
-        ctx_.hd_text->draw(b, ow, oh, x, y, t.str, t.r, t.g, t.b);
+        hd_text().draw(b, ow, oh, x, y, t.str, t.r, t.g, t.b);
     }
     // Widescreen banner substitutes (covers every present() path + the
     // pillarboxed-WS upload_and_show branch, which all route here).
@@ -158,9 +192,9 @@ void WidescreenPresenter::set_float_pos(bool use, float fx, float fy) {
 // NULL backdrop (no-neighbour margins self-tile = corrupted screen-0 left
 // edge).
 void WidescreenPresenter::rebuild_if_resized() {
-    if (*ctx_.aspect != "widescreen" || !ctx_.hd) return;
+    if (*ctx_.aspect != "widescreen" || !hd()) return;
     int ow = 0, oh = 0;
-    SDL_GetRendererOutputSize(ctx_.ren, &ow, &oh);
+    SDL_GetRendererOutputSize(ren(), &ow, &oh);
     if (ow == ow0_ && oh == oh0_) return;   // unchanged
     ow0_ = ow;
     oh0_ = oh;
@@ -171,17 +205,15 @@ void WidescreenPresenter::rebuild_if_resized() {
         native_w_ = 320 + 2 * margin_;
         if (wtex_ != nullptr) { SDL_DestroyTexture(wtex_); wtex_ = nullptr; }
         if (margin_ > 0)
-            wtex_ = create_stream_tex(ctx_.ren, native_w_ * ctx_.hd_scale,
-                                      200 * ctx_.hd_scale);
+            wtex_ = create_stream_tex(ren(), native_w_ * hd_scale(),
+                                      200 * hd_scale());
     }
-    active_ = (*ctx_.aspect == "widescreen") && ctx_.hd && margin_ > 0;
+    active_ = (*ctx_.aspect == "widescreen") && hd() && margin_ > 0;
     // Active → wide canvas fills the output; inactive (margin 0 → 16:10
     // display) → the aspect_logical fallback.  Keep SDL's logical size and
     // the overlay-restore vars in lockstep.
-    *ctx_.logical_w =
-        active_ ? native_w_ * ctx_.hd_scale : ctx_.fallback_ld.w;
-    *ctx_.logical_h = active_ ? 200 * ctx_.hd_scale : ctx_.fallback_ld.h;
-    SDL_RenderSetLogicalSize(ctx_.ren, *ctx_.logical_w, *ctx_.logical_h);
+    lsz().set(active_ ? native_w_ * hd_scale() : ctx_.fallback_ld.w,
+                  active_ ? 200 * hd_scale() : ctx_.fallback_ld.h);
     // Turned ON mid-level: build the level-derived state the inactive level
     // entry skipped, so the very next present this frame has a live cache +
     // backdrop (no black-bar / corruption window).
@@ -447,17 +479,17 @@ void WidescreenPresenter::present(
     // draw at HD over the cached bg, then redraw_bg_tiles puts the floor
     // back on top so the bubbles stay BEHIND it (pixel-identical to the
     // slow base→bubbles→tiles order).  HD only (scale>1).
-    if (ctx_.hd && ctx_.hd_scale > 1 && wtex_ != nullptr) {
+    if (hd() && hd_scale() > 1 && wtex_ != nullptr) {
         const FrameBuffer* ws_bd = ws_backdrop();
         const std::vector<std::uint8_t>& bg_hd =
             presentation::get_static_wide_bg_hd(
-                *ctx_.state, *ctx_.render, ctx_.hd_scale, *ctx_.hd_profile,
+                *ctx_.state, *ctx_.render, hd_scale(), *hd_profile(),
                 margin_,
-                left_ok_ ? &left_ : nullptr, left_screen_,
-                right_ok_ ? &right_ : nullptr, right_screen_,
-                ws_bd, left_seam_, right_seam_, left_bridge_,
-                right_bridge_, peek_generation_);
-        const int uw = native_w_ * ctx_.hd_scale, uh = 200 * ctx_.hd_scale;
+                WidePeek{left_ok_ ? &left_ : nullptr, left_screen_,
+                         right_ok_ ? &right_ : nullptr, right_screen_,
+                         ws_bd, &left_seam_, &right_seam_, &left_bridge_,
+                         &right_bridge_, peek_generation_});
+        const int uw = native_w_ * hd_scale(), uh = 200 * hd_scale();
         const std::size_t n =
             static_cast<std::size_t>(uw) * uh * 4;
         if (frame_hd_.size() != n) frame_hd_.resize(n);
@@ -468,8 +500,8 @@ void WidescreenPresenter::present(
         // state=false (visual only — the authoritative advance already
         // ran on `fb`).
         {
-            RenderTarget wrt{frame_hd_.data(), uw, uh, ctx_.hd_scale,
-                             ctx_.hd_cache, ctx_.hd_profile};
+            RenderTarget wrt{frame_hd_.data(), uw, uh, hd_scale(),
+                             ctx_.hd_cache, hd_profile()};
             wrt.origin_x = margin_;
             wrt.advance_state = false;
             wrt.use_float_pos = use_float_pos_;
@@ -485,7 +517,7 @@ void WidescreenPresenter::present(
                 presentation::redraw_bg_tiles(wrt, *ctx_.state, *ctx_.render);
             }
             if (ctx_.state->secret_flag)
-                wrt.clip_y = (168 + 1) * ctx_.hd_scale;
+                wrt.clip_y = (168 + 1) * hd_scale();
             // Clip the live entity/player overflow at a NO-NEIGHBOUR
             // margin: a level edge has no real screen beyond x=320, so
             // the DOS hard clip applies — the player must not spill onto
@@ -510,48 +542,25 @@ void WidescreenPresenter::present(
             // old 320 edge (the "player cut off at the widescreen strip").
             const bool secret_overflow = ctx_.state->secret_flag != 0;
             if (!left_ok_ && !secret_overflow)
-                wrt.player_clip_x_lo = margin_ * ctx_.hd_scale;
+                wrt.player_clip_x_lo = margin_ * hd_scale();
             if (!right_ok_ && !glider_flyoff && !secret_overflow)
-                wrt.player_clip_x_hi = (margin_ + 320) * ctx_.hd_scale;
-            presentation::draw_entities(wrt, *ctx_.state, *ctx_.render,
-                                        /*draw_player=*/true);
-            // Lava bubbles are intentionally reflected INTO the margin
-            // (L7) — un-clip before that pass so the no-neighbour clip
-            // above does not erase them.
-            wrt.clip_x_lo = -(1 << 28);
-            wrt.clip_x_hi = 1 << 28;
-            // Reflect L7 lava bubbles onto the mirrored lava in the
-            // no-neighbour margin (no-op on other levels).
-            presentation::draw_mirrored_lava_bubbles(
-                wrt, *ctx_.state, *ctx_.render, /*mirror_left=*/!left_ok_,
-                /*mirror_right=*/!right_ok_);
-            if (ctx_.draw_overlay_tail) ctx_.draw_overlay_tail(wrt);
-            draw_margin_monsters(wrt);   // Tier-1 living margins
+                wrt.player_clip_x_hi = (margin_ + 320) * hd_scale();
+            draw_wide_foreground(wrt);
         }
         // HUD bars at HD, shifted to the centre (x_off = margin_).
         enhance::EnhancedHudLayout hud_layout;
-        const bool draw_hud_overlay = ctx_.use_hd_text;
+        const bool draw_hud_overlay = use_hd_text();
         if (draw_hud_overlay) {
             hud_layout =
-                enhance::compute_enhanced_hud_layout(*ctx_.hd_text,
+                enhance::compute_enhanced_hud_layout(hd_text(),
                                                      *ctx_.state);
-            enhance::draw_enhanced_hud_bars(frame_hd_, uw, uh, ctx_.hd_scale,
+            enhance::draw_enhanced_hud_bars(frame_hd_, uw, uh, hd_scale(),
                                             hud_layout, margin_);
         }
         dump_steady_wide(frame_hd_.data(), uw, uh);
         SDL_UpdateTexture(wtex_, nullptr, frame_hd_.data(), uw * 4);
-        SDL_RenderClear(ctx_.ren);
-        SDL_RenderCopy(ctx_.ren, wtex_, nullptr, nullptr);
-        if (draw_hud_overlay && ctx_.hd_text->ok()) {
-            int ow = 0, oh = 0;
-            if (ctx_.text_overlay->begin(ctx_.ren, *ctx_.hd_text, ow, oh)) {
-                draw_wide_hud_text(ctx_.text_overlay->buffer(), ow, oh,
-                                        hud_layout);
-                ctx_.text_overlay->flush(ctx_.ren, *ctx_.logical_w,
-                                         *ctx_.logical_h);
-            }
-        }
-        if (do_present) SDL_RenderPresent(ctx_.ren);
+        show_wide_with_hud(hud_layout, draw_hud_overlay);
+        if (do_present) SDL_RenderPresent(ren());
         return;
     }
     // ── SLOW PATH (whole-frame upscale): secret rooms w/ bubbles, etc. ──
@@ -573,9 +582,9 @@ void WidescreenPresenter::present(
     // non-text bars into the native center at scale 1.  No second
     // draw_hud_for_fb — that would double-decrement GET READY.
     enhance::EnhancedHudLayout hud_layout;
-    const bool draw_hud_overlay = ctx_.use_hd_text;
+    const bool draw_hud_overlay = use_hd_text();
     if (draw_hud_overlay) {
-        hud_layout = enhance::compute_enhanced_hud_layout(*ctx_.hd_text,
+        hud_layout = enhance::compute_enhanced_hud_layout(hd_text(),
                                                           *ctx_.state);
         enhance::draw_enhanced_hud_bars(center.px, 320, 200, 1, hud_layout);
     }
@@ -594,9 +603,10 @@ void WidescreenPresenter::present(
     presentation::compose_widescreen(
         wide, margin_, center,
         left_ok_ ? &left_ : nullptr,
-        right_ok_ ? &right_ : nullptr, /*hud_rows=*/0, ws_bd,
-        /*reflect_pure=*/false, /*margin_edge_brightness=*/1.0f,
-        /*repeat_no_backdrop=*/ctx_.state->secret_flag == 0);
+        right_ok_ ? &right_ : nullptr,
+        MarginFill{/*hud_rows=*/0, ws_bd,
+                   /*reflect_pure=*/false, /*margin_edge_brightness=*/1.0f,
+                   /*repeat_no_backdrop=*/ctx_.state->secret_flag == 0});
     // Foreground over the WIDE native buffer at origin_x = margin: the
     // live-entity + player overflow pass.  In-center pixels land exactly
     // where compose_widescreen placed the center; any sprite crossing the
@@ -629,42 +639,19 @@ void WidescreenPresenter::present(
         const bool secret_overflow = ctx_.state->secret_flag != 0;
         if (!left_ok_ && !secret_overflow) wrt.player_clip_x_lo = margin_;
         if (!right_ok_ && !secret_overflow) wrt.player_clip_x_hi = margin_ + 320;
-        presentation::draw_entities(wrt, *ctx_.state, *ctx_.render,
-                                    /*draw_player=*/true);
-        wrt.clip_x_lo = -(1 << 28);
-        wrt.clip_x_hi = 1 << 28;
-        presentation::draw_mirrored_lava_bubbles(
-            wrt, *ctx_.state, *ctx_.render, /*mirror_left=*/!left_ok_,
-            /*mirror_right=*/!right_ok_);
-        if (ctx_.draw_overlay_tail) ctx_.draw_overlay_tail(wrt);
-        draw_margin_monsters(wrt);   // Tier-1 living margins
+        draw_wide_foreground(wrt);
     }
     dump_steady_wide(wide.data(), native_w_, 200);
     // Upscale the whole wide buffer to (native_w_*hd_scale x 200*hd_scale).
     std::vector<std::uint8_t> up =
-        enhance::upscale_rgba(wide, native_w_, 200, ctx_.hd_scale,
-                              *ctx_.hd_profile);
+        enhance::upscale_rgba(wide, native_w_, 200, hd_scale(),
+                              *hd_profile());
     SDL_UpdateTexture(wtex_, nullptr, up.data(),
-                      native_w_ * ctx_.hd_scale * 4);
-    SDL_RenderClear(ctx_.ren);
-    SDL_RenderCopy(ctx_.ren, wtex_, nullptr, nullptr);
-    // Vector HUD text over the center 320 sub-region.  Map native x into
-    // the wide domain ([margin, margin+320]) then to output by
-    // ow/native_w; set the font cap to the wide-domain output scale so
-    // glyphs are not oversized.  (Pause/cheat menus over widescreen are a
-    // follow-up — they fall through to the standard center-only path.)
-    if (draw_hud_overlay && ctx_.hd_text->ok()) {
-        int ow = 0, oh = 0;
-        if (ctx_.text_overlay->begin(ctx_.ren, *ctx_.hd_text, ow, oh)) {
-            draw_wide_hud_text(ctx_.text_overlay->buffer(), ow, oh,
-                                    hud_layout);
-            ctx_.text_overlay->flush(ctx_.ren, *ctx_.logical_w,
-                                     *ctx_.logical_h);
-        }
-    }
+                      native_w_ * hd_scale() * 4);
+    show_wide_with_hud(hud_layout, draw_hud_overlay);
     // do_present=false leaves the wide frame in the backbuffer for a
     // caller-side RenderReadPixels (Metal reads black AFTER present).
-    if (do_present) SDL_RenderPresent(ctx_.ren);
+    if (do_present) SDL_RenderPresent(ren());
 }
 
 // ── Widescreen transition present (§8.7 wide transitions) ───────────────
@@ -694,8 +681,8 @@ void WidescreenPresenter::present_transition(std::vector<std::uint8_t>& wide,
     // steady-state static-bg cache, task #61).
     std::vector<std::uint8_t> up;
     if (!pre_upscaled)
-        up = enhance::upscale_rgba(wide, native_w_, 200, ctx_.hd_scale,
-                                   *ctx_.hd_profile);
+        up = enhance::upscale_rgba(wide, native_w_, 200, hd_scale(),
+                                   *hd_profile());
     std::vector<std::uint8_t>& hdbuf = pre_upscaled ? wide : up;
     // Fixed HUD bars over the centre 320 region (== steady-frame position):
     // present() bakes the bars into the static centre; in a
@@ -704,27 +691,27 @@ void WidescreenPresenter::present_transition(std::vector<std::uint8_t>& wide,
     // stay put across the whole pan/fade — matching the steady frame.
     // with_hud=false suppresses the HUD entirely (the level-end fade-to-black
     // darkens the HUD with the scene, matching the classic with_hud=false fade).
-    const bool draw_hud_overlay = with_hud && ctx_.hd && ctx_.use_hd_text;
+    const bool draw_hud_overlay = with_hud && hd() && use_hd_text();
     enhance::EnhancedHudLayout hud_layout;
     if (draw_hud_overlay) {
         hud_layout =
-            enhance::compute_enhanced_hud_layout(*ctx_.hd_text, *ctx_.state);
+            enhance::compute_enhanced_hud_layout(hd_text(), *ctx_.state);
         // draw_enhanced_hud_bars draws relative to a 320*scale-wide buffer;
         // wrap a 320-wide view by offsetting into the wide row.  Simplest:
         // composite a centre 320*scale strip, draw bars there, copy back.
-        const int cw = 320 * ctx_.hd_scale;   // centre width in output px
-        const int ch = 200 * ctx_.hd_scale;
-        const int cx = margin_ * ctx_.hd_scale; // centre x-origin in wide output
+        const int cw = 320 * hd_scale();   // centre width in output px
+        const int ch = 200 * hd_scale();
+        const int cx = margin_ * hd_scale(); // centre x-origin in wide output
         std::vector<std::uint8_t> centre(
             static_cast<std::size_t>(cw) * ch * 4);
         for (int y = 0; y < ch; ++y)
             std::copy_n(hdbuf.begin() +
                             (static_cast<std::size_t>(y) * native_w_ *
-                                 ctx_.hd_scale + cx) * 4,
+                                 hd_scale() + cx) * 4,
                         static_cast<std::size_t>(cw) * 4,
                         centre.begin() +
                             static_cast<std::size_t>(y) * cw * 4);
-        enhance::draw_enhanced_hud_bars(centre, cw, ch, ctx_.hd_scale,
+        enhance::draw_enhanced_hud_bars(centre, cw, ch, hd_scale(),
                                         hud_layout);
         for (int y = 0; y < ch; ++y)
             std::copy_n(centre.begin() +
@@ -732,7 +719,7 @@ void WidescreenPresenter::present_transition(std::vector<std::uint8_t>& wide,
                         static_cast<std::size_t>(cw) * 4,
                         hdbuf.begin() +
                             (static_cast<std::size_t>(y) * native_w_ *
-                                 ctx_.hd_scale + cx) * 4);
+                                 hd_scale() + cx) * 4);
     }
     // Test hook: OLDUVAI_WIDE_TRANSITION_DUMP=<dir> saves the wide HD
     // buffer AFTER the HUD-bar splice, right before texture upload — the
@@ -746,26 +733,14 @@ void WidescreenPresenter::present_transition(std::vector<std::uint8_t>& wide,
         std::snprintf(wtpath, sizeof wtpath, "%s/wpresent_%04d.png", wd,
                       wtseq++);
         SDL_Surface* s = SDL_CreateRGBSurfaceWithFormatFrom(
-            hdbuf.data(), native_w_ * ctx_.hd_scale, 200 * ctx_.hd_scale, 32,
-            native_w_ * ctx_.hd_scale * 4, SDL_PIXELFORMAT_RGBA32);
+            hdbuf.data(), native_w_ * hd_scale(), 200 * hd_scale(), 32,
+            native_w_ * hd_scale() * 4, SDL_PIXELFORMAT_RGBA32);
         if (s) { save_surface_image(s, wtpath); SDL_FreeSurface(s); }
     }
     SDL_UpdateTexture(wtex_, nullptr, hdbuf.data(),
-                      native_w_ * ctx_.hd_scale * 4);
-    SDL_RenderClear(ctx_.ren);
-    SDL_RenderCopy(ctx_.ren, wtex_, nullptr, nullptr);
-    // Vector HUD text over the centre 320 sub-region (same mapping as
-    // present()): map native x into the wide domain then to output.
-    if (draw_hud_overlay && ctx_.hd_text->ok()) {
-        int ow = 0, oh = 0;
-        if (ctx_.text_overlay->begin(ctx_.ren, *ctx_.hd_text, ow, oh)) {
-            draw_wide_hud_text(ctx_.text_overlay->buffer(), ow, oh,
-                                    hud_layout);
-            ctx_.text_overlay->flush(ctx_.ren, *ctx_.logical_w,
-                                     *ctx_.logical_h);
-        }
-    }
-    SDL_RenderPresent(ctx_.ren);
+                      native_w_ * hd_scale() * 4);
+    show_wide_with_hud(hud_layout, draw_hud_overlay);
+    SDL_RenderPresent(ren());
 }
 
 // Wrap a native 320x200 center (bg+tiles+player, NO baked HUD) into a WIDE
@@ -782,9 +757,10 @@ void WidescreenPresenter::wrap_wide(const FrameBuffer& center,
     presentation::compose_widescreen(
         out, margin_, center,
         left_ok_ ? &left_ : nullptr,
-        right_ok_ ? &right_ : nullptr, /*hud_rows=*/0, ws_bd,
-        /*reflect_pure=*/false, /*margin_edge_brightness=*/1.0f,
-        /*repeat_no_backdrop=*/ctx_.state->secret_flag == 0);
+        right_ok_ ? &right_ : nullptr,
+        MarginFill{/*hud_rows=*/0, ws_bd,
+                   /*reflect_pure=*/false, /*margin_edge_brightness=*/1.0f,
+                   /*repeat_no_backdrop=*/ctx_.state->secret_flag == 0});
 }
 
 // Wrap a native 320 center into a WIDE buffer with PURE-BLACK bezel margins
@@ -913,11 +889,11 @@ void WidescreenPresenter::reapply_seam_bands(std::vector<std::uint8_t>& wide,
 // and it carries the same layer-extension the steady view uses.
 void WidescreenPresenter::wrap_wide_static(const FrameBuffer& center,
                                            std::vector<std::uint8_t>& out) {
-    const FrameBuffer* ws_bd = ws_backdrop();
-    presentation::compose_static_wide_bg_native(
-        *ctx_.state, *ctx_.render, margin_, left_ok_ ? &left_ : nullptr,
-        right_ok_ ? &right_ : nullptr, ws_bd, out, left_seam_,
-        right_seam_, left_bridge_, right_bridge_);
+    // The margins come from compose_static_wide_bg — the SAME method the
+    // steady view and the descent use, so all three sites are one argument
+    // list away from drifting.  (It used to be re-spelled here positionally;
+    // a third copy of an eight-argument list is how the §3.14a drift starts.)
+    compose_static_wide_bg(out);
     for (int y = 0; y < 200; ++y)
         std::memcpy(
             &out[(static_cast<std::size_t>(y) * native_w_ + margin_) * 4],
@@ -959,7 +935,7 @@ void WidescreenPresenter::compose_static_wide_bg(
         *ctx_.state, *ctx_.render, margin_,
         left_ok_ ? &left_ : nullptr,
         right_ok_ ? &right_ : nullptr, ws_bd, out,
-        left_seam_, right_seam_, left_bridge_, right_bridge_);
+        SeamTiles{left_seam_, right_seam_, left_bridge_, right_bridge_});
 }
 
 }  // namespace olduvai::presentation

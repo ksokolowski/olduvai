@@ -539,7 +539,8 @@ public:
         if (settings != nullptr && api.del_settings != nullptr) {
             api.del_settings(settings);
         }
-        dyn_close(lib);
+        // NOT dyn_close: see the destructor.  new_synth ran, so the OpenMP
+        // pool may exist even though initialisation went on to fail.
         return nullptr;
     }
     ~FluidSynth() override {
@@ -549,7 +550,24 @@ public:
         if (settings_ != nullptr && api_.del_settings != nullptr) {
             api_.del_settings(settings_);
         }
-        if (lib_ != nullptr) dyn_close(lib_);
+        // DELIBERATELY NOT dyn_close(lib_) — this leaks one handle per
+        // process and that is the fix, not an oversight.
+        //
+        // libfluidsynth is built with OpenMP, and its libgomp worker pool
+        // OUTLIVES delete_fluid_synth: the threads are libgomp's, not the
+        // synth's, so nothing we can call joins them.  dlclose then unmaps the
+        // code those threads are about to return into, and they fault.  It is
+        // a race, which is why it reads as flaky rather than broken: measured
+        // 7 of 8 renders crashing here, 0 of 8 with OMP_NUM_THREADS=1, with
+        // the fault always in libgomp on a worker thread and never in our
+        // frames or FluidSynth's.
+        //
+        // Not closing is the standard remedy for a dlopen'd OpenMP library.
+        // The cost is nil: dlopen refcounts, so re-selecting the device
+        // returns the same handle rather than mapping a second copy, and the
+        // mapping goes away at exit like every other one.
+        //
+        // libmt32emu keeps its dyn_close — it has no OpenMP and no such pool.
     }
     void send(std::uint8_t st, std::uint8_t d1, std::uint8_t d2) override {
         const int chn = st & 0x0F;
@@ -582,7 +600,11 @@ public:
 private:
     FluidSynth(void* lib, void* settings, void* synth, const FsApi& api)
         : lib_(lib), settings_(settings), synth_(synth), api_(api) {}
-    void* lib_ = nullptr;
+    // Retained but deliberately never read: the destructor does NOT
+    // dyn_close it (see there for why), so the handle is held only to
+    // document the intentional leak.  [[maybe_unused]] because Clang's
+    // -Wunused-private-field fires on a written-but-never-read member.
+    [[maybe_unused]] void* lib_ = nullptr;
     void* settings_ = nullptr;
     void* synth_ = nullptr;
     FsApi api_;
@@ -661,7 +683,24 @@ SdlAudio::SdlAudio(const std::string& music_device,
         event_watch_installed_ = true;
     }
 
+    // Phases as methods over the members they set (§3.7's D shape, applied to
+    // the one §3.12 row no instrument could verify until audio_diff.sh
+    // existed).  Order is load-bearing: SFX resolution reads music_backend_
+    // so "auto" can pair to whatever music synth actually loaded.
+    select_music_backend(music_device, rom_dir, soundfont, midi_port,
+                         mt32_model);
+    resolve_and_bake_sfx(sfx_backend);
+    if (device_ != 0) SDL_PauseAudioDevice(device_, 0);   // offline: no device
+}
 
+// Choose and load the music synth: host-MIDI (opt-in), MT-32 builtin, GM
+// builtin, the auto host fallback, OPL — first hit wins, later blocks are
+// guarded on nothing having loaded yet.  Moved verbatim from the constructor.
+void SdlAudio::select_music_backend(const std::string& music_device,
+                                    const std::string& rom_dir,
+                                    const std::string& soundfont,
+                                    const std::string& midi_port,
+                                    const std::string& mt32_model) {
     // ── Host-MIDI music path (opt-in) ───────────────────────────────────────
     // "host-midi" (and the Python back-compat alias "mt32") route MDI music to
     // a real MIDI OUT port via RtMidi instead of rendering audio.  When it
@@ -804,6 +843,12 @@ SdlAudio::SdlAudio(const std::string& music_device,
                          music_device_eff.c_str());
         }
     }
+}
+
+// Resolve the SFX backend (music-aware "auto") and pre-bake the sample banks.
+// Moved verbatim from the constructor; reads music_backend_, so it must run
+// AFTER select_music_backend.
+void SdlAudio::resolve_and_bake_sfx(const std::string& sfx_backend) {
     // Resolve the SFX backend, music-aware — mirrors Python's
     // _resolve_sfx_backend so "auto" pairs to the music device: MT-32 music →
     // MT-32 SFX, GM music → GM SFX, OPL/none → SB-DAC VOC samples.  "auto"
@@ -820,21 +865,63 @@ SdlAudio::SdlAudio(const std::string& music_device,
     midi_sfx_ = (sfxb == "midi" || sfxb == "mt32-sfx" || sfxb == "gm-sfx");
     opl_sfx_ = (sfxb == "opl");
 
-    // OPL SFX backend: pre-render the AdLib FM voices now (at the device rate)
-    // so they're available even when a SFX has no VOC asset to trigger
-    // load_sfx().  The renderer emits interleaved stereo (L==R in OPL2 mode);
-    // playback is mono (one sample per frame, duplicated to both channels), so
-    // down-mix by taking the L channel.  play_sfx() then plays from sfx_.
-    if (opl_sfx_ && device_ != 0) {
-        for (const auto& id : opl_sfx_ids()) {
-            const auto stereo = render_adlib_sfx_by_id(id, device_rate_);
-            if (stereo.empty()) continue;
-            std::vector<std::int16_t> mono(stereo.size() / 2);
-            for (std::size_t i = 0; i < mono.size(); ++i)
-                mono[i] = stereo[i * 2];
-            sfx_[id] = std::move(mono);
+    midi_sfx_ = (sfxb == "midi" || sfxb == "mt32-sfx" || sfxb == "gm-sfx");
+    opl_sfx_ = (sfxb == "opl");
+    if (opl_sfx_) bake_opl_sfx();
+    if (midi_sfx_) bake_midi_sfx();
+}
+
+
+std::vector<std::int16_t> SdlAudio::render_offline(
+    const std::vector<std::uint8_t>& midi_stream, int frames) {
+    if (frames < 0) frames = 0;
+    // The OPL driver plays RAW game-MDI (FF 7F voice patches), not the
+    // sequencer's channel-voice stream — load it directly.  Without this arm,
+    // `--render-audio` on the OPL backend printed a digest of silence:
+    // mix() rendered a player that had never been handed a track.
+    // set_loop(false): a stream whose events all sit at tick 0 spins forever
+    // under loop (the cursor restarts and active_ never clears).
+    if (synth_ == nullptr && opl_music_ != nullptr) {
+        opl_music_->set_loop(false);
+        if (!opl_music_->open(midi_stream)) return {};
+        std::vector<std::int16_t> out(static_cast<std::size_t>(frames) * 2, 0);
+        constexpr int kChunk = 1024;
+        for (int done = 0; done < frames; done += kChunk) {
+            const int n = std::min(kChunk, frames - done);
+            opl_music_->render(n,
+                               out.data() + static_cast<std::size_t>(done) * 2);
         }
+        return out;
     }
+    // Sequencer-backed synths (mt32-builtin / gm) render from seq_; OPL plays
+    // raw game-MDI via opl_music_ and is handled above.
+    seq_.load(midi_stream);
+    std::vector<std::int16_t> out(static_cast<std::size_t>(frames) * 2, 0);
+    // Render in fixed chunks so the per-buffer event quantisation matches real
+    // playback (mix() dispatches a whole chunk's due events, then renders it).
+    constexpr int kChunk = 1024;
+    for (int done = 0; done < frames; done += kChunk) {
+        const int n = std::min(kChunk, frames - done);
+        mix(out.data() + static_cast<std::size_t>(done) * 2, n);
+    }
+    return out;
+}
+
+// Bake phase, OPL: pre-render the AdLib FM voices now (at the device rate)
+// so they're available even when a SFX has no VOC asset to trigger
+// load_sfx().  The renderer emits interleaved stereo (L==R in OPL2 mode);
+// playback is mono (one sample per frame, duplicated to both channels), so
+// down-mix by taking the L channel.  play_sfx() then plays from sfx_.
+void SdlAudio::bake_opl_sfx() {
+}
+
+// Bake phase, MIDI (mt32-sfx / gm-sfx): pre-render each catalog note event
+// to PCM through the active synth ONCE, here at construction before any
+// music loads — mirrors the Python build, which renders each SFX to a
+// pygame.mixer.Sound.  Stored in sfx_ and played as independent polyphonic
+// waves via the voice pool, NEVER injected live into the music synth (so
+// they never steal music voices and get their own balance gain).
+void SdlAudio::bake_midi_sfx() {
     // MIDI SFX backends (mt32-sfx / gm-sfx): pre-render each catalog note event
     // to PCM through the active synth ONCE, here at construction before any
     // music loads — mirrors the Python build, which renders each SFX to a
@@ -891,24 +978,6 @@ SdlAudio::SdlAudio(const std::string& music_device,
             sfx_[s.id] = std::move(mono);
         }
     }
-    if (device_ != 0) SDL_PauseAudioDevice(device_, 0);   // offline: no device
-}
-
-std::vector<std::int16_t> SdlAudio::render_offline(
-    const std::vector<std::uint8_t>& midi_stream, int frames) {
-    if (frames < 0) frames = 0;
-    // Sequencer-backed synths (mt32-builtin / gm) render from seq_; OPL plays
-    // raw game-MDI via opl_music_ and is out of scope here.
-    seq_.load(midi_stream);
-    std::vector<std::int16_t> out(static_cast<std::size_t>(frames) * 2, 0);
-    // Render in fixed chunks so the per-buffer event quantisation matches real
-    // playback (mix() dispatches a whole chunk's due events, then renders it).
-    constexpr int kChunk = 1024;
-    for (int done = 0; done < frames; done += kChunk) {
-        const int n = std::min(kChunk, frames - done);
-        mix(out.data() + static_cast<std::size_t>(done) * 2, n);
-    }
-    return out;
 }
 
 void SdlAudio::reopen_device() {

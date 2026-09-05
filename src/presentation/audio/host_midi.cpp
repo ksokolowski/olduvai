@@ -150,7 +150,21 @@ void send3(HostMidiPlayer::Impl*, std::uint8_t, std::uint8_t, std::uint8_t) {}
 HostMidiPlayer::HostMidiPlayer() = default;
 
 HostMidiPlayer::~HostMidiPlayer() {
-    stop();
+    // stop() joins the pump thread, and std::thread::join can throw
+    // std::system_error.  A destructor is implicitly noexcept, so letting that
+    // escape calls std::terminate — the process dies at shutdown, in the audio
+    // teardown path, for a condition that is already unrecoverable.  Swallow
+    // it: there is nothing a destructor can usefully do with a failed join,
+    // and taking the process down is strictly worse than leaking the thread.
+    try {
+        stop();
+        // Empty is the handling. The two alternatives a destructor has are
+        // rethrow, which IS the std::terminate this try exists to prevent, and
+        // logging, which wants an allocation on a teardown path that has
+        // already failed once.
+        // NOLINTNEXTLINE(bugprone-empty-catch)
+    } catch (...) {
+    }
 }
 
 void HostMidiPlayer::all_notes_off() {

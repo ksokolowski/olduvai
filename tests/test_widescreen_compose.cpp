@@ -121,14 +121,15 @@ TEST_CASE("wide compose: straddlers draw CENTRE-ONLY, bridges reach margins") {
     // Right-side lists are in coords where the compose's +320 shift lands
     // them on-screen (the caller stores b.x - 320): -4 -> screen-x 316,
     // spanning centre 316..319 and margin 320..323.
+    using olduvai::presentation::SeamTiles;
     const std::vector<TileDraw> place = {{0, -4, 96}};
     std::vector<std::uint8_t> as_bridge, as_straddler, none;
     olduvai::presentation::compose_static_wide_bg_native(
         st, assets, margin, nullptr, &right, nullptr, as_bridge,
-        {}, {}, {}, /*right_bridge=*/place);
+        SeamTiles{{}, {}, {}, /*right_bridge=*/place});
     olduvai::presentation::compose_static_wide_bg_native(
         st, assets, margin, nullptr, &right, nullptr, as_straddler,
-        {}, /*right_seam=*/place, {}, {});
+        SeamTiles{{}, /*right_seam=*/place, {}, {}});
     olduvai::presentation::compose_static_wide_bg_native(
         st, assets, margin, nullptr, &right, nullptr, none);
     const int w = 320 + 2 * margin;
@@ -153,18 +154,18 @@ TEST_CASE("HD wide cache: empty-seam caller never gets a seam-bearing frame") {
     FrameBuffer right = solid_frame(222);
     const std::vector<TileDraw> bridge = {{0, -4, 96}};   // -> screen-x 316
     const auto& with = olduvai::presentation::get_static_wide_bg_hd(
-        st, assets, /*scale=*/2, profile, margin, nullptr, -1, &right, 4,
-        nullptr, {}, {}, {}, bridge, /*peek_generation=*/1);
+        st, assets, /*scale=*/2, profile, margin,
+        olduvai::presentation::WidePeek{nullptr, -1, &right, 4, nullptr, nullptr, nullptr, nullptr, &bridge, /*peek_generation=*/1});
     const std::uint64_t h_with = fnv(with);
     const auto& without = olduvai::presentation::get_static_wide_bg_hd(
-        st, assets, 2, profile, margin, nullptr, -1, &right, 4,
-        nullptr, {}, {}, {}, {}, 1);
+        st, assets, 2, profile, margin,
+        olduvai::presentation::WidePeek{nullptr, -1, &right, 4, nullptr, nullptr, nullptr, nullptr, nullptr, 1});
     const std::uint64_t h_without = fnv(without);
     CHECK(h_with != h_without);   // cache collision = silent wrong frame
     // Same args again -> cache hit must reproduce the same pixels.
     const auto& again = olduvai::presentation::get_static_wide_bg_hd(
-        st, assets, 2, profile, margin, nullptr, -1, &right, 4,
-        nullptr, {}, {}, {}, bridge, 1);
+        st, assets, 2, profile, margin,
+        olduvai::presentation::WidePeek{nullptr, -1, &right, 4, nullptr, nullptr, nullptr, nullptr, &bridge, 1});
     CHECK(fnv(again) == h_with);
 }
 
@@ -177,17 +178,17 @@ TEST_CASE("HD wide cache: peek_generation invalidates baked margins") {
     const std::string profile = "retro";
     FrameBuffer right = solid_frame(50);
     const auto h1 = fnv(olduvai::presentation::get_static_wide_bg_hd(
-        st, assets, 2, profile, margin, nullptr, -1, &right, 4,
-        nullptr, {}, {}, {}, {}, /*peek_generation=*/7));
+        st, assets, 2, profile, margin,
+        olduvai::presentation::WidePeek{nullptr, -1, &right, 4, nullptr, nullptr, nullptr, nullptr, nullptr, /*peek_generation=*/7}));
     // Mutate the peek content (same screen index!) — a stale cache would
     // still serve h1 without the generation bump.
     right = solid_frame(99);
     const auto h_stale = fnv(olduvai::presentation::get_static_wide_bg_hd(
-        st, assets, 2, profile, margin, nullptr, -1, &right, 4,
-        nullptr, {}, {}, {}, {}, 7));
+        st, assets, 2, profile, margin,
+        olduvai::presentation::WidePeek{nullptr, -1, &right, 4, nullptr, nullptr, nullptr, nullptr, nullptr, 7}));
     const auto h_fresh = fnv(olduvai::presentation::get_static_wide_bg_hd(
-        st, assets, 2, profile, margin, nullptr, -1, &right, 4,
-        nullptr, {}, {}, {}, {}, 8));
+        st, assets, 2, profile, margin,
+        olduvai::presentation::WidePeek{nullptr, -1, &right, 4, nullptr, nullptr, nullptr, nullptr, nullptr, 8}));
     CHECK(h_stale == h1);    // documented limitation: same generation = cached
     CHECK(h_fresh != h1);    // the bump is the invalidation mechanism
 }

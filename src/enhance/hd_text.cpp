@@ -93,19 +93,22 @@ int HdText::measure(const std::string& text) const {
     for (std::size_t i = 0; i < text.size(); ++i) {
         int adv, lsb;
         stbtt_GetCodepointHMetrics(info, text[i], &adv, &lsb);
-        x += adv * px_scale_;
+        x += static_cast<float>(adv) * px_scale_;
         if (i + 1 < text.size()) {
-            x += px_scale_ * stbtt_GetCodepointKernAdvance(info, text[i],
-                                                           text[i + 1]);
+            x += px_scale_ * static_cast<float>(stbtt_GetCodepointKernAdvance(
+                                 info, text[i], text[i + 1]));
         }
     }
     return static_cast<int>(x + 0.5f);
 }
 
-void HdText::draw(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
-                  int x, int baseline_y, const std::string& text,
-                  std::uint8_t cr, std::uint8_t cg, std::uint8_t cb) const {
-    if (info_ == nullptr) return;
+// Rasterise `text` and blend it into `rgba`, asking `color(dx, dy, r, g, b)`
+// for the ink at each covered pixel.  See the declaration in hd_text.hpp for
+// why this is a template.
+template <typename ColorFn>
+void HdText::rasterise(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
+                       int x, int baseline_y, const std::string& text,
+                       ColorFn color) const {
     const auto* info = reinterpret_cast<const stbtt_fontinfo*>(info_);
     float pen = static_cast<float>(x);
     for (std::size_t i = 0; i < text.size(); ++i) {
@@ -124,6 +127,8 @@ void HdText::draw(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
                     if (dx < 0 || dx >= buf_w) continue;
                     const int a = bitmap[yy * w + xx];
                     if (a == 0) continue;
+                    std::uint8_t cr = 235, cg = 235, cb = 235;
+                    color(dx, dy, cr, cg, cb);
                     const std::size_t o =
                         (static_cast<std::size_t>(dy) * buf_w + dx) * 4;
                     rgba[o] = static_cast<std::uint8_t>(
@@ -139,69 +144,43 @@ void HdText::draw(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
         }
         int adv, lsb;
         stbtt_GetCodepointHMetrics(info, ch, &adv, &lsb);
-        pen += adv * px_scale_;
+        pen += static_cast<float>(adv) * px_scale_;
         if (i + 1 < text.size()) {
-            pen += px_scale_ * stbtt_GetCodepointKernAdvance(info, ch,
-                                                             text[i + 1]);
+            pen += px_scale_ * static_cast<float>(
+                                   stbtt_GetCodepointKernAdvance(info, ch,
+                                                                 text[i + 1]));
         }
     }
+}
+
+void HdText::draw(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
+                  int x, int baseline_y, const std::string& text,
+                  std::uint8_t cr, std::uint8_t cg, std::uint8_t cb) const {
+    if (info_ == nullptr) return;
+    rasterise(rgba, buf_w, buf_h, x, baseline_y, text,
+              [cr, cg, cb](int, int, std::uint8_t& r, std::uint8_t& g,
+                           std::uint8_t& b) { r = cr; g = cg; b = cb; });
 }
 
 void HdText::draw_styled(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
                          int x, int baseline_y, const std::string& text,
                          const ShadeFn& shade) const {
     if (info_ == nullptr || !shade) return;
-    const auto* info = reinterpret_cast<const stbtt_fontinfo*>(info_);
     // Text bbox for gradient normalisation: width = measure(); the glyph band
     // runs from the cap top (baseline - cap_px) down to the baseline.
     const float x0 = static_cast<float>(x);
     const float wspan = std::max(1.0f, static_cast<float>(measure(text)));
     const float ytop = static_cast<float>(baseline_y - cap_px_);
     const float hspan = std::max(1.0f, static_cast<float>(cap_px_));
-    float pen = x0;
-    for (std::size_t i = 0; i < text.size(); ++i) {
-        const int ch = text[i];
-        int w = 0, h = 0, xoff = 0, yoff = 0;
-        unsigned char* bitmap = stbtt_GetCodepointBitmap(
-            info, px_scale_, px_scale_, ch, &w, &h, &xoff, &yoff);
-        if (bitmap != nullptr) {
-            const int gx = static_cast<int>(pen + 0.5f) + xoff;
-            const int gy = baseline_y + yoff;
-            for (int yy = 0; yy < h; ++yy) {
-                const int dy = gy + yy;
-                if (dy < 0 || dy >= buf_h) continue;
-                float v = (static_cast<float>(dy) - ytop) / hspan;
-                v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
-                for (int xx = 0; xx < w; ++xx) {
-                    const int dx = gx + xx;
-                    if (dx < 0 || dx >= buf_w) continue;
-                    const int a = bitmap[yy * w + xx];
-                    if (a == 0) continue;
-                    float u = (static_cast<float>(dx) - x0) / wspan;
-                    u = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
-                    std::uint8_t cr = 235, cg = 235, cb = 235;
-                    shade(u, v, cr, cg, cb);
-                    const std::size_t o =
-                        (static_cast<std::size_t>(dy) * buf_w + dx) * 4;
-                    rgba[o] = static_cast<std::uint8_t>(
-                        (cr * a + rgba[o] * (255 - a)) / 255);
-                    rgba[o + 1] = static_cast<std::uint8_t>(
-                        (cg * a + rgba[o + 1] * (255 - a)) / 255);
-                    rgba[o + 2] = static_cast<std::uint8_t>(
-                        (cb * a + rgba[o + 2] * (255 - a)) / 255);
-                    rgba[o + 3] = 255;
-                }
-            }
-            stbtt_FreeBitmap(bitmap, nullptr);
-        }
-        int adv, lsb;
-        stbtt_GetCodepointHMetrics(info, ch, &adv, &lsb);
-        pen += adv * px_scale_;
-        if (i + 1 < text.size()) {
-            pen += px_scale_ * stbtt_GetCodepointKernAdvance(info, ch,
-                                                             text[i + 1]);
-        }
-    }
+    rasterise(rgba, buf_w, buf_h, x, baseline_y, text,
+              [&](int dx, int dy, std::uint8_t& r, std::uint8_t& g,
+                  std::uint8_t& b) {
+                  float u = (static_cast<float>(dx) - x0) / wspan;
+                  float v = (static_cast<float>(dy) - ytop) / hspan;
+                  u = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
+                  v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+                  shade(u, v, r, g, b);
+              });
 }
 
 }  // namespace olduvai::enhance

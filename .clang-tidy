@@ -24,6 +24,27 @@
 #     performance-enum-size  fires on ~12 enums; changing an enum's base type
 #                            on a trace-validated engine risks struct layout and
 #                            save/serialisation for no measurable gain
+#     bugprone-incorrect-roundings   all 24 hits are ONE idiom,
+#                            static_cast<int>(v * scale + 0.5) — the HD/widescreen
+#                            coordinate round.  The suggested std::lround is NOT
+#                            equivalent: it rounds half away from zero, while
+#                            +0.5-then-truncate rounds toward zero for negative
+#                            operands.  So "fixing" them is a BEHAVIOUR CHANGE on
+#                            a trace-validated engine, applied to 24 sites in
+#                            presentation code the oracle diff does not cover,
+#                            to fix zero known defects.  Measured 2026-07-30.
+#     bugprone-implicit-widening-of-multiplication-result
+#                            32 hits, all buffer-index math of the shape
+#                            static_cast<size_t>(y * k) * w + x * k.  Every
+#                            dimension is bounded by the 320x200 surface times a
+#                            small HD scale, so the widest index is ~9.2M — three
+#                            orders of magnitude below INT_MAX, and no input can
+#                            grow them (the surface size is the format's, not the
+#                            user's).  The check is right in general and wrong
+#                            here; moving the casts would be churn in exactly the
+#                            trace-sensitive render code this file avoids
+#                            churning.  Re-open if a scaler ever takes an
+#                            unbounded dimension.
 #
 # readability-function-size is used as a MEASUREMENT, not a hard rule: the
 # thresholds are set to flag genuine monsters (run_platform_level,
@@ -35,6 +56,8 @@ Checks: >
   bugprone-*,
   -bugprone-easily-swappable-parameters,
   -bugprone-narrowing-conversions,
+  -bugprone-incorrect-roundings,
+  -bugprone-implicit-widening-of-multiplication-result,
   performance-*,
   -performance-enum-size,
   clang-analyzer-*,

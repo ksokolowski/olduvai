@@ -33,6 +33,7 @@
 #include "formats/mat.hpp"
 #include "formats/pc1.hpp"
 #include "prepare/exe_tables.hpp"
+#include "presentation/render/level_surface.hpp"
 #include "systems/player.hpp"
 
 struct SDL_Renderer;
@@ -66,40 +67,41 @@ int descent_resolve_sprite_idx(int idx);
 // Indices: 0..27=ELEML3, 28..32=ELEML3B, 33=GROT3[0] body, 34=GROT3[1] cap.
 // (Matches bind_screen L3 surface path in game_app.cpp.)
 
-bool run_l3_screen17_descent(
-    systems::SystemsState& state,
-    const std::vector<formats::Sprite>& tile_sprites,   // L3 surface tiles + GROT3
-    const std::vector<formats::Sprite>& entity_sprites, // L3SPR.MAT
-    const std::vector<formats::Rgb>& palette,
-    const prepare::LevelTiles& tile_data,
-    const std::vector<formats::Sprite>& grot3,
-    FrameBuffer& fb,
-    bool enhanced,
-    // Enhanced widescreen HUD band: continue trunk columns into rows 0-8 of
-    // the descent frames (tile_patterns) so they match the steady view; false
-    // keeps the EXE black strip (classic / no vector HUD).
-    bool extend_band,
-    const std::function<bool(const FrameBuffer&)>& present);
+// The inputs all three descent phases take, which were the SAME ten parameters
+// written out six times — three declarations here and three definitions in the
+// .cpp — with the `extend_band` explanation copied alongside each.  Every phase
+// is a slice of one cinematic over one set of assets, so there was never a
+// second argument list to keep in step, only three more places to forget.
+//
+// clang-tidy was already saying so: all three tripped
+// readability-function-size at "10 parameters (threshold 8)".
+//
+// Holds references, like the call sites did.  Each phase is a blocking call
+// made from run_l3_trunk_descent_sequence, whose locals outlive it.
+struct L3DescentPhase {
+    systems::SystemsState& state;
+    const std::vector<formats::Sprite>& tile_sprites;   // L3 tiles + GROT3
+    const std::vector<formats::Sprite>& entity_sprites; // L3SPR.MAT
+    const std::vector<formats::Rgb>& palette;
+    const prepare::LevelTiles& tile_data;
+    const std::vector<formats::Sprite>& grot3;
+    FrameBuffer& fb;
+    bool enhanced;
+    // Enhanced widescreen HUD band: continue trunk columns into rows 0-8 of the
+    // descent frames (tile_patterns) so they match the steady view; false keeps
+    // the EXE black strip (classic / no vector HUD).
+    bool extend_band;
+    const std::function<bool(const FrameBuffer&)>& present;
+};
+
+bool run_l3_screen17_descent(const L3DescentPhase& p);
 
 // Phase 2 — FUN_2276_03d9: 21 iterations, y_offset -80→0.
 // Brings screen 17's first 16 tiles in from above into screen 18.
 // On return, fills state.l3_descent_smoke_jitter is consumed;
 // the caller stamps the overlay into state for subsequent frames.
 // Returns false if the user pressed ESC.
-bool run_l3_trunk_descent(
-    systems::SystemsState& state,
-    const std::vector<formats::Sprite>& tile_sprites,
-    const std::vector<formats::Sprite>& entity_sprites,
-    const std::vector<formats::Rgb>& palette,
-    const prepare::LevelTiles& tile_data,
-    const std::vector<formats::Sprite>& grot3,
-    FrameBuffer& fb,
-    bool enhanced,
-    // Enhanced widescreen HUD band: continue trunk columns into rows 0-8 of
-    // the descent frames (tile_patterns) so they match the steady view; false
-    // keeps the EXE black strip (classic / no vector HUD).
-    bool extend_band,
-    const std::function<bool(const FrameBuffer&)>& present);
+bool run_l3_trunk_descent(const L3DescentPhase& p);
 
 // Enhanced #11 — level-end descent camera-follow pan (opt-in, NOT EXE-faithful).
 //
@@ -121,20 +123,7 @@ bool run_l3_trunk_descent(
 //
 // Returns false if the user pressed ESC / closed the window (sets game_over);
 // Phase 2 then handles the abort.
-bool run_l3_descent_pan(
-    systems::SystemsState& state,
-    const std::vector<formats::Sprite>& tile_sprites,
-    const std::vector<formats::Sprite>& entity_sprites,
-    const std::vector<formats::Rgb>& palette,
-    const prepare::LevelTiles& tile_data,
-    const std::vector<formats::Sprite>& grot3,
-    FrameBuffer& fb,
-    bool enhanced,
-    // Enhanced widescreen HUD band: continue trunk columns into rows 0-8 of
-    // the descent frames (tile_patterns) so they match the steady view; false
-    // keeps the EXE black strip (classic / no vector HUD).
-    bool extend_band,
-    const std::function<bool(const FrameBuffer&)>& present);
+bool run_l3_descent_pan(const L3DescentPhase& p);
 
 // Descent-overlay tile records stamped on screen 18 after Phase 2 completes.
 // Returns the first 16 tile placements from screen 17 (the reference's
@@ -152,18 +141,19 @@ std::vector<prepare::TilePlacement> l3_descent_overlay_tiles(
 // `*l3_smoke_tail` (a cross-cutting counter the render path decrements), exactly
 // as the inline block did; the caller sets transition_kind = 0 afterwards.
 struct DescentCtx {
+    // The level's presentation surface: renderer, window, vector font, overlay
+    // and the HD settings — seven separate members here until §3.7 cluster 1,
+    // the same list FramePresenter and WidescreenShellCtx each carried.
+    //
+    // logical_w/logical_h below are NOT part of it, deliberately: they are
+    // SNAPSHOTS of the logical size at descent entry, and the descent is a
+    // blocking cinematic during which a resize could move the live value.
+    LevelSurface* surface = nullptr;
     WidescreenPresenter* wsp = nullptr;
-    SDL_Renderer* ren = nullptr;
-    SDL_Window* win = nullptr;
-    enhance::HdText* hd_text = nullptr;
-    TextOverlay* text_overlay = nullptr;
     Loaded* g = nullptr;              // the game bundle (state/render/tiles/dur)
     const GameOptions* opts = nullptr;
     bool* running = nullptr;          // set false on ESC / window-close mid-run
     int* l3_smoke_tail = nullptr;     // armed after Phase 2 (descent-pan gated)
-    bool hd = false;
-    int hd_scale = 1;
-    bool use_hd_text = false;
     std::uint32_t frame_ms = 0;
     int prev_screen = 0;              // screen 17 (transition already advanced to 18)
     int logical_w = 0;

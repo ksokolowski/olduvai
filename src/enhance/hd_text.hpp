@@ -64,6 +64,21 @@ public:
                      const ShadeFn& shade) const;
 
 private:
+    // The glyph walk both draw() and draw_styled() perform: for each character,
+    // rasterise, blend its coverage into `rgba` clipped to the buffer, then
+    // advance the pen by the advance width plus the kerning pair.  The two
+    // differed ONLY in where the ink colour came from — fixed for draw(), a
+    // shade callback over normalised (u, v) for draw_styled() — so `color`
+    // supplies it per pixel and everything else is written once.
+    //
+    // A template rather than a std::function so draw()'s constant colour costs
+    // nothing: this is the HUD text path, called per glyph pixel per frame.
+    // Defined in hd_text.cpp — both instantiations live in that TU.
+    template <typename ColorFn>
+    void rasterise(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h, int x,
+                   int baseline_y, const std::string& text,
+                   ColorFn color) const;
+
     std::vector<std::uint8_t> font_data_;
     int cap_px_ = 0;         // active cap height in px (last set_cap_px arg)
     float px_scale_ = 0;     // stb scale factor for the active cap height

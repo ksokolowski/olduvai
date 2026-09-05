@@ -14,6 +14,8 @@
 
 #pragma once
 
+#include "presentation/render/logical_size.hpp"
+
 #include <SDL.h>
 
 #include <cstdint>
@@ -48,8 +50,8 @@ public:
         std::optional<SaveState>* out_load;
         bool* want_reinit;
         PendingReinit* reinit_req;
-        int* logical_w;
-        int* logical_h;
+        // SDL's logical size + the overlay-restore mirror, as one (§3.13).
+        LogicalSize* lsz;
         int hd_scale;
         int display_level;
     };

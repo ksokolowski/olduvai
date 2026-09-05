@@ -25,9 +25,14 @@ public:
 
     // Pre-loop, on the post-reinit re-entry: if the frame-5 trigger fired on the
     // previous run_platform_level call, write the round-trip result file and
-    // clear `running` to end the level loop.
+    // clear `running` to end the level loop.  `opts` is the runtime session
+    // copy AFTER run_game adopted the reinit — its enhanced/smooth_motion are
+    // the live present-path derivation, which is exactly what §3.8 needs the
+    // gate to observe (the shipped smooth-motion-after-classic bug lived here
+    // and was invisible while only sizes and positions were reported).
     void maybe_write_result(const systems::SystemsState& state,
-                            SDL_Window* win, bool& running);
+                            SDL_Window* win, const GameOptions& opts,
+                            bool& running);
 
     // In-loop frame-5 trigger: snapshot the pre-reinit state, seed the reinit
     // request, and raise want_reinit + open pause so the loop returns

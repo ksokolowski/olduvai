@@ -31,7 +31,7 @@
 #include "presentation/render/tile_patterns.hpp"
 #include "presentation/render/text_overlay.hpp"      // TextOverlay
 #include "presentation/render/widescreen_presenter.hpp"  // WidescreenPresenter
-#include "presentation/window_util.hpp"       // handle_fullscreen_toggle
+#include "presentation/window_util.hpp"       // poll_screen_events
 #include "systems/transitions.hpp"            // roll_l3_descent_smoke_jitter, clear_per_screen_state
 
 namespace olduvai::presentation {
@@ -196,18 +196,19 @@ static void blit_descent_tile(FrameBuffer& fb,
 
 // ── Phase 1 ───────────────────────────────────────────────────────────────────
 
-bool run_l3_screen17_descent(
-    systems::SystemsState& state,
-    const std::vector<formats::Sprite>& tile_sprites,
-    const std::vector<formats::Sprite>& entity_sprites,
-    const std::vector<formats::Rgb>& palette,
-    const prepare::LevelTiles& tile_data,
-    const std::vector<formats::Sprite>& grot3,
-    FrameBuffer& fb,
-    bool enhanced,
-    bool extend_band,
-    const std::function<bool(const FrameBuffer&)>& present)
+bool run_l3_screen17_descent(const L3DescentPhase& p)
 {
+    systems::SystemsState& state = p.state;
+    const std::vector<formats::Sprite>& tile_sprites = p.tile_sprites;
+    const std::vector<formats::Sprite>& entity_sprites = p.entity_sprites;
+    const std::vector<formats::Rgb>& palette = p.palette;
+    const prepare::LevelTiles& tile_data = p.tile_data;
+    const std::vector<formats::Sprite>& grot3 = p.grot3;
+    FrameBuffer& fb = p.fb;
+    const bool enhanced = p.enhanced;
+    const bool extend_band = p.extend_band;
+    const std::function<bool(const FrameBuffer&)>& present = p.present;
+
     // Guard: need screen 17's tile records.
     if (static_cast<int>(tile_data.screens.size()) <= kScreen17) return true;
     const auto& s17tiles = tile_data.screens[static_cast<std::size_t>(kScreen17)].tiles;
@@ -319,18 +320,19 @@ bool run_l3_screen17_descent(
 
 // ── Phase 2 ───────────────────────────────────────────────────────────────────
 
-bool run_l3_trunk_descent(
-    systems::SystemsState& state,
-    const std::vector<formats::Sprite>& tile_sprites,
-    const std::vector<formats::Sprite>& entity_sprites,
-    const std::vector<formats::Rgb>& palette,
-    const prepare::LevelTiles& tile_data,
-    const std::vector<formats::Sprite>& grot3,
-    FrameBuffer& fb,
-    bool enhanced,
-    bool extend_band,
-    const std::function<bool(const FrameBuffer&)>& present)
+bool run_l3_trunk_descent(const L3DescentPhase& p)
 {
+    systems::SystemsState& state = p.state;
+    const std::vector<formats::Sprite>& tile_sprites = p.tile_sprites;
+    const std::vector<formats::Sprite>& entity_sprites = p.entity_sprites;
+    const std::vector<formats::Rgb>& palette = p.palette;
+    const prepare::LevelTiles& tile_data = p.tile_data;
+    const std::vector<formats::Sprite>& grot3 = p.grot3;
+    FrameBuffer& fb = p.fb;
+    const bool enhanced = p.enhanced;
+    const bool extend_band = p.extend_band;
+    const std::function<bool(const FrameBuffer&)>& present = p.present;
+
     // Guard: need both screen 17 and screen 18 tile data.
     if (static_cast<int>(tile_data.screens.size()) <= kScreen18) return true;
     const auto& s17tiles = tile_data.screens[static_cast<std::size_t>(kScreen17)].tiles;
@@ -511,18 +513,19 @@ bool run_l3_trunk_descent(
 // 'down' pan (same geometry as game_app.cpp kind-3 'D' slide), presenting each
 // frame via `present` (which the caller wires to draw the enhanced HUD so the
 // HUD stays visible across the pan).
-bool run_l3_descent_pan(
-    systems::SystemsState& state,
-    const std::vector<formats::Sprite>& tile_sprites,
-    const std::vector<formats::Sprite>& entity_sprites,
-    const std::vector<formats::Rgb>& palette,
-    const prepare::LevelTiles& tile_data,
-    const std::vector<formats::Sprite>& grot3,
-    FrameBuffer& fb,
-    bool enhanced,
-    bool extend_band,
-    const std::function<bool(const FrameBuffer&)>& present)
+bool run_l3_descent_pan(const L3DescentPhase& p)
 {
+    systems::SystemsState& state = p.state;
+    const std::vector<formats::Sprite>& tile_sprites = p.tile_sprites;
+    const std::vector<formats::Sprite>& entity_sprites = p.entity_sprites;
+    const std::vector<formats::Rgb>& palette = p.palette;
+    const prepare::LevelTiles& tile_data = p.tile_data;
+    const std::vector<formats::Sprite>& grot3 = p.grot3;
+    FrameBuffer& fb = p.fb;
+    const bool enhanced = p.enhanced;
+    const bool extend_band = p.extend_band;
+    const std::function<bool(const FrameBuffer&)>& present = p.present;
+
     if (!enhanced) return true;   // pan is descent-pan-only; hard swap stands
     // Guard: need both screen 17 and screen 18 tile data.
     if (static_cast<int>(tile_data.screens.size()) <= kScreen18) return true;
@@ -620,17 +623,17 @@ void run_l3_trunk_descent_sequence(const DescentCtx& c) {
     // logic-side), so the cross-engine trace is byte-identical to the classic
     // hard-swap when descent-pan is off.
     WidescreenPresenter& wsp = *c.wsp;
-    SDL_Renderer* const ren = c.ren;
-    SDL_Window* const win = c.win;
-    enhance::HdText& hd_text = *c.hd_text;
-    TextOverlay& text_overlay = *c.text_overlay;
+    SDL_Renderer* const ren = c.surface->ren();
+    SDL_Window* const win = c.surface->win();
+    enhance::HdText& hd_text = c.surface->hd_text();
+    TextOverlay& text_overlay = c.surface->overlay();
     Loaded& g = *c.g;
     const GameOptions& opts = *c.opts;
     bool& running = *c.running;
     int& l3_smoke_tail = *c.l3_smoke_tail;
-    const bool hd = c.hd;
-    const int hd_scale = c.hd_scale;
-    const bool use_hd_text = c.use_hd_text;
+    const bool hd = c.surface->hd();
+    const int hd_scale = c.surface->hd_scale();
+    const bool use_hd_text = c.surface->use_hd_text();
     const Uint32 frame_ms = c.frame_ms;
     const int prev_screen = c.prev_screen;
     const int logical_w = c.logical_w;
@@ -700,14 +703,10 @@ void run_l3_trunk_descent_sequence(const DescentCtx& c) {
     auto present_ws_descent = [&](const FrameBuffer& f,
                                   bool with_hud) -> bool {
         const Uint32 t0 = SDL_GetTicks();
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (handle_fullscreen_toggle(ev, win)) continue;
-            if (ev.type == SDL_QUIT) return false;
-            // ESC is inert during the L3 trunk-descent cinematic (no
-            // menu here) — it used to silently abort the whole run
-            // to title.  Only a real window-close stops it.
-        }
+        // ESC is inert during the L3 trunk-descent cinematic (no menu here) —
+        // it used to silently abort the whole run to title.  Only a real
+        // window-close stops it.
+        if (!poll_screen_events(win)) return false;
         // F5 is consumed by the descent function's OWN SDL_PollEvent
         // loop (it runs before this present callback), so the keydown
         // never reaches the drain above.  Read the key STATE directly
@@ -847,11 +846,11 @@ void run_l3_trunk_descent_sequence(const DescentCtx& c) {
         g.state.current_screen = saved_cs;       // back to 18
         FrameBuffer native_fb{};   // native 320x200 for descent
         if (!run_l3_screen17_descent(
-                g.state, g.render.tile_sprites,
-                g.render.entity_sprites, g.render.palette,
-                g.tiles, g.grot3, native_fb,
-                opts.enhanced,
-                g.render.extend_top_backdrop, descent_present)) {
+                L3DescentPhase{g.state, g.render.tile_sprites,
+                               g.render.entity_sprites, g.render.palette,
+                               g.tiles, g.grot3, native_fb, opts.enhanced,
+                               g.render.extend_top_backdrop,
+                               descent_present})) {
             running = false;
         }
     }
@@ -934,11 +933,10 @@ void run_l3_trunk_descent_sequence(const DescentCtx& c) {
         // budget back to Phase 2 below.
         descent_step_ms = frame_ms / descent_pan_substeps;
         const bool pan_ok = run_l3_descent_pan(
-            g.state, g.render.tile_sprites,
-            g.render.entity_sprites, g.render.palette,
-            g.tiles, g.grot3, native_pan,
-            opts.enhanced,
-            g.render.extend_top_backdrop, present_hud);
+            L3DescentPhase{g.state, g.render.tile_sprites,
+                           g.render.entity_sprites, g.render.palette,
+                           g.tiles, g.grot3, native_pan, opts.enhanced,
+                           g.render.extend_top_backdrop, present_hud});
         descent_step_ms = frame_ms;
         if (!pan_ok) {
             running = false;
@@ -951,11 +949,11 @@ void run_l3_trunk_descent_sequence(const DescentCtx& c) {
         const auto& td = g.tiles;
         FrameBuffer native_fb2{};   // native 320x200 for Phase 2
         if (!run_l3_trunk_descent(
-                g.state, g.render.tile_sprites,
-                g.render.entity_sprites, g.render.palette,
-                td, g.grot3, native_fb2,
-                opts.enhanced,
-                g.render.extend_top_backdrop, descent_present)) {
+                L3DescentPhase{g.state, g.render.tile_sprites,
+                               g.render.entity_sprites, g.render.palette,
+                               td, g.grot3, native_fb2, opts.enhanced,
+                               g.render.extend_top_backdrop,
+                               descent_present})) {
             running = false;
         } else {
             // Stamp the descent-overlay tiles onto screen 18's

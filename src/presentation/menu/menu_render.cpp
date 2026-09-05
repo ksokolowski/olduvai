@@ -153,19 +153,18 @@ void draw_menu(FrameBuffer& fb, const Menu& menu,
 
 void draw_menu_vector(std::vector<std::uint8_t>& buf, int ow, int oh,
                       enhance::HdText& font, const Menu& menu,
-                      float title_tsec, int fx, int fy, int fw, int fh) {
+                      float title_tsec, MenuFrame frame) {
     const MenuLayout L = compute_menu_layout(menu, 320, 200);
     const auto rows = menu.rows();
     // Frame rect: where the native 320x200 lives inside the overlay.  Full
     // buffer by default; in widescreen the caller passes the pillarboxed
     // centre so glyphs land ON the slab instead of stretching wide.
-    if (fw <= 0) { fx = 0; fw = ow; }
-    if (fh <= 0) { fy = 0; fh = oh; }
-    auto sx = [&](int nx) { return fx + nx * fw / 320; };
-    auto sy = [&](int ny) { return fy + ny * fh / 200; };
+    const MenuFrame f = frame.resolved(ow, oh);
+    auto sx = [&](int nx) { return f.sx(nx); };
+    auto sy = [&](int ny) { return f.sy(ny); };
     // Glyph size follows the FRAME, not the whole canvas.
     const int entry_cap = font.cap_px();
-    font.set_cap_px(std::max(1, entry_cap * fw / ow));
+    font.set_cap_px(std::max(1, entry_cap * f.w / ow));
     const std::string hdr = menu.header();
     if (hdr == "OLDUVAI") {
         // The title is the showpiece: bigger (1.7x the menu cap), with a dark
@@ -175,7 +174,7 @@ void draw_menu_vector(std::vector<std::uint8_t>& buf, int ow, int oh,
         // headers (OPTIONS / PAUSED / …) keep the flat accent blue below.
         const int menu_cap = font.cap_px();
         font.set_cap_px(std::max(1, menu_cap * 17 / 10));
-        const int tx = fx + (fw - font.measure(hdr)) / 2;
+        const int tx = f.x + (f.w - font.measure(hdr)) / 2;
         const int ty = sy(L.header_baseline);
         const int o = std::max(2, font.cap_px() / 9);   // outline thickness (px)
         for (int dy = -o; dy <= o; dy += o) {           // 8-way dark outline
@@ -189,7 +188,7 @@ void draw_menu_vector(std::vector<std::uint8_t>& buf, int ow, int oh,
         font.draw_styled(buf, ow, oh, tx + 1, ty, hdr, shade);   // faux-bold
         font.set_cap_px(menu_cap);                       // restore for the rows
     } else {
-        const int hdr_x = fx + (fw - font.measure(hdr)) / 2;
+        const int hdr_x = f.x + (f.w - font.measure(hdr)) / 2;
         font.draw(buf, ow, oh, hdr_x, sy(L.header_baseline), hdr, 127, 209, 255);
     }
     // Anti-aliased VECTOR bone pointer at glyph resolution — the game's
@@ -360,7 +359,7 @@ void draw_confirm(FrameBuffer& fb, const ConfirmDialog& dlg,
 
 void draw_confirm_vector(std::vector<std::uint8_t>& buf, int ow, int oh,
                          enhance::HdText& font, const ConfirmDialog& dlg,
-                         int fx, int fy, int fw, int fh) {
+                         MenuFrame frame) {
     const int n_changes = static_cast<int>(dlg.changes().size());
     const bool has_note = !dlg.note().empty();
 
@@ -372,17 +371,16 @@ void draw_confirm_vector(std::vector<std::uint8_t>& buf, int ow, int oh,
     const int slab_x = (320 - kDlgSlabW) / 2;
     const int slab_y = (200 - slab_h) / 2;
 
-    if (fw <= 0) { fx = 0; fw = ow; }
-    if (fh <= 0) { fy = 0; fh = oh; }
-    auto sx = [&](int nx) { return fx + nx * fw / 320; };
-    auto sy = [&](int ny) { return fy + ny * fh / 200; };
+    const MenuFrame f = frame.resolved(ow, oh);
+    auto sx = [&](int nx) { return f.sx(nx); };
+    auto sy = [&](int ny) { return f.sy(ny); };
     const int entry_cap = font.cap_px();
-    font.set_cap_px(std::max(1, entry_cap * fw / ow));
+    font.set_cap_px(std::max(1, entry_cap * f.w / ow));
 
     // Title.
     const std::string& hdr = dlg.title();
     font.draw(buf, ow, oh,
-              sx(slab_x) + (kDlgSlabW * fw / 320 - font.measure(hdr)) / 2,
+              sx(slab_x) + (kDlgSlabW * f.w / 320 - font.measure(hdr)) / 2,
               sy(slab_y + kDlgPad + 8),
               hdr, 127, 209, 255);
 
@@ -400,7 +398,7 @@ void draw_confirm_vector(std::vector<std::uint8_t>& buf, int ow, int oh,
         const std::string& note = dlg.note();
         const int note_y = row0_y + n_changes * kDlgLineH + 4;
         font.draw(buf, ow, oh,
-                  sx(slab_x) + (kDlgSlabW * fw / 320 - font.measure(note)) / 2,
+                  sx(slab_x) + (kDlgSlabW * f.w / 320 - font.measure(note)) / 2,
                   sy(note_y), note, 125, 135, 148);
     }
 
@@ -414,11 +412,11 @@ void draw_confirm_vector(std::vector<std::uint8_t>& buf, int ow, int oh,
     const std::string discard_label = "[ Discard ]";
     const bool as = dlg.apply_selected();
     font.draw(buf, ow, oh,
-              sx(btn0_x) + (btn_w * fw / 320 - font.measure(apply_label)) / 2,
+              sx(btn0_x) + (btn_w * f.w / 320 - font.measure(apply_label)) / 2,
               sy(btn_y + 8),
               apply_label, as ? 255 : 205, as ? 255 : 214, as ? 255 : 224);
     font.draw(buf, ow, oh,
-              sx(btn1_x) + (btn_w * fw / 320 - font.measure(discard_label)) / 2,
+              sx(btn1_x) + (btn_w * f.w / 320 - font.measure(discard_label)) / 2,
               sy(btn_y + 8),
               discard_label, as ? 205 : 255, as ? 214 : 255, as ? 224 : 255);
     font.set_cap_px(entry_cap);

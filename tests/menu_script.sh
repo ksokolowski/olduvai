@@ -64,16 +64,17 @@ export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}"
 export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}"   # mute test runs
 FAIL=0
 
-# run_scenario <golden-name> <script>
+# run_scenario <golden-name> <script> [extra-flags]
 run_scenario() {
     GOLDEN="${FIX}/$1.sha256"
     SCRIPT="$2"
+    EXTRA="$3"
     OUT_DIR="$(mktemp -d /tmp/menu_script.XXXXXX)"
     CFG_DIR="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
     XDG_CONFIG_HOME="${CFG_DIR}" OLDUVAI_MENU_SCRIPT="${SCRIPT}" \
         OLDUVAI_MENU_SCRIPT_DIR="${OUT_DIR}" timeout 60 \
         "${BINARY}" --play --level 1 --render-scale 1 --window 640x400 \
-        --game-dir "${GAME_DIR}" >/dev/null 2>&1
+        --game-dir "${GAME_DIR}" ${EXTRA} >/dev/null 2>&1
     rm -rf "${CFG_DIR}"
     SCEN_FAIL=0
     while read -r WANT NAME; do
@@ -100,6 +101,44 @@ run_scenario menu_baseline \
 #  `down` keeps this walk's intent: Audio → Music volume 100→95)
 run_scenario menu_settings \
     "esc down down down enter down enter down down left shot esc esc shot enter shot quit"
+
+# The F7 power-up picker: its own overlay, its own key handling, and until this
+# scenario NOTHING exercised either — the pause shots never open it.  Added
+# alongside §3.7 cluster 2, which extracts that state into a CheatPicker: an
+# ungated refactor is the one thing this session has consistently refused.
+# --cheats only here, so the existing goldens keep their menu model.
+run_scenario cheat_picker \
+    "f7 shot down shot down shot up shot quit" "--cheats"
+
+# ── Pause state-machine scenarios (§3.7 D groundwork) ───────────────────────
+# A branch-token histogram of run_platform_level put its densest region at the
+# pause/settings/reinit block — and that is exactly where the trace corpus
+# cannot reach, because those are presentation-path decisions, not sim state.
+# Extracting there without gates first would be the ungated refactor this
+# campaign keeps refusing.  These three cover the state machine's transitions.
+#
+# EACH ONE WAS CHOSEN BY MEASURING WHAT IT EXECUTES, not by reading the code
+# and assuming.  The first attempt at a "dirty session" scenario left
+# SettingsFlow::discard at 0.00% — the L5/L7 lesson repeating — and region-level
+# coverage (not line-level, which a one-line `if` always satisfies) is what
+# separated the two routes below.
+
+# Clean cycle: open, resume, reopen.  Drives PauseService::begin_frame's
+# was_open_/open_ edges with an EMPTY session, the common path.
+run_scenario pause_cycle \
+    "esc shot esc wait wait esc shot quit"
+
+# Dirty session, dialog answered DISCARD: reaches SettingsFlow::discard through
+# the dialog's own kAccept arm.  Region check: begin_frame's flow_.discard()
+# executes 0 times here — this route does NOT exercise the safety net.
+run_scenario pause_dialog_discard \
+    "esc down down down enter down enter down down left esc esc down enter shot quit"
+
+# Dirty session, dialog CANCELLED, then pause closed anyway: the only route
+# found that fires PauseService::begin_frame's discard net (region count 1 vs
+# 0 above).  That branch was previously executed by nothing in the suite.
+run_scenario pause_close_dirty \
+    "esc down down down enter down enter down down left esc esc esc wait esc wait esc shot quit"
 
 [ ${FAIL} -eq 0 ] && echo "menu_script: PASS"
 exit ${FAIL}

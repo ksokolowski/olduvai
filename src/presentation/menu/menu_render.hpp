@@ -61,10 +61,36 @@ void draw_menu(FrameBuffer& fb, const Menu& menu,
 // full wide canvas while the slab stayed centred (the misaligned menus).
 // Defaults (-1) mean "the frame fills the buffer" — the classic mapping.
 // The font cap is scaled by fw/ow internally so glyph size follows the frame.
+// The output sub-rect a menu lays itself out in — under widescreen the
+// pillarboxed centre slab, otherwise the whole buffer.  §3.9: this was four
+// trailing `int fx = -1, fy = -1, fw = -1, fh = -1` parameters on both
+// draw_menu_vector and draw_confirm_vector, which put each over the
+// parameter threshold, and the four lines that RESOLVED the -1 sentinels were
+// written out identically in both bodies.
+//
+// A default-constructed MenuFrame still means "the whole buffer", so the call
+// sites that passed nothing are unchanged.
+struct MenuFrame {
+    int x = -1;
+    int y = -1;
+    int w = -1;
+    int h = -1;
+
+    // Resolve the sentinels against the output size.  Call once, at the top.
+    MenuFrame resolved(int ow, int oh) const {
+        MenuFrame r = *this;
+        if (r.w <= 0) { r.x = 0; r.w = ow; }
+        if (r.h <= 0) { r.y = 0; r.h = oh; }
+        return r;
+    }
+    // Map a native 320x200 coordinate into the frame.
+    int sx(int nx) const { return x + nx * w / 320; }
+    int sy(int ny) const { return y + ny * h / 200; }
+};
+
 void draw_menu_vector(std::vector<std::uint8_t>& buf, int ow, int oh,
                       enhance::HdText& font, const Menu& menu,
-                      float title_tsec = 0.0f, int fx = -1, int fy = -1,
-                      int fw = -1, int fh = -1);
+                      float title_tsec = 0.0f, MenuFrame frame = {});
 
 // Draw the confirm/discard dialog slab over `fb`.  `dim` darkens the existing
 // frame (same Pause-overlay idiom as draw_menu).  When `draw_text` is false
@@ -79,7 +105,6 @@ void draw_confirm(FrameBuffer& fb, const ConfirmDialog& dlg,
 // shared slab geometry so it lines up with draw_confirm(..., draw_text=false).
 void draw_confirm_vector(std::vector<std::uint8_t>& buf, int ow, int oh,
                          enhance::HdText& font, const ConfirmDialog& dlg,
-                         int fx = -1, int fy = -1, int fw = -1,
-                         int fh = -1);
+                         MenuFrame frame = {});
 
 }  // namespace olduvai::presentation

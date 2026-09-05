@@ -18,6 +18,31 @@ sdl2-compat's `Event2to3` returns NULL for app-pushed `SDL_TEXTINPUT` and
 crashes; 2026-07-17 `report_form` segfault).  Deliver synthetic input by
 calling the consuming handler directly instead.
 
+### On macOS, a dev build and the shipped app use DIFFERENT SDLs
+
+Worth knowing before trusting a local macOS result as evidence about the
+release:
+
+| | SDL underneath |
+|---|---|
+| `brew install sdl2` + `cmake --preset release` | **sdl2-compat** — SDL2 ABI over **SDL3** (`otool -L` shows `sdl2-compat/lib/libSDL2-2.0.0.dylib`) |
+| the shipped `.dmg` | **real SDL2**, built from pinned source and linked **statically** (`OLDUVAI_STATIC_SDL`) |
+
+Linux and Windows builds use real SDL2 in both places, so macOS is the one
+platform where "it passed locally" and "it works in the release" rest on
+different libraries. The test suite passing under the shim is genuine
+information — it just is not information about the artifact.
+
+Treat anything **input- or audio-timing sensitive** as unverified on macOS
+until it has run against the packaged app. The two defects that have actually
+come from this gap were both in that class: the `report_form` segfault above,
+and a macOS-only `IMKCFRunLoopWakeUpReliable` line on stderr — text input is
+precisely where SDL3 changed its defaults (on-by-default became
+off-by-default), so it is where the shim does the most emulating.
+
+To build against real SDL2 locally, point `SDL2_DIR` at your own pinned build
+the way `packaging/make_dmg_macos.sh` does, rather than at the Homebrew prefix.
+
 ## Quick build (the game only)
 
 ```sh

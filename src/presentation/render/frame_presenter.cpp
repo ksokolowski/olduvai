@@ -10,6 +10,7 @@
 #include "enhance/upscale.hpp"               // upscale_rgba
 #include "presentation/render/game_render.hpp"      // FrameBuffer
 #include "presentation/image_out.hpp"        // capture_renderer_output
+#include "presentation/render/hud_render.hpp"  // draw_hud        // capture_renderer_output
 #include "presentation/menu/menu_render.hpp"      // draw_menu_vector/confirm_vector
 #include "presentation/menu/pause_service.hpp"    // PauseService
 #include "presentation/sequence/screens.hpp"          // enhance::HdText
@@ -19,29 +20,74 @@
 
 namespace olduvai::presentation {
 
+// The HD-aware HUD compose — moved verbatim from run_platform_level's
+// draw_hud_for_fb lambda (§3.7 cluster 3 slice 2); see the header note.
+void FramePresenter::draw_hud_for(FrameBuffer& target) {
+    systems::SystemsState& state = *this->state;
+    const bool hd = surface->hd();
+    const bool with_hd_text = surface->use_hd_text();
+    if (!hd) {
+        // Classic: bitmap HUD directly onto the 320x200 buffer.
+        draw_hud(target, state, *charset, render->entity_sprites,
+                 render->palette, false);
+        return;
+    }
+
+    // HD: run draw_hud on the native scratch for state mutations only.
+    // The scratch pixels are discarded; we only care about side effects
+    // (food_count cap, get_ready_counter decrement; GET READY sprites are
+    // re-drawn at HD below).
+    // Capture GET READY visibility BEFORE draw_hud mutates the counter —
+    // draw_hud draws the banner then decrements; we must draw at HD if the
+    // banner was visible at entry (even on the tick the counter reaches 1).
+    const bool get_ready_visible =
+        (state.get_ready_counter >= 2 && state.get_ready_counter <= 17);
+    // Reset scratch alpha so blit_sprite writes are visible (just in case).
+    for (std::size_t i = 3; i < hud_scratch_.px.size(); i += 4)
+        hud_scratch_.px[i] = 255;
+    draw_hud(hud_scratch_, state, *charset, render->entity_sprites,
+             render->palette, with_hd_text);
+    // Re-draw the GET READY banner at HD via the scale-aware RenderTarget
+    // so it appears crisp at the target resolution.  In enhanced vector
+    // mode (with_hd_text) the pre-baked sprites are SUPPRESSED here and the
+    // cartoony vector "GET READY!" is drawn in the output overlay instead
+    // (draw_enhanced_banners) — that path also shows in widescreen, where
+    // this center re-draw is recomposed away.
+    if (get_ready_visible && !with_hd_text) {
+        auto rt = make_render_target(target, *surface, *hd_cache);
+        if (132 < static_cast<int>(render->entity_sprites.size()))
+            blit_sprite(rt, render->entity_sprites[132], render->palette,
+                        0x80, 0x64);
+        if (133 < static_cast<int>(render->entity_sprites.size()))
+            blit_sprite(rt, render->entity_sprites[133], render->palette,
+                        0xA2, 0x61);
+    }
+}
+
 void FramePresenter::present(FrameBuffer& f, bool with_hud, bool do_present) {
     // Bind the live context (pointers → the run-loop locals) to the names the
     // pipeline body uses, so the body below is a verbatim move.
+    LevelSurface* const surface = this->surface;
     WidescreenPresenter& wsp = *this->wsp;
-    SDL_Renderer* const ren = this->ren;
-    SDL_Texture* const tex = this->tex;
-    enhance::HdText& hd_text = *this->hd_text;
-    TextOverlay& text_overlay = *this->text_overlay;
+    SDL_Renderer* const ren = surface->ren();
+    SDL_Texture* const tex = surface->tex();
+    enhance::HdText& hd_text = surface->hd_text();
+    TextOverlay& text_overlay = surface->overlay();
     PauseService& pause = *this->pause;
     systems::SystemsState& state = *this->state;
-    const int logical_w = *this->logical_w;
-    const int logical_h = *this->logical_h;
-    const bool cheat_open = *this->cheat_open;
+    const int logical_w = surface->lsz().w();
+    const int logical_h = surface->lsz().h();
+    const bool cheat_open = this->cheats->open();
     std::string& menu_shot_path = *this->menu_shot_path;
-    const bool hd = this->hd;
-    const bool use_hd_text = this->use_hd_text;
-    const int hd_scale = this->hd_scale;
+    const bool hd = surface->hd();
+    const bool use_hd_text = surface->use_hd_text();
+    const int hd_scale = surface->hd_scale();
     // Deref the live pointer once per present (a null profile would mean the
     // caller forgot to wire it; fall back to the empty string, which
     // upscale_rgba treats as the native/no-op profile).
     static const std::string kNoProfile;
     const std::string& hd_profile =
-        this->hd_profile != nullptr ? *this->hd_profile : kNoProfile;
+        surface->hd_profile() != nullptr ? *surface->hd_profile() : kNoProfile;
 
     wsp.rebuild_if_resized();   // Alt+Enter / resize: recompute wide state
     // Only the NON-text HUD (gauge boxes, food fill, energy pips) goes in the
@@ -157,11 +203,11 @@ void FramePresenter::present(FrameBuffer& f, bool with_hud, bool do_present) {
                 mfh = oh;
             }
             if (show_menu)
-                draw_menu_vector(b, ow, oh, hd_text, pause.menu(), 0.0f, mfx,
-                                 mfy, mfw, mfh);
+                draw_menu_vector(b, ow, oh, hd_text, pause.menu(), 0.0f,
+                                 MenuFrame{mfx, mfy, mfw, mfh});
             if (show_confirm)
-                draw_confirm_vector(b, ow, oh, hd_text, pause.confirm(), mfx,
-                                    mfy, mfw, mfh);
+                draw_confirm_vector(b, ow, oh, hd_text, pause.confirm(),
+                                    MenuFrame{mfx, mfy, mfw, mfh});
             text_overlay.flush(ren, logical_w, logical_h);
         }
     }

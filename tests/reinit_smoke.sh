@@ -71,13 +71,14 @@ STATUS=$?
 # reports the DISPLAY size, which legitimately differs).
 #
 # WHAT THIS DOES NOT COVER, MEASURED.  It asserts the fullscreen path does not
-# corrupt STATE.  It does NOT assert the renderer was reconfigured correctly:
-# deleting the SDL_RenderSetLogicalSize call entirely still passes this test,
-# because a wrong logical size changes what is DRAWN, not what is stored.
-# Catching that needs a pixel check after an in-flight mode switch, and no
-# hook composes "switch mode, then screenshot" today — tracked in
-# docs/internal/BACKLOG.md.  Do not read a green reinit_smoke as proof the
-# fullscreen rendering is right.
+# corrupt STATE, and — since 2026-08-24 (§3.8) — that the post-reinit present
+# path IS the requested one (enhanced/smooth stay live on a same-mode reinit;
+# a classic switch really leaves both).  What is still not asserted is the
+# RENDERED pixels after an in-flight mode switch: the flags are the engine's
+# derivation, not SDL's logical size state.  Catching that needs a pixel check
+# after an in-flight mode switch, and no hook composes "switch mode, then
+# screenshot" today — tracked in docs/internal/BACKLOG.md.  Do not read a
+# green reinit_smoke as proof the fullscreen rendering is right.
 FS_RESULT_FILE="${RESULT_FILE}.fs"
 OLDUVAI_REINIT_TEST="${FS_RESULT_FILE}" \
     "${BINARY}" \
@@ -103,13 +104,27 @@ if [ ! -f "${RESULT_FILE}" ] || [ ! -s "${RESULT_FILE}" ]; then
     exit 1
 fi
 
-# Parse: "out_w out_h pre_x pre_y post_x post_y pre_entcount post_entcount"
-read -r OUT_W OUT_H PRE_X PRE_Y POST_X POST_Y PRE_ENT POST_ENT PRE_SUM POST_SUM < "${RESULT_FILE}"
+# Parse: "out_w out_h pre_x pre_y post_x post_y pre_entcount post_entcount
+#          pre_sum post_sum post_enhanced post_smooth post_hd_profile"
+# Fields 11+ are §3.8: the live present-path derivation after run_game adopted
+# the reinit.  cut (not bare `read`) so appended fields can never spill into
+# POST_SUM via the shell's last-variable-takes-the-rest rule.
+read -r OUT_W OUT_H PRE_X PRE_Y POST_X POST_Y PRE_ENT POST_ENT PRE_SUM POST_SUM \
+    <<< "$(cut -d' ' -f1-10 "${RESULT_FILE}")"
+POST_ENH="$(cut -d' ' -f11 "${RESULT_FILE}")"
+POST_SMOOTH="$(cut -d' ' -f12 "${RESULT_FILE}")"
 rm -f "${RESULT_FILE}"
 
-echo "reinit_smoke: result = ${OUT_W} ${OUT_H} pre=(${PRE_X},${PRE_Y}) post=(${POST_X},${POST_Y}) ent pre=${PRE_ENT} post=${POST_ENT}"
+echo "reinit_smoke: result = ${OUT_W} ${OUT_H} pre=(${PRE_X},${PRE_Y}) post=(${POST_X},${POST_Y}) ent pre=${PRE_ENT} post=${POST_ENT} enh=${POST_ENH} smooth=${POST_SMOOTH}"
 
 FAIL=0
+
+# §3.8: the same-mode reinit must still be on the ENHANCED present path with
+# smooth motion live — the derivation the shipped bug left stale.
+if [ "${POST_ENH}" != "1" ] || [ "${POST_SMOOTH}" != "1" ]; then
+    echo "reinit_smoke: FAIL — post-reinit present path wrong: enhanced=${POST_ENH} smooth=${POST_SMOOTH} (expected 1/1)"
+    FAIL=1
+fi
 
 if [ "${OUT_W}" != "1280" ]; then
     echo "reinit_smoke: FAIL — expected width 1280, got ${OUT_W}"
@@ -152,12 +167,10 @@ if [ "${PRE_SUM}" != "${POST_SUM}" ]; then
 fi
 
 # The fullscreen run must preserve state exactly as the windowed one does.
-# Fields: w h pre_x pre_y post_x post_y pre_ent post_ent pre_sum post_sum —
-# compare everything EXCEPT the window dimensions, which legitimately differ
-# (fullscreen reports the display size; windowed reports 320*scale x 200*scale).
-# Build the windowed side from the already-parsed fields: RESULT_FILE is
-# deleted right after it is read, above.
-FS_STATE="$(cut -d' ' -f3- "${FS_RESULT_FILE}" 2>/dev/null)"
+# Fields 3-10: positions/entities/checksums only — window dimensions
+# legitimately differ (fullscreen reports the display size; windowed reports
+# 320*scale x 200*scale), and the §3.8 present-path flags are asserted per run.
+FS_STATE="$(cut -d' ' -f3-10 "${FS_RESULT_FILE}" 2>/dev/null)"
 WIN_STATE="${PRE_X} ${PRE_Y} ${POST_X} ${POST_Y} ${PRE_ENT} ${POST_ENT} ${PRE_SUM} ${POST_SUM}"
 if [ -z "${FS_STATE}" ]; then
     echo "reinit_smoke: FAIL — fullscreen run produced no result line"
@@ -168,10 +181,95 @@ elif [ "${FS_STATE}" != "${WIN_STATE}" ]; then
     echo "  fullscreen: ${FS_STATE}"
     FAIL=1
 fi
+FS_ENH="$(cut -d' ' -f11 "${FS_RESULT_FILE}" 2>/dev/null)"
+FS_SMOOTH="$(cut -d' ' -f12 "${FS_RESULT_FILE}" 2>/dev/null)"
+if [ "${FS_ENH}" != "1" ] || [ "${FS_SMOOTH}" != "1" ]; then
+    echo "reinit_smoke: FAIL — fullscreen post-reinit present path wrong: enhanced=${FS_ENH} smooth=${FS_SMOOTH}"
+    FAIL=1
+fi
 rm -f "${FS_RESULT_FILE}"
 
+# ── Third path (§3.8): the ENHANCED -> CLASSIC switch. ──────────────────
+# The shipped regression ran in exactly this direction: a session started
+# --profile hd kept smooth motion after switching to Classic, because the
+# derived field was never re-adopted.  State-only assertions passed straight
+# through it; the present-path flags are what catch it now.  The stale
+# hd_profile STRING in the report is expected residue (enhanced=0 gates every
+# consumer); the flags are the contract.
+CLS_RESULT_FILE="$(mktemp /tmp/reinit_cls.XXXXXX)"
+OLDUVAI_REINIT_TEST="${CLS_RESULT_FILE}" OLDUVAI_REINIT_CLASSIC=1 \
+    "${BINARY}" \
+    --play --enhanced --hd-profile smooth --render-scale 2 \
+    --game-dir "${GAME_DIR}" \
+    --play-frames 240
+CLS_STATUS=$?
+CLS_LINE="$(cut -d' ' -f1-12 "${CLS_RESULT_FILE}" 2>/dev/null)"
+rm -f "${CLS_RESULT_FILE}"
+if [ ${CLS_STATUS} -ne 0 ] || [ -z "${CLS_LINE}" ]; then
+    echo "reinit_smoke: FAIL — classic-switch run exited ${CLS_STATUS} or wrote no result"
+    FAIL=1
+else
+    CLS_STATE="$(printf '%s\n' "${CLS_LINE}" | cut -d' ' -f3-10)"
+    if [ "${CLS_STATE}" != "${WIN_STATE}" ]; then
+        echo "reinit_smoke: FAIL — classic switch did not preserve state like the enhanced runs"
+        echo "  enhanced: ${WIN_STATE}"
+        echo "  classic:  ${CLS_STATE}"
+        FAIL=1
+    fi
+    CLS_ENH="$(printf '%s\n' "${CLS_LINE}" | cut -d' ' -f11)"
+    CLS_SMOOTH="$(printf '%s\n' "${CLS_LINE}" | cut -d' ' -f12)"
+    if [ "${CLS_ENH}" != "0" ] || [ "${CLS_SMOOTH}" != "0" ]; then
+        echo "reinit_smoke: FAIL — classic switch left the present path enhanced: enhanced=${CLS_ENH} smooth=${CLS_SMOOTH}"
+        FAIL=1
+    else
+        echo "reinit_smoke: classic switch — present path is classic, state preserved"
+    fi
+fi
+
+# ── Fourth path (2026-08-24): CLASSIC/DOS -> ENHANCED adoption. ─────────
+# The reverse of the shipped bug's direction, raised by playtest: does a
+# dos-started session gain WORKING smooth motion when the menu switches to
+# enhanced?  Flags must land at 1/1 with state preserved.  (hd_profile rides
+# along as the dos value here — the hook copies opts; the menu's Style
+# presets set their own.)
+ENH_RESULT_FILE="$(mktemp /tmp/reinit_enh.XXXXXX)"
+OLDUVAI_REINIT_TEST="${ENH_RESULT_FILE}" OLDUVAI_REINIT_ENHANCED=1 \
+    "${BINARY}" \
+    --play --profile dos \
+    --game-dir "${GAME_DIR}" \
+    --play-frames 240
+ENH_STATUS=$?
+ENH_LINE="$(cut -d' ' -f1-12 "${ENH_RESULT_FILE}" 2>/dev/null)"
+rm -f "${ENH_RESULT_FILE}"
+if [ ${ENH_STATUS} -ne 0 ] || [ -z "${ENH_LINE}" ]; then
+    echo "reinit_smoke: FAIL — to-enhanced run exited ${ENH_STATUS} or wrote no result"
+    FAIL=1
+else
+    # Within-run round trip only: this scenario STARTS under a different
+    # config than the enhanced runs above, and the intro overlay's wall-clock
+    # dwell shifts which logic tick 'frame 5' lands on (BACKLOG §6's known
+    # --play-shot-frame nondeterminism).  Cross-RUN equality would compare
+    # different spawn phases; the reinit contract is that PRE==POST inside
+    # one run, which fields 3-6 encode.
+    ENH_PRE="$(printf '%s\n' "${ENH_LINE}" | cut -d' ' -f3-4)"
+    ENH_POST="$(printf '%s\n' "${ENH_LINE}" | cut -d' ' -f5-6)"
+    ENH_ENT="$(printf '%s\n' "${ENH_LINE}" | cut -d' ' -f7-10)"
+    if [ "${ENH_PRE}" != "${ENH_POST}" ] || [ -z "${ENH_ENT}" ]; then
+        echo "reinit_smoke: FAIL — classic->enhanced switch did not preserve state"
+        echo "  pre=(${ENH_PRE}) post=(${ENH_POST}) ent=${ENH_ENT}"
+        FAIL=1
+    fi
+    ENH_FLAG="$(printf '%s\n' "${ENH_LINE}" | cut -d' ' -f11)-$(printf '%s\n' "${ENH_LINE}" | cut -d' ' -f12)"
+    if [ "${ENH_FLAG}" != "1-1" ]; then
+        echo "reinit_smoke: FAIL — classic->enhanced left present path wrong: ${ENH_FLAG} (expected 1-1)"
+        FAIL=1
+    else
+        echo "reinit_smoke: classic->enhanced — smooth live, state preserved"
+    fi
+fi
+
 if [ ${FAIL} -eq 0 ]; then
-    echo "reinit_smoke: PASS (windowed + fullscreen)"
+    echo "reinit_smoke: PASS (windowed + fullscreen + classic switch + enhanced adoption)"
 fi
 
 exit ${FAIL}

@@ -57,7 +57,7 @@ std::vector<std::uint8_t> omniscale(const std::vector<std::uint8_t>& rgba,
         return hq[static_cast<std::size_t>(y) * w + x];
     };
 
-    const float pixel_size = std::sqrt(2.0f) / s;
+    const float pixel_size = std::sqrt(2.0f) / static_cast<float>(s);
     const float pixel_size5 = pixel_size * std::sqrt(5.0f);
 
     std::vector<std::uint8_t> out(static_cast<std::size_t>(w) * h * s * s *
@@ -68,8 +68,10 @@ std::vector<std::uint8_t> omniscale(const std::vector<std::uint8_t>& rgba,
         for (int x = 0; x < w; ++x) {
             for (int sy = 0; sy < s; ++sy) {
                 for (int sx = 0; sx < s; ++sx) {
-                    const float px0 = (sx + 0.5f) / s;
-                    const float py0 = (sy + 0.5f) / s;
+                    const float px0 =
+                        (static_cast<float>(sx) + 0.5f) / static_cast<float>(s);
+                    const float py0 =
+                        (static_cast<float>(sy) + 0.5f) / static_cast<float>(s);
                     // Mirror fold.
                     const int ox = px0 > 0.5f ? -1 : 1;
                     const int oy = py0 > 0.5f ? -1 : 1;

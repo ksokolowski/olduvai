@@ -5,6 +5,7 @@
 #include <fstream>
 
 #include "systems/boss.hpp"
+#include "presentation/env_num.hpp"
 
 namespace olduvai::presentation {
 
@@ -36,7 +37,12 @@ bool InputReplay::load(const std::string& path) {
         const std::string action = json_str(line, "action");
         const std::string tms = json_str(line, "time_ms");
         if (key.empty() || action.empty() || tms.empty()) continue;
-        const int frame = std::atoi(tms.c_str()) / 55;   // 18 Hz ticks
+        // Skip a malformed time_ms the same way an absent one is skipped:
+        // atoi parsed it as 0, which silently piled every bad line onto frame
+        // 0 instead of dropping it — a truncated replay then "replayed".
+        int ms = 0;
+        if (!parse_int(tms, ms)) continue;
+        const int frame = ms / 55;   // 18 Hz ticks
         frames_[frame].emplace_back(key, action == "press");
         last_frame_ = std::max(last_frame_, frame);
     }

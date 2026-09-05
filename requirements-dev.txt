@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Krzysztof Sokołowski
+#
+# OPTIONAL developer tooling. Nothing here is needed to build, test or ship
+# olduvai — the engine has no Python dependency, and the two tracked Python
+# helpers (tests/audio_analyze.py, tests/audio_fixture.py) are stdlib-only by
+# design, as are scripts/metrics/*.py. These are the analysis tools that
+# measure the repo, pinned so the next person does not re-derive them.
+#
+# Manage with uv. All three are CLI tools, so install them as tools rather
+# than into a project environment:
+#
+#     uv tool install clang-tidy==22.1.8
+#     uv tool install lizard==1.23.0
+#     uv tool install multimetric==2.4.4
+#
+# uv puts the shims in ~/.local/bin, which scripts/check_tidy.sh finds on PATH
+# with no arguments — that is the whole point of pinning them this way.
+#
+# One-off, without installing anything:
+#
+#     uvx clang-tidy@22.1.8 --version
+#     uvx lizard@1.23.0 src -l cpp
+#
+# Or, if you would rather have a throwaway environment:
+#
+#     uv venv && uv pip install -r requirements-dev.txt
+#
+# ---------------------------------------------------------------------------
+# clang-tidy — the static-analysis + KPI gate (scripts/check_tidy.sh).
+#
+# Ships as a BINARY WHEEL, needs no root and no system LLVM. Verified
+# 2026-07-30 on Linux: parses this repo's GCC-generated compile database with
+# zero clang-diagnostic-error, so the -isysroot injection at check_tidy.sh:55
+# is macOS-only. Before this was known, the cognitive-complexity KPIs in
+# docs/internal/BACKLOG.md section 5 could only be measured on the owner's Mac.
+#
+# PIN IT. A different LLVM version can change cognitive-complexity numbers,
+# and section 5 compares values across commits — an unpinned bump would read as
+# code churn. When you do bump it, re-measure the whole table in one go and say
+# so in the commit, rather than letting rows drift apart.
+clang-tidy==22.1.8
+
+# lizard — cyclomatic complexity, exact. Used by the CK-metrics audit.
+lizard==1.23.0
+
+# multimetric — Halstead volume only. Its own cyclomatic_complexity and
+# maintainability_index outputs are NOT used and must not be: its CC is a weak
+# file-level count (257 for game_app.cpp against lizard's 452) and its MI
+# clamps at 0. See scripts/metrics/loc_mi.py and
+# docs/internal/archive/2026-07-30-cognitive-mi-audit.md section 1.
+multimetric==2.4.4

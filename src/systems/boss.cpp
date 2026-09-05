@@ -65,28 +65,18 @@ BossPlayerState init_boss_player(int lives, long score) {
     return p;
 }
 
-void update_boss_player(BossPlayerState& p, bool key_left, bool key_right,
-                        bool key_jump, bool key_fire) {
-    if (p.lives < 0) return;   // game over
-
-    if (p.halo_flag > 0) {     // fly-in descent with wobble
-        p.sprite = kBossFlyInSpr;
-        p.sprite_dx = p.halo_flag & 1;
-        p.y += 4;
-        p.sprite_dy = -4;      // draw at the pre-increment y
-        --p.halo_flag;
-        p.facing_left = false;
-        return;
-    }
-    if (p.death_counter > 0) {
-        update_death(p, key_fire);
-        return;
-    }
-
+// ── update_boss_player's phases ──────────────────────────────────────────────
+// Sequential phases, not alternatives: they run in this order every frame and
+// share one mutable local, `fell` — set by the floor-fall phase and by the
+// jump arc when it ends, read by the walk cadence and the club swing (a swing
+// mid-air takes the airborne sprite index).  Same shape as player.cpp's
+// update_player split: verbatim bodies, dispatcher keeps the order, no
+// condition changed.
+void boss_fall_to_floor(BossPlayerState& p, bool& fell) {
     p.sprite = kBossStandSpr;
     p.sprite_dx = 0;
     p.sprite_dy = 0;
-    bool fell = false;
+    fell = false;
     if (p.jump_counter == 0 && p.y < kBossFloorY) {
         fell = true;
         p.sprite = kBossAirSpr;
@@ -95,7 +85,10 @@ void update_boss_player(BossPlayerState& p, bool key_left, bool key_right,
             if (p.y >= kBossFloorY) break;
         }
     }
+}
 
+void boss_walk_horizontal(BossPlayerState& p, bool key_left, bool key_right,
+                          bool fell) {
     if (key_left && p.club_flag == 0) {
         int x_vel;
         if (!fell && p.jump_counter == 0) {
@@ -131,7 +124,9 @@ void update_boss_player(BossPlayerState& p, bool key_left, bool key_right,
         p.x += x_vel;
         if (p.jump_counter != 0) p.x += 2;
     }
+}
 
+void boss_tick_jump_arc(BossPlayerState& p, bool& fell) {
     if (p.jump_counter > 0) {
         for (int i = 0; i < 4; ++i) {
             if (p.jump_counter == 0) break;
@@ -152,11 +147,10 @@ void update_boss_player(BossPlayerState& p, bool key_left, bool key_right,
         }
         p.sprite = kBossAirSpr;
     }
-    if (!fell && p.jump_counter == 0 && key_jump) {
-        p.jump_counter = 1;
-        p.jump_peak = kBossJumpPeak;
-    }
+}
 
+void boss_tick_club_swing(BossPlayerState& p, bool key_fire, bool key_left,
+                          bool key_right, bool fell) {
     if (key_fire && p.club_flag == 0) p.club_flag = 2;
     if (p.club_flag > 0) {
         int idx = (p.jump_counter != 0 || fell) ? (-p.club_flag + 4)
@@ -172,6 +166,38 @@ void update_boss_player(BossPlayerState& p, bool key_left, bool key_right,
             p.x += 5;
         }
     }
+}
+
+void update_boss_player(BossPlayerState& p, bool key_left, bool key_right,
+                        bool key_jump, bool key_fire) {
+    if (p.lives < 0) return;   // game over
+
+    if (p.halo_flag > 0) {     // fly-in descent with wobble
+        p.sprite = kBossFlyInSpr;
+        p.sprite_dx = p.halo_flag & 1;
+        p.y += 4;
+        p.sprite_dy = -4;      // draw at the pre-increment y
+        --p.halo_flag;
+        p.facing_left = false;
+        return;
+    }
+    if (p.death_counter > 0) {
+        update_death(p, key_fire);
+        return;
+    }
+
+    bool fell = false;
+    boss_fall_to_floor(p, fell);
+    boss_walk_horizontal(p, key_left, key_right, fell);
+    boss_tick_jump_arc(p, fell);
+
+    // ── jump initiation ──
+    if (!fell && p.jump_counter == 0 && key_jump) {
+        p.jump_counter = 1;
+        p.jump_peak = kBossJumpPeak;
+    }
+
+    boss_tick_club_swing(p, key_fire, key_left, key_right, fell);
 
     if (p.jump_counter == 0 && !fell && p.knockback_stun == 0) {
         p.respawn_x = p.x;

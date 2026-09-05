@@ -90,7 +90,10 @@ const char* level_main_func(int internal) {
     }
 }
 
-std::string timestamp_dir() {
+// Local time, formatted.  The two callers below differed in nothing but the
+// format string — including the platform #if, which is the part least worth
+// having twice.
+std::string local_time(const char* fmt) {
     std::time_t now = std::time(nullptr);
     std::tm tmv{};
 #if defined(_WIN32)
@@ -99,22 +102,13 @@ std::string timestamp_dir() {
     localtime_r(&now, &tmv);
 #endif
     char buf[32];
-    std::strftime(buf, sizeof buf, "%Y-%m-%d_%H%M%S", &tmv);
+    std::strftime(buf, sizeof buf, fmt, &tmv);
     return std::string(buf);
 }
 
-std::string timestamp_iso() {
-    std::time_t now = std::time(nullptr);
-    std::tm tmv{};
-#if defined(_WIN32)
-    localtime_s(&tmv, &now);
-#else
-    localtime_r(&now, &tmv);
-#endif
-    char buf[32];
-    std::strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%S", &tmv);
-    return std::string(buf);
-}
+std::string timestamp_dir() { return local_time("%Y-%m-%d_%H%M%S"); }
+
+std::string timestamp_iso() { return local_time("%Y-%m-%dT%H:%M:%S"); }
 
 // Save a FrameBuffer (RGBA32, w*4 pitch) as PNG.
 bool save_fb_png(const FrameBuffer& fb, const std::string& path) {
@@ -123,6 +117,14 @@ bool save_fb_png(const FrameBuffer& fb, const std::string& path) {
 
 // Active entities, sorted deterministically by (obj_type, init_x, init_y, x, y)
 // — matches state_dump._serialize_entities ordering.
+//
+// stable_sort, not sort, and the difference is the whole point: the reference
+// orders with Python's list.sort, which is STABLE, so two entities tying on all
+// five key fields keep their order in state.entities.  std::sort does not
+// promise that, so on a tie the two engines could emit different rows for
+// identical state — a divergence invented by the dumper rather than the
+// engine.  A tie needs a duplicated spawn-table row to occur and may not exist
+// in the shipped corpus; the cost of ruling it out is one word.
 std::vector<const core::Entity*> sorted_active_entities(
     const systems::SystemsState& state) {
     std::vector<const core::Entity*> rows;
@@ -130,7 +132,11 @@ std::vector<const core::Entity*> sorted_active_entities(
         if (!e.active) continue;
         rows.push_back(&e);
     }
-    std::sort(rows.begin(), rows.end(),
+    // The comparator orders by VALUES read through the pointers, never by the
+    // pointer addresses themselves, so the result does not depend on where the
+    // entities happen to live.  The check fires on the element type alone.
+    // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
+    std::stable_sort(rows.begin(), rows.end(),
               [](const core::Entity* a, const core::Entity* b) {
                   auto key = [](const core::Entity* e) {
                       return std::make_tuple(static_cast<int>(e->obj_type),

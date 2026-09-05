@@ -21,7 +21,6 @@ using core::Entity;
 using core::MonsterState;
 using core::ObjType;
 using formats::Rgb;
-using formats::Sprite;
 
 namespace {
 
@@ -68,8 +67,8 @@ static inline float fsel(bool use_float, float f, int i) {
     return use_float ? f : static_cast<float>(i);
 }
 
-void draw_entities(RenderTarget& t, systems::SystemsState& state,
-                   const LevelRenderAssets& a, bool draw_player) {
+void draw_entity_list(RenderTarget& t, systems::SystemsState& state,
+                      const LevelRenderAssets& a) {
     // 3. Entities.
     const auto& spr_mat = a.entity_sprites;
     for (const Entity& e : state.entities) {
@@ -163,6 +162,11 @@ void draw_entities(RenderTarget& t, systems::SystemsState& state,
         }
     }
 
+}
+
+void draw_secret_spring(RenderTarget& t, systems::SystemsState& state,
+                      const LevelRenderAssets& a) {
+    const auto& spr_mat = a.entity_sprites;
     // 3b. Secret-room spring/trampoline sprite.
     // EXE: drawn by L1 main at Ghidra 24199-24222, sprite 0x93 (1-based)
     // = index 146 (0-based) from L1SPR.MAT.  Fixed x=6; y=148 while the
@@ -181,6 +185,11 @@ void draw_entities(RenderTarget& t, systems::SystemsState& state,
         }
     }
 
+}
+
+void draw_food_gate_cue(RenderTarget& t, systems::SystemsState& state,
+                      const LevelRenderAssets& a) {
+    const auto& spr_mat = a.entity_sprites;
     // 3c. Food-gate indicators ("NOT ENOUGH FOOD" cue): on the level-end gate
     // screen, when the food bar isn't full, the EXE draws two indicator sprites
     // either side of the gate so the player knows to go back and eat (the gate
@@ -203,6 +212,11 @@ void draw_entities(RenderTarget& t, systems::SystemsState& state,
         }
     }
 
+}
+
+void draw_hazards_and_popups(RenderTarget& t, systems::SystemsState& state,
+                      const LevelRenderAssets& a) {
+    const auto& spr_mat = a.entity_sprites;
     // 4. Hazards + popups.
     if (state.stone_state != 0 &&
         kSprFallingStone < static_cast<int>(spr_mat.size())) {
@@ -235,6 +249,11 @@ void draw_entities(RenderTarget& t, systems::SystemsState& state,
         }
     }
 
+}
+
+void draw_death_halo(RenderTarget& t, systems::SystemsState& state,
+                      const LevelRenderAssets& a) {
+    const auto& spr_mat = a.entity_sprites;
     // 4b. Death halo (+ wing on L5) rising from the death position.
     if (state.death_halo_active) {
         constexpr int kSprDeathHalo = 117, kSprDeathWing = 124;
@@ -255,6 +274,11 @@ void draw_entities(RenderTarget& t, systems::SystemsState& state,
         }
     }
 
+}
+
+void draw_l5_glider_flyaway(RenderTarget& t, systems::SystemsState& state,
+                      const LevelRenderAssets& a) {
+    const auto& spr_mat = a.entity_sprites;
     // 4c. L5 screen-12 DETACHED glider fly-away (empty glider, no rider) — the
     // player has dismounted; the glider drifts up-right (handle_l5_screen12_
     // glider: glider_x += 5, glider_y -= 4 while glider_y > -30).  Body sprite
@@ -272,6 +296,11 @@ void draw_entities(RenderTarget& t, systems::SystemsState& state,
             blit_sprite(t, spr_mat[kGliderChute], a.palette, gx + 21, gy);
     }
 
+}
+
+void draw_player_overlay(RenderTarget& t, systems::SystemsState& state,
+                      const LevelRenderAssets& a, bool draw_player) {
+    const auto& spr_mat = a.entity_sprites;
     // 5. Player + weapon overlay.  Skipped wholesale when composing the
     // outgoing screen-transition frame (see the header comment) — this
     // also skips the club_flag decrement below, which must fire once
@@ -447,6 +476,17 @@ void draw_entities(RenderTarget& t, systems::SystemsState& state,
             if (t.advance_state) --p.club_flag;
         }
     }
+}
+
+void draw_entities(RenderTarget& t, systems::SystemsState& state,
+                   const LevelRenderAssets& a, bool draw_player) {
+    draw_entity_list(t, state, a);
+    draw_secret_spring(t, state, a);
+    draw_food_gate_cue(t, state, a);
+    draw_hazards_and_popups(t, state, a);
+    draw_death_halo(t, state, a);
+    draw_l5_glider_flyaway(t, state, a);
+    draw_player_overlay(t, state, a, draw_player);
 }
 
 void draw_mirrored_lava_bubbles(RenderTarget& t,

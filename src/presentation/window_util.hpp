@@ -101,6 +101,22 @@ ScaledWindow create_scaled_window(const char* title, int logical_w,
 // (the reference swallows the event for the same reason).
 bool handle_fullscreen_toggle(const SDL_Event& ev, SDL_Window* win);
 
+// Drain the queue for a NON-GAMEPLAY screen — the loading card, the score
+// tally, a fade, a transition, the L3 descent.  Alt+Enter toggles fullscreen, a
+// window close ends the screen, and everything else is DISCARDED.  Returns
+// false on a window close.
+//
+// The discard is the point, not a side effect: without it, keys mashed on the
+// previous screen leak into the next one, which is how a key held over the boss
+// tally used to abort the following run to title.
+//
+// ESC is deliberately absent.  It means something different on every screen it
+// reaches — skip on the tally, inert on the loading card and the descent, open
+// the menu during play — so the screens that care handle it themselves and the
+// rest let this drop it.  A shared abort-on-ESC here is exactly the bug that was
+// fixed across the ending.
+bool poll_screen_events(SDL_Window* win);
+
 // True while a skip key may read Enter: Alt+Enter belongs to the
 // fullscreen toggle, so held-key skip checks must ignore Enter+Alt.
 bool enter_skip_allowed();

@@ -88,10 +88,154 @@ void update_death(SystemsState& state) {
     respawn(state);
 }
 
+namespace {
+
+// ── update_player's phases ───────────────────────────────────────────────────
+// Sequential phases, not alternatives: they run in this order every frame and
+// share one mutable local, `falling`, which phase 1 sets and phases 3 and 5
+// read (phase 4 can set it too, when the jump arc ends).  Passing it by
+// reference keeps that coupling VISIBLE in the signatures instead of hiding it
+// in a 149-line body.  Each prologue binds state members back to the names the
+// body already used, so every body below is a verbatim move.
+
+void probe_ground_and_fall(SystemsState& state, bool& falling) {
+    PlayerState& p = state.player;
+    const core::CollisionBitmap& col = state.collision;
+// ── ground detection (two-probe) ──
+if (p.gravity_flag == 0 &&
+    col.test(p.x + kProbeLeftX, p.y + kProbeFootY) &&
+    col.test(p.x + kProbeRightX, p.y + kProbeFootY) &&
+    p.platform_flag == 0) {
+    falling = true;
+    p.sprite = kSprPlayerJump;
+    for (int steps = 0; steps < kMaxFallSearch; ++steps) {
+        ++p.y;
+        if (!col.test(p.x + kProbeLeftX, p.y + kProbeFootY)) break;
+        if (!col.test(p.x + kProbeRightX, p.y + kProbeFootY)) break;
+    }
+}
+}
+
+void save_restart_point(SystemsState& state, bool falling) {
+    PlayerState& p = state.player;
+// ── grounded restart-point save ──
+if (p.gravity_flag == 0 && !falling && p.death_counter == 0 &&
+    p.platform_flag == 0) {
+    p.restart_x = p.x;
+    p.restart_y = p.y;
+    p.restart_screen = state.current_screen;
+    p.restart_cave_index = state.cave_flag ? state.cave_index : -1;
+    p.restart_secret_index = state.secret_flag ? state.secret_index : -1;
+    p.restart_glider = false;   // grounded → normal grounded respawn
+}
+}
+
+void tick_attack_latch(SystemsState& state) {
+    PlayerState& p = state.player;
+    const InputState& inp = state.input;
+// ── attack initiation (edge-triggered latch) ──  // FUN_27f7_207e
+if (!inp.attack) {
+    p.attack_latch = 0;
+} else if (p.attack_latch == 0 && p.club_flag == 0 &&
+           !state.glider_active) {
+    p.attack_latch = 1;
+    p.club_flag = 2;
+}
+}
+
+void walk_horizontal(SystemsState& state, bool falling) {
+    PlayerState& p = state.player;
+    const InputState& inp = state.input;
+// ── walking ──
+if (inp.left && p.club_flag == 0) {
+    int speed = 5;
+    if (!falling && p.gravity_flag == 0) {
+        p.walk_frame = (p.walk_frame + 1) % 6;
+        p.sprite = kWalkSpr[static_cast<std::size_t>(p.walk_frame)];
+        speed = kWalkVel[static_cast<std::size_t>(p.walk_frame)];
+        if (p.facing_left == 1)
+            p.dx = -kWalkDx[static_cast<std::size_t>(p.walk_frame)];
+    }
+    if (p.facing_left != 1 && !falling && p.gravity_flag == 0)
+        p.sprite = kSprPlayerTurn;
+    p.facing_left = 1;
+    p.x -= speed;
+    if (p.gravity_flag != 0) p.x -= 2;
+}
+if (inp.right && p.club_flag == 0) {
+    int speed = 5;
+    if (!falling && p.gravity_flag == 0) {
+        p.walk_frame = (p.walk_frame + 1) % 6;
+        p.sprite = kWalkSpr[static_cast<std::size_t>(p.walk_frame)];
+        speed = kWalkVel[static_cast<std::size_t>(p.walk_frame)];
+        if (p.facing_left == 0)
+            p.dx = kWalkDx[static_cast<std::size_t>(p.walk_frame)];
+    }
+    if (p.facing_left != 0 && !falling && p.gravity_flag == 0)
+        p.sprite = kSprPlayerTurn;
+    p.facing_left = 0;
+    p.x += speed;
+    if (p.gravity_flag != 0) p.x += 2;
+}
+}
+
+void tick_gravity_arc(SystemsState& state, bool& falling) {
+    PlayerState& p = state.player;
+// ── gravity / jump arc ──
+if (p.gravity_flag != 0) {
+    int substeps = 0;
+    while (p.gravity_flag != 0 && substeps < kMaxGravitySubsteps) {
+        ++p.gravity_flag;
+        ++substeps;
+        const int vel = p.y_vel & 0x7F;
+
+        // Jump-apex chirp trigger.  // FUN_27f7_1b51 +0x1e57..0x1e69
+        if (p.gravity_flag == 2 && vel > 0x14 && (p.y_vel & 0x80) == 0)
+            state.jump_apex_sfx_pending = true;
+
+        // Two INDEPENDENT checks (both can fire in the overlap range →
+        // y -= 3 total).  The vel guards mirror the original's unsigned
+        // wrap (vel < 8 made the comparison always false).
+        if (vel >= 8 && (vel - 8) < p.gravity_flag && p.gravity_flag < vel)
+            p.y -= 1;
+        if (vel >= 6 && p.gravity_flag < (vel - 6))
+            p.y -= 2;
+
+        if (vel < p.gravity_flag) {
+            p.gravity_flag = 0;
+            falling = true;
+            if (p.y_vel & 0x80) p.y_vel = p.saved_y_vel;
+        }
+    }
+    p.sprite = kSprPlayerJump;
+}
+}
+
+void tick_club_frames(SystemsState& state, bool falling) {
+    PlayerState& p = state.player;
+    const InputState& inp = state.input;
+// ── club attack frames ──
+if (p.club_flag != 0) {
+    std::size_t idx = static_cast<std::size_t>(2 - p.club_flag);
+    if (p.gravity_flag != 0 || falling) idx += 2;
+    p.sprite = kHittingSpr[idx].spr;
+    p.dy = kHittingSpr[idx].dy;
+    if (inp.left) {
+        p.facing_left = 1;
+        p.x -= 5;
+    }
+    if (inp.right) {
+        p.facing_left = 0;
+        p.x += 5;
+    }
+}
+}
+
+}  // namespace
+
 void update_player(SystemsState& state) {
     PlayerState& p = state.player;
     const InputState& inp = state.input;
-    const core::CollisionBitmap& col = state.collision;
 
     // cave_warp_freeze tick.  On L3/L7 the cave-warp animation owns the
     // counter via a per-frame >>2 (freeze & 3 != 0 pattern); suppress the
@@ -121,119 +265,16 @@ void update_player(SystemsState& state) {
 
     bool falling = false;
 
-    // ── ground detection (two-probe) ──
-    if (p.gravity_flag == 0 &&
-        col.test(p.x + kProbeLeftX, p.y + kProbeFootY) &&
-        col.test(p.x + kProbeRightX, p.y + kProbeFootY) &&
-        p.platform_flag == 0) {
-        falling = true;
-        p.sprite = kSprPlayerJump;
-        for (int steps = 0; steps < kMaxFallSearch; ++steps) {
-            ++p.y;
-            if (!col.test(p.x + kProbeLeftX, p.y + kProbeFootY)) break;
-            if (!col.test(p.x + kProbeRightX, p.y + kProbeFootY)) break;
-        }
-    }
-
-    // ── grounded restart-point save ──
-    if (p.gravity_flag == 0 && !falling && p.death_counter == 0 &&
-        p.platform_flag == 0) {
-        p.restart_x = p.x;
-        p.restart_y = p.y;
-        p.restart_screen = state.current_screen;
-        p.restart_cave_index = state.cave_flag ? state.cave_index : -1;
-        p.restart_secret_index = state.secret_flag ? state.secret_index : -1;
-        p.restart_glider = false;   // grounded → normal grounded respawn
-    }
-
-    // ── attack initiation (edge-triggered latch) ──  // FUN_27f7_207e
-    if (!inp.attack) {
-        p.attack_latch = 0;
-    } else if (p.attack_latch == 0 && p.club_flag == 0 &&
-               !state.glider_active) {
-        p.attack_latch = 1;
-        p.club_flag = 2;
-    }
-
-    // ── walking ──
-    if (inp.left && p.club_flag == 0) {
-        int speed = 5;
-        if (!falling && p.gravity_flag == 0) {
-            p.walk_frame = (p.walk_frame + 1) % 6;
-            p.sprite = kWalkSpr[static_cast<std::size_t>(p.walk_frame)];
-            speed = kWalkVel[static_cast<std::size_t>(p.walk_frame)];
-            if (p.facing_left == 1)
-                p.dx = -kWalkDx[static_cast<std::size_t>(p.walk_frame)];
-        }
-        if (p.facing_left != 1 && !falling && p.gravity_flag == 0)
-            p.sprite = kSprPlayerTurn;
-        p.facing_left = 1;
-        p.x -= speed;
-        if (p.gravity_flag != 0) p.x -= 2;
-    }
-    if (inp.right && p.club_flag == 0) {
-        int speed = 5;
-        if (!falling && p.gravity_flag == 0) {
-            p.walk_frame = (p.walk_frame + 1) % 6;
-            p.sprite = kWalkSpr[static_cast<std::size_t>(p.walk_frame)];
-            speed = kWalkVel[static_cast<std::size_t>(p.walk_frame)];
-            if (p.facing_left == 0)
-                p.dx = kWalkDx[static_cast<std::size_t>(p.walk_frame)];
-        }
-        if (p.facing_left != 0 && !falling && p.gravity_flag == 0)
-            p.sprite = kSprPlayerTurn;
-        p.facing_left = 0;
-        p.x += speed;
-        if (p.gravity_flag != 0) p.x += 2;
-    }
-
-    // ── gravity / jump arc ──
-    if (p.gravity_flag != 0) {
-        int substeps = 0;
-        while (p.gravity_flag != 0 && substeps < kMaxGravitySubsteps) {
-            ++p.gravity_flag;
-            ++substeps;
-            const int vel = p.y_vel & 0x7F;
-
-            // Jump-apex chirp trigger.  // FUN_27f7_1b51 +0x1e57..0x1e69
-            if (p.gravity_flag == 2 && vel > 0x14 && (p.y_vel & 0x80) == 0)
-                state.jump_apex_sfx_pending = true;
-
-            // Two INDEPENDENT checks (both can fire in the overlap range →
-            // y -= 3 total).  The vel guards mirror the original's unsigned
-            // wrap (vel < 8 made the comparison always false).
-            if (vel >= 8 && (vel - 8) < p.gravity_flag && p.gravity_flag < vel)
-                p.y -= 1;
-            if (vel >= 6 && p.gravity_flag < (vel - 6))
-                p.y -= 2;
-
-            if (vel < p.gravity_flag) {
-                p.gravity_flag = 0;
-                falling = true;
-                if (p.y_vel & 0x80) p.y_vel = p.saved_y_vel;
-            }
-        }
-        p.sprite = kSprPlayerJump;
-    }
+    probe_ground_and_fall(state, falling);
+    save_restart_point(state, falling);
+    tick_attack_latch(state);
+    walk_horizontal(state, falling);
+    tick_gravity_arc(state, falling);
 
     // ── jump initiation ──
     if (!falling && p.gravity_flag == 0 && inp.jump) p.gravity_flag = 1;
 
-    // ── club attack frames ──
-    if (p.club_flag != 0) {
-        std::size_t idx = static_cast<std::size_t>(2 - p.club_flag);
-        if (p.gravity_flag != 0 || falling) idx += 2;
-        p.sprite = kHittingSpr[idx].spr;
-        p.dy = kHittingSpr[idx].dy;
-        if (inp.left) {
-            p.facing_left = 1;
-            p.x -= 5;
-        }
-        if (inp.right) {
-            p.facing_left = 0;
-            p.x += 5;
-        }
-    }
+    tick_club_frames(state, falling);
     // club_flag decrements in the weapon overlay draw, after rendering.
     // // FUN_27f7_1f72
 }

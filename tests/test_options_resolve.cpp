@@ -183,6 +183,107 @@ TEST_CASE("options: adopt_preset respects CLI flags and --profile") {
     CHECK(u.enhanced == false);             // empty preset (headless box) no-op
 }
 
+// The eight keys no other case asserted.  Characterisation, not new
+// behaviour: merge_config handles 26 keys in 26 hand-written blocks, and
+// BACKLOG 3.10 will only collapse the ones a test pins.  These pin the rest.
+TEST_CASE("options: the string-sentinel keys fill only when still empty") {
+    PlaySettings s;
+    merge_config(s, {{"mt32_model", "cm32l"},
+                     {"rom_dir", "/roms"},
+                     {"soundfont", "/sf/gm.sf2"}});
+    CHECK(s.mt32_model == "cm32l");
+    CHECK(s.rom_dir == "/roms");
+    CHECK(s.soundfont == "/sf/gm.sf2");
+
+    PlaySettings t;
+    t.mt32_model = "mt32";          // already set (CLI wrote it)
+    t.rom_dir = "/cli/roms";
+    t.soundfont = "/cli.sf2";
+    merge_config(t, {{"mt32_model", "cm32l"},
+                     {"rom_dir", "/roms"},
+                     {"soundfont", "/sf/gm.sf2"}});
+    CHECK(t.mt32_model == "mt32");
+    CHECK(t.rom_dir == "/cli/roms");
+    CHECK(t.soundfont == "/cli.sf2");
+}
+
+TEST_CASE("options: every pad binding is config-settable") {
+    PlaySettings s;
+    merge_config(s, {{"pad_attack", "x"}, {"pad_pause", "start"},
+                     {"pad_confirm", "a"}, {"pad_back", "y"}});
+    CHECK(s.pad_attack == "x");
+    CHECK(s.pad_pause == "start");
+    CHECK(s.pad_confirm == "a");
+    CHECK(s.pad_back == "y");
+}
+
+TEST_CASE("options: 'enhance' fills the list and marks it config-sourced") {
+    PlaySettings s;
+    merge_config(s, {{"enhance", "hd-text,smooth-motion"}});
+    CHECK(s.enhance_list == "hd-text,smooth-motion");
+    CHECK(s.enhance_list_from_config == true);
+
+    // A list already given on the CLI is not replaced.
+    PlaySettings t;
+    t.enhance_list = "mmpx";
+    merge_config(t, {{"enhance", "hd-text"}});
+    CHECK(t.enhance_list == "mmpx");
+    CHECK(t.enhance_list_from_config == false);
+}
+
+// play.json is hand-editable and persistent, so a typo in a numeric key must
+// not be able to brick a session.  std::atoi reports no conversion error: it
+// returns 0, which for render_scale is not a scale at all.  The policy for the
+// CONFIG surface is "ignore the bad key, keep what we had" — unlike the CLI
+// surface, where an explicit bad argument is an error (test_cli_args.cpp).
+TEST_CASE("options: a malformed numeric config value is ignored, not read as 0") {
+    PlaySettings s;
+    merge_config(s, {{"render_scale", "abc"}});
+    CHECK(s.render_scale == 4);          // the default, not atoi's 0
+}
+
+TEST_CASE("options: every numeric config key rejects a malformed value") {
+    PlaySettings s;
+    merge_config(s, {{"render_scale", "abc"},
+                     {"pad_deadzone", "wide"},
+                     {"audio_rate", "cd"},
+                     {"audio_buffer", "big"}});
+    CHECK(s.render_scale == 4);
+    CHECK(s.pad_deadzone == 8000);
+    CHECK(s.audio_rate == 0);            // sentinel: device default
+    CHECK(s.audio_buffer == 0);
+}
+
+TEST_CASE("options: a numeric config value with trailing garbage is rejected") {
+    // atoi stops at the first non-digit and returns 2, silently honouring
+    // half of a value the user clearly did not mean.
+    PlaySettings s;
+    merge_config(s, {{"render_scale", "2x"}, {"pad_deadzone", "5000 ish"}});
+    CHECK(s.render_scale == 4);
+    CHECK(s.pad_deadzone == 8000);
+}
+
+TEST_CASE("options: an empty numeric config value is ignored") {
+    PlaySettings s;
+    merge_config(s, {{"render_scale", ""}, {"pad_deadzone", ""}});
+    CHECK(s.render_scale == 4);
+    CHECK(s.pad_deadzone == 8000);
+}
+
+TEST_CASE("options: surrounding whitespace does not invalidate a number") {
+    PlaySettings s;
+    merge_config(s, {{"render_scale", " 2 "}, {"pad_deadzone", "\t5000\n"}});
+    CHECK(s.render_scale == 2);
+    CHECK(s.pad_deadzone == 5000);
+}
+
+TEST_CASE("options: a negative and an explicitly signed value both parse") {
+    PlaySettings s;
+    merge_config(s, {{"pad_deadzone", "-1"}, {"render_scale", "+3"}});
+    CHECK(s.pad_deadzone == -1);         // range is not this layer's job
+    CHECK(s.render_scale == 3);
+}
+
 TEST_CASE("options: profile overlay flows through merge (dos beats saved hd)") {
     // The caller applies --profile onto the merged map before merge_config —
     // verify the documented config < profile ordering end to end.

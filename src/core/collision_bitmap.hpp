@@ -37,6 +37,13 @@ public:
     bool test(int x, int y) const {
         if (x < 0) x = 0;
         else if (x > 319) x = 319;
+        // Both arms land on 199 for DIFFERENT reasons, and keeping them apart
+        // is the point: below is the original's unsigned 16-bit compare quirk
+        // (a negative y reads as a huge value and falls out the top), above is
+        // an ordinary clamp. Compare the x pair, which clamps to 0 and 319 —
+        // merging these two would hide that y is asymmetric where x is not,
+        // and the asymmetry is the faithfulness. Pinned by the oracle diff.
+        // NOLINTNEXTLINE(bugprone-branch-clone)
         if (y < 0) y = 199;   // unsigned 16-bit compare quirk: negative → 199
         else if (y > 199) y = 199;
         const std::uint8_t b =

@@ -21,9 +21,11 @@
 #include "first_run.hpp"
 #endif
 #include "enhance/upscale.hpp"
+#include "prepare/exe_tables.hpp"
 #include "prepare/game_files.hpp"
 #include "formats/cur.hpp"
 #include "formats/voc.hpp"
+#include "presentation/audio/opl_sfx.hpp"
 #include "presentation/audio/wav_io.hpp"
 
 #ifdef OLDUVAI_HAVE_SDL
@@ -34,12 +36,161 @@
 #include "presentation/diag/viewer.hpp"
 #endif
 
-namespace fs = std::filesystem;
 
 namespace {
 
+// ── Headless audio render (Phase 1 harness) ──────────────────────────
+// Deterministic offline PCM render of a synthetic format-0 MIDI stream
+// through a synth backend — the gate for the audio DIP refactor and the
+// substrate for the mt32_gm instrument-matching scripts.  Needs no game
+// files; data-gated on the backend's own assets (MT-32 ROMs / GM
+// SoundFont) → exits 77 (SKIP) when the chosen synth can't load.
+//
+// Extracted verbatim from main() (§3.10b): a leaf command that only reads
+// the parsed CLI state and returns an exit code — main keeps the dispatch,
+// not the body.
+int render_audio_command(const olduvai::app::CliArgs& args,
+                         const olduvai::app::PlaySettings& ps) {
+    std::vector<std::uint8_t> smf;
+    bool read_failed = false;
+    if (std::FILE* mf = std::fopen(args.render_audio.c_str(), "rb")) {
+        // Stop AT the short read rather than looping back into fread: a
+        // short read is EOF or error, and in both cases another fread is a
+        // read on a stream whose position is already spent or
+        // indeterminate.  Distinguishing them also matters — without the
+        // ferror check an I/O failure produced a TRUNCATED buffer that
+        // then went on to be parsed as MIDI.  --render-audio takes a
+        // user-supplied path, the surface SECURITY.md calls out, so a
+        // partial read must be an error rather than a shorter song.
+        std::uint8_t buf[8192];
+        for (;;) {
+            const std::size_t got = std::fread(buf, 1, sizeof buf, mf);
+            if (got > 0) smf.insert(smf.end(), buf, buf + got);
+            if (got < sizeof buf) {
+                read_failed = std::ferror(mf) != 0;
+                break;
+            }
+        }
+        std::fclose(mf);
+    }
+    if (read_failed) {
+        std::fprintf(stderr, "render-audio: error reading %s\n",
+                     args.render_audio.c_str());
+        return 1;
+    }
+    if (smf.empty()) {
+        std::fprintf(stderr, "render-audio: cannot read %s\n",
+                     args.render_audio.c_str());
+        return 1;
+    }
+    const int rate = (ps.audio_rate >= 8000) ? ps.audio_rate : 44100;
+    olduvai::presentation::SdlAudio audio(
+        ps.music_device, ps.rom_dir, ps.soundfont, ps.sfx_backend, rate, 0,
+        "", /*offline=*/true,
+        ps.mt32_model.empty() ? "auto" : ps.mt32_model);
+    if (!audio.music_available()) {
+        std::fprintf(stderr,
+            "render-audio: no synth backend for '%s' — SKIP "
+            "(MT-32 needs ROMs; GM needs a SoundFont)\n",
+            ps.music_device.c_str());
+        return 77;   // CTest SKIP_RETURN_CODE
+    }
+    const int frames =
+        static_cast<int>(rate * args.render_audio_secs);
+    const std::vector<std::int16_t> pcm = audio.render_offline(smf, frames);
+    if (!args.render_audio_out.empty()) {
+        olduvai::presentation::write_wav16(args.render_audio_out, pcm, rate,
+                                           2);
+        std::printf("render-audio: %d frames @ %d Hz (%s) -> %s\n", frames,
+                    rate, audio.active_music_backend().c_str(),
+                    args.render_audio_out.c_str());
+    } else {
+        const std::vector<std::uint8_t> bytes(
+            reinterpret_cast<const std::uint8_t*>(pcm.data()),
+            reinterpret_cast<const std::uint8_t*>(pcm.data()) +
+                pcm.size() * sizeof(std::int16_t));
+        std::printf("%s  %d  %s\n",
+                    olduvai::presentation::sfx_digest_hex(bytes).c_str(),
+                    frames, audio.active_music_backend().c_str());
+    }
+    return 0;
+}
+
+// ── AdLib SFX render ─────────────────────────────────────────────────
+// `--render-sfx <id|all>` renders the OPL sound effects the same way the
+// engine plays them, and prints "sha256  frames  id" per effect — or
+// writes WAVs with --render-audio-out (as <stem>_<id>.wav for "all").
+//
+// The music side of this (--render-audio) has existed since the audio
+// harness; the SFX side had NO offline path at all, so a change to the
+// OPL render or the sample chain could not be compared before and after.
+// scripts/metrics/audio_diff.sh is what uses both.
+//
+// Game-data-gated by construction: the patch bytes are read from the
+// user's executable (`install_adlib_sfx_voices`) and this repo ships none.
+int render_sfx_command(const olduvai::app::CliArgs& args,
+                       const olduvai::app::PlaySettings& ps) {
+    const std::string dir =
+        olduvai::prepare::resolve_game_dir(ps.game_dir).string();
+    std::vector<std::uint8_t> exe;
+    try {
+        exe = olduvai::prepare::load_game_executable(dir);
+    } catch (...) {
+        std::fprintf(stderr,
+                     "render-sfx: no game executable under '%s' — SKIP\n",
+                     dir.c_str());
+        return 77;
+    }
+    olduvai::presentation::install_adlib_sfx_voices(
+        olduvai::prepare::read_adlib_sfx_voices(exe));
+    const int rate = (ps.audio_rate >= 8000) ? ps.audio_rate : 44100;
+    std::vector<std::string> ids;
+    if (args.render_sfx == "all") {
+        ids = olduvai::presentation::opl_sfx_ids();
+    } else {
+        ids.push_back(args.render_sfx);
+    }
+    if (ids.empty()) {
+        std::fprintf(stderr, "render-sfx: no SFX in the catalog — SKIP\n");
+        return 77;
+    }
+    int rendered = 0;
+    for (const std::string& id : ids) {
+        const std::vector<std::int16_t> pcm =
+            olduvai::presentation::render_adlib_sfx_by_id(id, rate);
+        if (pcm.empty()) {
+            std::fprintf(stderr, "render-sfx: '%s' produced nothing\n",
+                         id.c_str());
+            continue;
+        }
+        ++rendered;
+        if (!args.render_audio_out.empty()) {
+            std::string out = args.render_audio_out;
+            if (ids.size() > 1) {
+                const std::size_t dot = out.rfind('.');
+                const std::string stem =
+                    dot == std::string::npos ? out : out.substr(0, dot);
+                const std::string ext =
+                    dot == std::string::npos ? "" : out.substr(dot);
+                out = stem + "_" + id + ext;
+            }
+            olduvai::presentation::write_wav16(out, pcm, rate, 2);
+            std::printf("render-sfx: %s -> %s\n", id.c_str(), out.c_str());
+        } else {
+            const std::vector<std::uint8_t> bytes(
+                reinterpret_cast<const std::uint8_t*>(pcm.data()),
+                reinterpret_cast<const std::uint8_t*>(pcm.data()) +
+                    pcm.size() * sizeof(std::int16_t));
+            std::printf("%s  %zu  %s\n",
+                        olduvai::presentation::sfx_digest_hex(bytes).c_str(),
+                        pcm.size(), id.c_str());
+        }
+    }
+    return rendered > 0 ? 0 : 77;
+}
+
 // Print the full usage block to stdout.  Flags mirror the parsing loop in
-// main() one-for-one; keep the two in sync when adding options.
+// parse_args() one-for-one; keep the two in sync when adding options.
 void print_usage() {
     std::printf(
         "olduvai " OLDUVAI_VERSION " — native engine recreation of Prehistorik (1991, Titus)\n"
@@ -167,7 +318,14 @@ void print_usage() {
         "                              (default: 1).\n"
         "      --viewer-frames <n> Run the viewer for n frames then exit (default: -1,\n"
         "                          unlimited).\n"
-        "      --viewer-shot <file>    Save a screenshot of the viewer to <file>.\n");
+        "      --viewer-shot <file>    Save a screenshot of the viewer to <file>.\n"
+        "      --render-audio <smf>    Render a MIDI file through the synth and\n"
+        "                              print a digest, or write --render-audio-out.\n"
+        "      --render-audio-out <wav>    WAV destination for the two render\n"
+        "                                  commands (default: print a digest).\n"
+        "      --render-audio-secs <s>     Render duration (default: 2).\n"
+        "      --render-sfx <id|all>   Render an AdLib sound effect the way the\n"
+        "                              engine plays it; needs --game-dir.\n");
 }
 
 }  // namespace
@@ -249,58 +407,13 @@ int main(int argc, char** argv) {
     }
 
 #ifdef OLDUVAI_HAVE_SDL
-    // ── Headless audio render (Phase 1 harness) ──────────────────────────
-    // Deterministic offline PCM render of a synthetic format-0 MIDI stream
-    // through a synth backend — the gate for the audio DIP refactor and the
-    // substrate for the mt32_gm instrument-matching scripts.  Needs no game
-    // files; data-gated on the backend's own assets (MT-32 ROMs / GM
-    // SoundFont) → exits 77 (SKIP) when the chosen synth can't load.
-    if (!args.render_audio.empty()) {
-        std::vector<std::uint8_t> smf;
-        if (std::FILE* mf = std::fopen(args.render_audio.c_str(), "rb")) {
-            std::uint8_t buf[8192];
-            std::size_t got;
-            while ((got = std::fread(buf, 1, sizeof buf, mf)) > 0)
-                smf.insert(smf.end(), buf, buf + got);
-            std::fclose(mf);
-        }
-        if (smf.empty()) {
-            std::fprintf(stderr, "render-audio: cannot read %s\n",
-                         args.render_audio.c_str());
-            return 1;
-        }
-        const int rate = (ps.audio_rate >= 8000) ? ps.audio_rate : 44100;
-        olduvai::presentation::SdlAudio audio(
-            ps.music_device, ps.rom_dir, ps.soundfont, ps.sfx_backend, rate, 0,
-            "", /*offline=*/true,
-            ps.mt32_model.empty() ? "auto" : ps.mt32_model);
-        if (!audio.music_available()) {
-            std::fprintf(stderr,
-                "render-audio: no synth backend for '%s' — SKIP "
-                "(MT-32 needs ROMs; GM needs a SoundFont)\n",
-                ps.music_device.c_str());
-            return 77;   // CTest SKIP_RETURN_CODE
-        }
-        const int frames =
-            static_cast<int>(rate * args.render_audio_secs);
-        const std::vector<std::int16_t> pcm = audio.render_offline(smf, frames);
-        if (!args.render_audio_out.empty()) {
-            olduvai::presentation::write_wav16(args.render_audio_out, pcm, rate,
-                                               2);
-            std::printf("render-audio: %d frames @ %d Hz (%s) -> %s\n", frames,
-                        rate, audio.active_music_backend().c_str(),
-                        args.render_audio_out.c_str());
-        } else {
-            const std::vector<std::uint8_t> bytes(
-                reinterpret_cast<const std::uint8_t*>(pcm.data()),
-                reinterpret_cast<const std::uint8_t*>(pcm.data()) +
-                    pcm.size() * sizeof(std::int16_t));
-            std::printf("%s  %d  %s\n",
-                        olduvai::presentation::sfx_digest_hex(bytes).c_str(),
-                        frames, audio.active_music_backend().c_str());
-        }
-        return 0;
-    }
+    // Leaf commands, extracted verbatim above (§3.10b): main keeps the
+    // dispatch and the ordering (audio render before SFX render before the
+    // interactive paths), not their bodies.
+    if (!args.render_audio.empty())
+        return render_audio_command(args, ps);
+
+    if (!args.render_sfx.empty()) return render_sfx_command(args, ps);
 #endif
 
     // ── MIDI port enumeration ────────────────────────────────────────────

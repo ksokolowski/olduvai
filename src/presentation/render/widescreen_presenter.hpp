@@ -29,6 +29,9 @@
 // general present), save/load and pause.
 #pragma once
 
+#include "presentation/render/level_surface.hpp"
+#include "presentation/render/logical_size.hpp"
+
 #include <SDL.h>
 
 #include <cstdint>
@@ -52,25 +55,21 @@ namespace olduvai::presentation {
 // run_platform_level; every pointer refers to a shell object that outlives
 // the presenter (the per-level locals of run_platform_level).
 struct WidescreenShellCtx {
-    SDL_Renderer* ren = nullptr;
+    // The level's presentation surface: renderer, texture, vector font,
+    // overlay, logical size and the HD settings.  These were EIGHT separate
+    // members, copied out of run_platform_level's prologue one at a time — the
+    // same eight FramePresenter had (§3.7 cluster 1).
+    LevelSurface* surface = nullptr;
 
-    // Level-fixed presentation parameters.
-    bool hd = false;
-    int hd_scale = 1;
-    bool use_hd_text = false;
-    // Live-mutable shell strings (Tier-1 Aspect / Options edits write these):
-    // opts.aspect and opts.hd_profile.  hd_profile doubles as the
-    // RenderTarget::profile pointer.
+    // Live-mutable shell string (Tier-1 Aspect edits write it).  Stays here:
+    // the aspect is a widescreen concern, not a property of the surface.
     const std::string* aspect = nullptr;
-    const std::string* hd_profile = nullptr;
 
     // Live per-level aggregates (rebound in place across screens; the
     // compose/draw functions take SystemsState by non-const ref).
     systems::SystemsState* state = nullptr;        // g.state
     const LevelRenderAssets* render = nullptr;     // g.render
     enhance::HdAssetCache* hd_cache = nullptr;     // g.hd_cache
-    enhance::HdText* hd_text = nullptr;
-    TextOverlay* text_overlay = nullptr;
     int internal_level_id = 0;                     // g.config.internal_id
     int surface_screen_count = 0;                  // g.tiles.screens.size()
 
@@ -78,8 +77,8 @@ struct WidescreenShellCtx {
     // logical size from these, so the resize recompute must keep them in
     // lockstep (see rebuild_if_resized).  fallback_ld = the non-widescreen
     // (margin-0) logical dims.
-    int* logical_w = nullptr;
-    int* logical_h = nullptr;
+    // The shell's logical size AND the mirror the text-overlay flush restores
+    // from — one object, because they must never disagree (§3.13).
     LogicalDims fallback_ld{};
 
     // Callbacks into the TU-private `Loaded` helpers (game_app.cpp).
@@ -129,7 +128,42 @@ public:
     void draw_wide_hud_text(std::vector<std::uint8_t>& b, int ow, int oh,
                             const enhance::EnhancedHudLayout& L);
 
+    // The wide foreground pass: entities (player included), then un-clip and
+    // reflect the L7 lava bubbles into the margin, then the caller's overlay
+    // tail and the Tier-1 living-margin monsters.  present()'s fast and slow
+    // paths both ran this, identically.
+    //
+    // What comes BEFORE it — the player-only margin clips — legitimately
+    // differs (HD scale vs native, and the fast path exempts the L5 glider
+    // fly-off) and stays at each site.  Sharing the tail is what makes that
+    // difference visible instead of buried at the end of two long branches.
+    void draw_wide_foreground(RenderTarget& wrt);
+
+    // Clear, copy the wide texture across the canvas, and lay the vector HUD
+    // text over it.  The three places that show `wtex_` — present()'s fast
+    // path, present()'s slow path and present_transition() — each wrote this
+    // out: the same clear/copy plus the same begin → draw_wide_hud_text →
+    // flush.  They differ only in what they uploaded BEFORE it and whether
+    // they present after, so neither end is in here.
+    //
+    // Caller must have filled wtex_ already.
+    void show_wide_with_hud(const enhance::EnhancedHudLayout& hud_layout,
+                            bool draw_hud_overlay);
+
     // ── State accessors (the shell paths that stayed behind read these) ──
+
+    // Surface reads, named as the members they replace so the body below is
+    // unchanged apart from losing the `ctx_.` prefix.  Shorter at every site
+    // than the fields were.
+    SDL_Renderer* ren() const { return ctx_.surface->ren(); }
+    bool hd() const { return ctx_.surface->hd(); }
+    int hd_scale() const { return ctx_.surface->hd_scale(); }
+    bool use_hd_text() const { return ctx_.surface->use_hd_text(); }
+    const std::string* hd_profile() const { return ctx_.surface->hd_profile(); }
+    enhance::HdText& hd_text() const { return ctx_.surface->hd_text(); }
+    TextOverlay& overlay() const { return ctx_.surface->overlay(); }
+    LogicalSize& lsz() const { return ctx_.surface->lsz(); }
+
     bool active() const { return active_; }
     int margin() const { return margin_; }
     int native_w() const { return native_w_; }

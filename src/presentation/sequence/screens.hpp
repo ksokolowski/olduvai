@@ -55,11 +55,20 @@ struct HdTextRow {
 using HdPresentFn = std::function<bool(const std::vector<std::uint8_t>&, int w,
                                        int h, const std::vector<HdTextRow>&)>;
 
-// Enhanced-mode handle for the score tally: when set + ok(), the tally routes
-// every text row through the cartoon vector font (hd_text) at OUTPUT resolution
-// (via the present_hd overlay), mirroring the reference tally/text layers.  Classic
-// mode passes a null TallyHd.
-struct TallyHd {
+// Enhanced-mode handle for a full-screen TEXT screen — the level-entry loading
+// card and the score tally.  When set + ok(), the screen routes every text row
+// through the cartoon vector font (hd_text) at OUTPUT resolution (via the
+// present_hd overlay), mirroring the reference's text layers.  Classic mode
+// passes a default-constructed handle (null hd_text) and keeps the
+// byte-identical bitmap path.
+//
+// ONE type, deliberately.  This was `TallyHd` and `LoadingHd` — two structs
+// with the same four members, same types, same defaults.  Nothing enforced
+// that they stayed the same, and game_app assigned one to the other a field at
+// a time because the language would not let it say what it meant.  A screen
+// that draws vector rows over an upscaled buffer is one concept; it now has
+// one name.  See sequence/text_screen_present.hpp for the shared presenter.
+struct TextScreenHd {
     const enhance::HdText* hd_text = nullptr;   // null → classic bitmap path
     int scale = 1;                              // HD target scale (2/3/4)
     HdPresentFn present_hd;                     // uploads scene + text overlay
@@ -73,32 +82,17 @@ constexpr int kFadeFrames = 18;
 // Multiply the frame towards black (t = 0 → unchanged, 1 → black).
 void apply_fade(FrameBuffer& dst, const FrameBuffer& src, double t);
 
-// Enhanced-mode handle for the loading screen: when set + ok(), the two text
-// rows ("Please Wait" / "while loading Level N") are drawn through the cartoon
-// vector font (hd_text) at HD resolution on an upscaled black buffer presented
-// via present_hd — mirrors the TallyHd path (the reference
-// records the loading lines into a TextLayer and flushes them at display res).
-// Classic mode passes a default-constructed LoadingHd (null hd_text) and keeps
-// the byte-identical bitmap path.  The in/out fades run on the HD buffer.
-struct LoadingHd {
-    const enhance::HdText* hd_text = nullptr;   // null → classic bitmap path
-    int scale = 1;                              // HD target scale (2/3/4)
-    HdPresentFn present_hd;                     // uploads the HD buffer
-    // Upscale a native 320x200 RGBA buffer to HD (profile baked into the fn).
-    std::function<std::vector<std::uint8_t>(const std::vector<std::uint8_t>&)>
-        upscale;
-};
-
 // Fade `from` to black, then the loading screen in; hold; fade to black.
 // Returns false if the user quit.
-// `hd` (optional): when hd.hd_text is non-null and ok(), the two text rows are
-// rendered via the cartoon vector font at HD resolution (classic bitmap path
-// suppressed), and the fades run on the HD buffer — see LoadingHd.
+// `hd` (optional): when hd.hd_text is non-null and ok(), the two text rows
+// ("Please Wait" / "while loading Level N") are rendered via the cartoon vector
+// font at HD resolution on an upscaled black buffer (classic bitmap path
+// suppressed), and the in/out fades run on the HD buffer — see TextScreenHd.
 bool show_loading_screen(const FrameBuffer* from, int display_level,
                          const std::vector<formats::Sprite>& charset,
                          const std::vector<formats::Rgb>& pal,
                          const PresentFn& present,
-                         const LoadingHd& hd = {});
+                         const TextScreenHd& hd = {});
 
 // Full-screen PC1 (e.g. the game-over picture): fade in, hold, fade out.
 // fade_in/fade_out are optional so multi-call holds (the BULLE dream
@@ -137,13 +131,13 @@ struct TallyAudio {
 // loops themselves are never skippable (EXE FUN_270a_01b4 pacing).
 // `hd` (optional): when hd.hd_text is non-null and ok(), the tally renders all
 // text rows via the cartoon vector font at HD resolution (classic bitmap path
-// suppressed) — see TallyHd.  A default-constructed TallyHd (null hd_text)
+// suppressed) — see TextScreenHd.  A default-constructed handle (null hd_text)
 // keeps the byte-identical bitmap path.
 bool show_score_tally(systems::SystemsState& state, int display_level,
                       int bonus, const std::vector<formats::Sprite>& charset,
                       const std::vector<formats::Rgb>& pal,
                       const PresentFn& present, const SkipFn& skip,
-                      const TallyHd& hd = {}, const TallyAudio& sfx = {});
+                      const TextScreenHd& hd = {}, const TallyAudio& sfx = {});
 
 // Boss-level overload: takes lives/score by reference directly (BossPlayerState
 // has no SystemsState wrapper).  Same edge-triggered skip semantics.
@@ -152,6 +146,6 @@ bool show_score_tally(int& lives, long& score, int display_level,
                       int bonus, const std::vector<formats::Sprite>& charset,
                       const std::vector<formats::Rgb>& pal,
                       const PresentFn& present, const SkipFn& skip,
-                      const TallyHd& hd = {}, const TallyAudio& sfx = {});
+                      const TextScreenHd& hd = {}, const TallyAudio& sfx = {});
 
 }  // namespace olduvai::presentation

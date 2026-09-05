@@ -2,10 +2,13 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "systems/frame_runner.hpp"
 
+#include <cstdlib>   // getenv — OLDUVAI_FORCE_L3_DESCENT gate hook
+
 #include "systems/collision_dispatch.hpp"
 #include "systems/monster_ai.hpp"
 #include "systems/cave_logic.hpp"
 #include "systems/secret.hpp"
+#include "systems/transitions.hpp"
 
 namespace olduvai::systems {
 
@@ -151,6 +154,70 @@ void run_frame(SystemsState& state, const FrameInputs& inputs) {
 
     // 8. Frame counter.
     ++state.frame_counter;
+}
+
+void run_post_frame_steps(SystemsState& state) {
+    // 6b. Death halo.
+    if (state.player.death_counter == 1) {
+        init_death_halo(state);
+    } else if (state.player.death_counter > 1) {
+        tick_death_halo(state);
+    } else {
+        state.death_halo_active = false;
+    }
+
+    // 6c/6d. L5 glider entry + the screen-12 detach/fly-away.
+    check_l5_glider_entry(state);
+    handle_l5_screen12_glider(state);
+
+    // 6e. Clamp + death-by-fall BEFORE exits and transitions (they
+    // fire even in glider mode, where the player update returns
+    // early).
+    if (!state.screen_change) {
+        clamp_player_position(state);
+    }
+    check_death_by_fall(state);
+
+    // 7. Cave/secret exits (the trampoline fires before the exit
+    // check so a bounce can reach the exit threshold same-frame).
+    if (state.cave_flag) {
+        state.secret_spring_bouncing = false;
+        check_cave_exit(state);
+    } else if (state.secret_flag) {
+        state.secret_spring_bouncing =
+            update_secret_trampoline(state);
+        check_secret_exit(state);
+    }
+
+    // 8. Surface transitions — secret entry takes priority.
+    // OLDUVAI_FORCE_L3_DESCENT (debug/gate): the L3 (internal 3 / display 5)
+    // 17->18 trunk-descent is otherwise reachable only by eating >=kFoodGate
+    // food + KO'ing the big bird, so no headless run reaches it.  Seed the
+    // three natural-gate INPUTS check_l3_transition reads (food, player.y,
+    // the bird-cleared latch) so the UNMODIFIED transition crosses 17->18
+    // and plays the cinematic — the run-to-run-deterministic path the
+    // l3_end_level extraction's before/after byte-diff exercises.  Placed
+    // AFTER run_frame (physics moved player.y; monster AI overwrote
+    // screen_clear_of_monsters this frame) and BEFORE check_screen_transition
+    // so the seeded values are exactly what the gate reads.  Cheap state
+    // guards precede getenv, so it fires at most a few frames at screen 17.
+    if (state.current_level == 3 && state.current_screen == 17 &&
+        !state.screen_change && std::getenv("OLDUVAI_FORCE_L3_DESCENT")) {
+        state.food_count = kFoodGate;
+        state.player.y = 0x44;
+        state.screen_clear_of_monsters = true;
+    }
+    if (!state.cave_flag && !state.secret_flag) {
+        state.secret_spring_bouncing = false;
+        if (!check_secret_entry(state)) {
+            check_screen_transition(state);
+        }
+    }
+
+    // 8a. Cave-warp animation (not while inside a cave).
+    if (!state.cave_flag) {
+        check_cave_warp_animation(state);
+    }
 }
 
 }  // namespace olduvai::systems

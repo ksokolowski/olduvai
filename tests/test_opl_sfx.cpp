@@ -83,8 +83,14 @@ TEST_CASE("opl_sfx render is deterministic") {
 TEST_CASE("opl_sfx rejects bad input / unknown id") {
     CHECK(render_adlib_sfx_by_id("SFX_NOPE", 44100).empty());
     const OplSfxVoice z{};
-    CHECK(render_adlib_sfx(z, z, /*mwf*/4, 0, 36, 127, 3, 0, 44100, 100, 100)
+    // Field order is OplSfxDef's: id, modulator, carrier, mod_wf, car_wf,
+    // note, velocity, channel, fb_alg, gate_ms, tail_ms — sample_rate is the
+    // separate second argument.
+    CHECK(render_adlib_sfx(
+              OplSfxDef{"t", z, z, /*mwf*/ 4, 0, 36, 127, 3, 0, 100, 100},
+              44100)
               .empty());                                    // waveform > 3
-    CHECK(render_adlib_sfx(z, z, 0, 0, 36, 127, 3, 0, /*rate*/0, 100, 100)
+    CHECK(render_adlib_sfx(
+              OplSfxDef{"t", z, z, 0, 0, 36, 127, 3, 0, 100, 100}, /*rate*/ 0)
               .empty());                                    // bad rate
 }

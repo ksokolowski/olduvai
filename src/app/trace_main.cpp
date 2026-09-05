@@ -9,6 +9,7 @@
 // 2026-06-10: 300/300 frames identical on first full run.
 #include <cstdio>
 #include <fstream>
+#include "parse_num.hpp"
 #include "core/game_tables.hpp"
 #include "core/rng.hpp"
 #include "prepare/exe_tables.hpp"
@@ -22,7 +23,17 @@ int main(int argc, char** argv) {
     // Accept a GOG install root (data/PREH layout) like the main binary.
     const std::string dir =
         prepare::resolve_game_dir(argv[1]).string();
-    const int frames = std::atoi(argv[2]);
+    // Not atoi: `olduvai_trace <dir> abc` would run ZERO frames and print an
+    // empty trace, which on the diff side is indistinguishable from an engine
+    // that produced nothing — the most expensive way for this harness to fail.
+    int frames = 0;
+    if (!app::parse_int(argv[2], frames)) {
+        std::fprintf(stderr,
+                     "olduvai_trace: frame count must be a whole number "
+                     "(got '%s')\n",
+                     argv[2]);
+        return 2;
+    }
     const auto exe = prepare::load_game_executable(dir);
     // Runtime gameplay tables (cave widths, secret scores) come from the
     // user's executable, same as the main binary.

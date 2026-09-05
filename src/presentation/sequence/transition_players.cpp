@@ -49,13 +49,9 @@ void play_transition(TransitionShellCtx& ctx, const FrameBuffer& oldf,
     const Uint32 step_ms =
         smooth_t ? (1000 / 60) : ctx.frame_ms;
     auto pump = [&]() -> bool {
-        SDL_Event e2;
-        while (SDL_PollEvent(&e2)) {
-            if (handle_fullscreen_toggle(e2, ctx.win)) continue;
-            if (e2.type == SDL_QUIT) {
-                *ctx.running = false;
-                return false;
-            }
+        if (!poll_screen_events(ctx.win)) {
+            *ctx.running = false;
+            return false;
         }
         return true;
     };
@@ -276,11 +272,7 @@ void play_transition_wide(TransitionShellCtx& ctx,
     std::vector<std::uint8_t> hd_new =
         enhance::upscale_rgba(neww, W, H, ctx.hd_scale, *ctx.hd_profile);
     auto pump = [&]() -> bool {
-        SDL_Event e2;
-        while (SDL_PollEvent(&e2)) {
-            if (handle_fullscreen_toggle(e2, ctx.win)) continue;
-            if (e2.type == SDL_QUIT) { *ctx.running = false; return false; }
-        }
+        if (!poll_screen_events(ctx.win)) { *ctx.running = false; return false; }
         return true;
     };
     const char* dump_dir = std::getenv("OLDUVAI_DUMP_TRANSITION");
@@ -435,14 +427,171 @@ void play_transition_wide(TransitionShellCtx& ctx,
 // (new_center); off-level edge slots (level first/last, folds in #60)
 // clamp the adjacent screen's near edge column — a tear-free
 // continuation of its sky+ground bands.
+// Strip geometry shared by play_panorama_wide and its seam-continuity helper:
+// four 320-wide screens stacked into one panning strip, native height 200.
+constexpr int kStripW = 4 * 320;
+constexpr int kStripH = 200;
+
+// Seam-column continuity across the panorama strip (tile_patterns).
+// Same laws as the steady wide compose: a trunk/pillar straddling a
+// screen edge must not cut at a slot boundary mid-pan (the
+// S12→S13→S14 transient vertical cut).  For every REAL slot, blit
+// its screen's straddling columns so the overhang crosses into the
+// adjacent slot — clipped away from its OWN slot (the in-slot part
+// is already drawn with the authored z-order).
+//
+// CAUTION — the strip slots are FULL composes with ENTITIES (and
+// the new slot carries the BAKED PLAYER), unlike the steady static
+// bg.  A whole-slot "authored tiles win" redraw buried the player
+// under the 144-wide bark tiles (user repro: S12→S13 walk, player
+// vanished for the whole pan).  So the level-tile redraw is
+// restricted to the exact BANDS an overhang actually landed on
+// (≤ ~32 px past a boundary), and the player's own box is restored
+// from new_center LAST so the player always wins in his region.
+void pan_bridge_seams(TransitionShellCtx& ctx,
+                      std::vector<std::uint8_t>& strip, int lo, int new_s,
+                      const FrameBuffer& new_center, bool slot0_real,
+                      bool slot3_real) {
+    {
+        std::vector<std::pair<int, int>> real_slots = {{1, lo + 1},
+                                                       {2, lo + 2}};
+        if (slot0_real) real_slots.push_back({0, lo});
+        if (slot3_real) real_slots.push_back({3, lo + 3});
+        std::vector<std::pair<int, presentation::LevelRenderAssets>>
+            slot_assets;
+        std::vector<std::pair<int, int>> bands;   // strip-x [lo, hi)
+        presentation::RenderTarget srt{strip.data(), kStripW, kStripH, 1,
+                                       nullptr, nullptr};
+        for (const auto& slot_scr : real_slots) {
+            // Named locals, not a structured binding, so the spill lambda below
+            // can capture `slot` under C++17 (capturing a structured binding is
+            // a C++20 extension).
+            const int slot = slot_scr.first;
+            const int scr = slot_scr.second;
+            presentation::LevelRenderAssets ra;
+            systems::SystemsState sst;
+            ctx.build_assets(scr, ra, sst);
+            auto spill = [&](bool right_edge) {
+                srt.origin_x = slot * 320;
+                srt.clip_x_lo =
+                    right_edge ? (slot + 1) * 320 : -(1 << 28);
+                srt.clip_x_hi =
+                    right_edge ? (1 << 28) : slot * 320;
+                int ext_lo = 1 << 28, ext_hi = -(1 << 28);
+                for (const auto& tp :
+                     presentation::tile_patterns::seam_straddling_tiles(
+                         ra.tiles, ra.tile_sprites, right_edge)) {
+                    if (tp.sprite_idx < 0 ||
+                        tp.sprite_idx >=
+                            static_cast<int>(ra.tile_sprites.size()))
+                        continue;
+                    const auto& spr =
+                        ra.tile_sprites[static_cast<std::size_t>(
+                            tp.sprite_idx)];
+                    presentation::blit_sprite(srt, spr, ra.palette,
+                                              tp.x, tp.y);
+                    const int sx = slot * 320;
+                    if (right_edge) {
+                        ext_lo = std::min(ext_lo, sx + 320);
+                        ext_hi = std::max(ext_hi, sx + tp.x + spr.width);
+                    } else {
+                        ext_lo = std::min(ext_lo, sx + tp.x);
+                        ext_hi = std::max(ext_hi, sx);
+                    }
+                }
+                if (ext_hi > ext_lo) bands.emplace_back(ext_lo, ext_hi);
+            };
+            spill(/*right_edge=*/true);
+            spill(/*right_edge=*/false);
+            slot_assets.emplace_back(slot, std::move(ra));
+        }
+        // Authored seam holes bridged across adjacent REAL slots —
+        // the same tile_patterns::seam_row_bridges the steady view
+        // uses (the L7 S1|S2 jumppad rail), so a hole doesn't
+        // reappear for the duration of the pan.  Bridge blits join
+        // the bands, so the authored-redraw + player-box passes
+        // below apply to them too.
+        for (const auto& [sa, ra_a] : slot_assets)
+            for (const auto& [sb, ra_b] : slot_assets) {
+                if (sb != sa + 1) continue;
+                srt.origin_x = sa * 320;
+                srt.clip_x_lo = -(1 << 28);
+                srt.clip_x_hi = 1 << 28;
+                int ext_lo = 1 << 28, ext_hi = -(1 << 28);
+                for (const auto& tb :
+                     presentation::tile_patterns::seam_row_bridges(
+                         ra_a.tiles, ra_a.backdrop_tile_count,
+                         ra_b.tiles, ra_b.backdrop_tile_count,
+                         ra_a.tile_sprites)) {
+                    if (tb.sprite_idx < 0 ||
+                        tb.sprite_idx >=
+                            static_cast<int>(ra_a.tile_sprites.size()))
+                        continue;
+                    const auto& spr =
+                        ra_a.tile_sprites[static_cast<std::size_t>(
+                            tb.sprite_idx)];
+                    presentation::blit_sprite(srt, spr, ra_a.palette,
+                                              tb.x, tb.y);
+                    ext_lo = std::min(ext_lo, sa * 320 + tb.x);
+                    ext_hi = std::max(ext_hi,
+                                      sa * 320 + tb.x + spr.width);
+                }
+                if (ext_hi > ext_lo) bands.emplace_back(ext_lo, ext_hi);
+            }
+        // Authored tiles win — but ONLY inside the received bands.
+        for (const auto& [blo, bhi] : bands) {
+            for (const auto& [slot, ra] : slot_assets) {
+                const int slo = std::max(blo, slot * 320);
+                const int shi = std::min(bhi, (slot + 1) * 320);
+                if (slo >= shi) continue;
+                srt.origin_x = slot * 320;
+                srt.clip_x_lo = slo;
+                srt.clip_x_hi = shi;
+                const int n0 = std::max(0, ra.backdrop_tile_count);
+                for (std::size_t ti = static_cast<std::size_t>(n0);
+                     ti < ra.tiles.size(); ++ti) {
+                    const auto& tp = ra.tiles[ti];
+                    if (tp.sprite_idx < 0 ||
+                        tp.sprite_idx >=
+                            static_cast<int>(ra.tile_sprites.size()))
+                        continue;
+                    presentation::blit_sprite(
+                        srt,
+                        ra.tile_sprites[static_cast<std::size_t>(
+                            tp.sprite_idx)],
+                        ra.palette, tp.x, tp.y);
+                }
+            }
+        }
+        // The player rides the incoming slot BAKED into new_center —
+        // restore his box from it last, so neither an overhang nor the
+        // band redraw can cover him (compose order: player above all).
+        if (!bands.empty()) {
+            const int pslot = new_s - lo;
+            const int bx0 = std::max(0, ctx.state->player.x - 16);
+            const int bx1 = std::min(320, ctx.state->player.x + 48);
+            const int by0 = std::max(0, ctx.state->player.y - 24);
+            const int by1 = std::min(kStripH, ctx.state->player.y + 48);
+            for (int y = by0; y < by1; ++y)
+                std::memcpy(
+                    &strip[(static_cast<std::size_t>(y) * kStripW +
+                            static_cast<std::size_t>(pslot) * 320 +
+                            bx0) * 4],
+                    &new_center.px[(static_cast<std::size_t>(y) * 320 +
+                                    bx0) * 4],
+                    static_cast<std::size_t>(bx1 - bx0) * 4);
+        }
+    }
+}
+
 void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
                         const FrameBuffer& new_center) {
     const bool smooth_t = ctx.smooth_motion;
     const Uint32 step_ms = smooth_t ? (1000 / 60) : ctx.frame_ms;
-    const int M = ctx.ws_margin, WN = ctx.ws_native_w, H = 200;
+    const int M = ctx.ws_margin, WN = ctx.ws_native_w;
+    const int H = kStripH;
     const int count = ctx.screen_count;
     const int lo = std::min(old_s, new_s) - 1;   // strip slot0 = lo
-    constexpr int kStripW = 4 * 320;
     std::vector<std::uint8_t> strip(
         static_cast<std::size_t>(kStripW) * H * 4, 0);
     auto put_slot = [&](int i, const FrameBuffer& src) {
@@ -593,151 +742,8 @@ void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
             /*origin_x=*/(core::kLastScreen - lo) * 320,
             /*buf_w=*/kStripW, strip);
     // ── Seam-column continuity across the strip (tile_patterns) ──────
-    // Same laws as the steady wide compose: a trunk/pillar straddling a
-    // screen edge must not cut at a slot boundary mid-pan (the
-    // S12→S13→S14 transient vertical cut).  For every REAL slot, blit
-    // its screen's straddling columns so the overhang crosses into the
-    // adjacent slot — clipped away from its OWN slot (the in-slot part
-    // is already drawn with the authored z-order).
-    //
-    // CAUTION — the strip slots are FULL composes with ENTITIES (and
-    // the new slot carries the BAKED PLAYER), unlike the steady static
-    // bg.  A whole-slot "authored tiles win" redraw buried the player
-    // under the 144-wide bark tiles (user repro: S12→S13 walk, player
-    // vanished for the whole pan).  So the level-tile redraw is
-    // restricted to the exact BANDS an overhang actually landed on
-    // (≤ ~32 px past a boundary), and the player's own box is restored
-    // from new_center LAST so the player always wins in his region.
-    {
-        std::vector<std::pair<int, int>> real_slots = {{1, lo + 1},
-                                                       {2, lo + 2}};
-        if (slot0_real) real_slots.push_back({0, lo});
-        if (slot3_real) real_slots.push_back({3, lo + 3});
-        std::vector<std::pair<int, presentation::LevelRenderAssets>>
-            slot_assets;
-        std::vector<std::pair<int, int>> bands;   // strip-x [lo, hi)
-        presentation::RenderTarget srt{strip.data(), kStripW, H, 1,
-                                       nullptr, nullptr};
-        for (const auto& slot_scr : real_slots) {
-            // Named locals, not a structured binding, so the spill lambda below
-            // can capture `slot` under C++17 (capturing a structured binding is
-            // a C++20 extension).
-            const int slot = slot_scr.first;
-            const int scr = slot_scr.second;
-            presentation::LevelRenderAssets ra;
-            systems::SystemsState sst;
-            ctx.build_assets(scr, ra, sst);
-            auto spill = [&](bool right_edge) {
-                srt.origin_x = slot * 320;
-                srt.clip_x_lo =
-                    right_edge ? (slot + 1) * 320 : -(1 << 28);
-                srt.clip_x_hi =
-                    right_edge ? (1 << 28) : slot * 320;
-                int ext_lo = 1 << 28, ext_hi = -(1 << 28);
-                for (const auto& tp :
-                     presentation::tile_patterns::seam_straddling_tiles(
-                         ra.tiles, ra.tile_sprites, right_edge)) {
-                    if (tp.sprite_idx < 0 ||
-                        tp.sprite_idx >=
-                            static_cast<int>(ra.tile_sprites.size()))
-                        continue;
-                    const auto& spr =
-                        ra.tile_sprites[static_cast<std::size_t>(
-                            tp.sprite_idx)];
-                    presentation::blit_sprite(srt, spr, ra.palette,
-                                              tp.x, tp.y);
-                    const int sx = slot * 320;
-                    if (right_edge) {
-                        ext_lo = std::min(ext_lo, sx + 320);
-                        ext_hi = std::max(ext_hi, sx + tp.x + spr.width);
-                    } else {
-                        ext_lo = std::min(ext_lo, sx + tp.x);
-                        ext_hi = std::max(ext_hi, sx);
-                    }
-                }
-                if (ext_hi > ext_lo) bands.emplace_back(ext_lo, ext_hi);
-            };
-            spill(/*right_edge=*/true);
-            spill(/*right_edge=*/false);
-            slot_assets.emplace_back(slot, std::move(ra));
-        }
-        // Authored seam holes bridged across adjacent REAL slots —
-        // the same tile_patterns::seam_row_bridges the steady view
-        // uses (the L7 S1|S2 jumppad rail), so a hole doesn't
-        // reappear for the duration of the pan.  Bridge blits join
-        // the bands, so the authored-redraw + player-box passes
-        // below apply to them too.
-        for (const auto& [sa, ra_a] : slot_assets)
-            for (const auto& [sb, ra_b] : slot_assets) {
-                if (sb != sa + 1) continue;
-                srt.origin_x = sa * 320;
-                srt.clip_x_lo = -(1 << 28);
-                srt.clip_x_hi = 1 << 28;
-                int ext_lo = 1 << 28, ext_hi = -(1 << 28);
-                for (const auto& tb :
-                     presentation::tile_patterns::seam_row_bridges(
-                         ra_a.tiles, ra_a.backdrop_tile_count,
-                         ra_b.tiles, ra_b.backdrop_tile_count,
-                         ra_a.tile_sprites)) {
-                    if (tb.sprite_idx < 0 ||
-                        tb.sprite_idx >=
-                            static_cast<int>(ra_a.tile_sprites.size()))
-                        continue;
-                    const auto& spr =
-                        ra_a.tile_sprites[static_cast<std::size_t>(
-                            tb.sprite_idx)];
-                    presentation::blit_sprite(srt, spr, ra_a.palette,
-                                              tb.x, tb.y);
-                    ext_lo = std::min(ext_lo, sa * 320 + tb.x);
-                    ext_hi = std::max(ext_hi,
-                                      sa * 320 + tb.x + spr.width);
-                }
-                if (ext_hi > ext_lo) bands.emplace_back(ext_lo, ext_hi);
-            }
-        // Authored tiles win — but ONLY inside the received bands.
-        for (const auto& [blo, bhi] : bands) {
-            for (const auto& [slot, ra] : slot_assets) {
-                const int slo = std::max(blo, slot * 320);
-                const int shi = std::min(bhi, (slot + 1) * 320);
-                if (slo >= shi) continue;
-                srt.origin_x = slot * 320;
-                srt.clip_x_lo = slo;
-                srt.clip_x_hi = shi;
-                const int n0 = std::max(0, ra.backdrop_tile_count);
-                for (std::size_t ti = static_cast<std::size_t>(n0);
-                     ti < ra.tiles.size(); ++ti) {
-                    const auto& tp = ra.tiles[ti];
-                    if (tp.sprite_idx < 0 ||
-                        tp.sprite_idx >=
-                            static_cast<int>(ra.tile_sprites.size()))
-                        continue;
-                    presentation::blit_sprite(
-                        srt,
-                        ra.tile_sprites[static_cast<std::size_t>(
-                            tp.sprite_idx)],
-                        ra.palette, tp.x, tp.y);
-                }
-            }
-        }
-        // The player rides the incoming slot BAKED into new_center —
-        // restore his box from it last, so neither an overhang nor the
-        // band redraw can cover him (compose order: player above all).
-        if (!bands.empty()) {
-            const int pslot = new_s - lo;
-            const int bx0 = std::max(0, ctx.state->player.x - 16);
-            const int bx1 = std::min(320, ctx.state->player.x + 48);
-            const int by0 = std::max(0, ctx.state->player.y - 24);
-            const int by1 = std::min(H, ctx.state->player.y + 48);
-            for (int y = by0; y < by1; ++y)
-                std::memcpy(
-                    &strip[(static_cast<std::size_t>(y) * kStripW +
-                            static_cast<std::size_t>(pslot) * 320 +
-                            bx0) * 4],
-                    &new_center.px[(static_cast<std::size_t>(y) * 320 +
-                                    bx0) * 4],
-                    static_cast<std::size_t>(bx1 - bx0) * 4);
-        }
-    }
+    pan_bridge_seams(ctx, strip, lo, new_s, new_center, slot0_real,
+                     slot3_real);
     // Upscale the static strip ONCE (omniscale included) — the pan then
     // windows the pre-upscaled HD strip per frame with NO per-frame
     // upscale (was the choppiness; mirrors the steady-state cache #61).
@@ -788,11 +794,7 @@ void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
         ctx.present_wide_transition(work, /*with_hud=*/true,
                                     /*pre_upscaled=*/true);
         paced(ctx, step_ms);
-        SDL_Event e2;
-        while (SDL_PollEvent(&e2)) {
-            if (handle_fullscreen_toggle(e2, ctx.win)) continue;
-            if (e2.type == SDL_QUIT) *ctx.running = false;
-        }
+        if (!poll_screen_events(ctx.win)) *ctx.running = false;
     }
 }
 

@@ -25,10 +25,8 @@
 namespace olduvai::presentation {
 
 using core::Entity;
-using core::MonsterState;
 using core::ObjType;
 using formats::Rgb;
-using formats::Sprite;
 
 namespace {
 // Blit a full-frame 320x200 RGBA source into the target.  scale 1 = direct
@@ -314,14 +312,19 @@ void continue_l1_end_water(const systems::SystemsState& state,
         blit_sprite(wt, water, a.palette, x, water_y);
 }
 
+const SeamTiles::Tiles SeamTiles::kNone{};
+
 void compose_static_wide_bg_native(
     systems::SystemsState& state, const LevelRenderAssets& a, int margin,
     const FrameBuffer* left, const FrameBuffer* right,
     const FrameBuffer* backdrop, std::vector<std::uint8_t>& wide,
-    const std::vector<LevelRenderAssets::TileDraw>& left_seam,
-    const std::vector<LevelRenderAssets::TileDraw>& right_seam,
-    const std::vector<LevelRenderAssets::TileDraw>& left_bridge,
-    const std::vector<LevelRenderAssets::TileDraw>& right_bridge) {
+    SeamTiles seams) {
+    // Bind back to the names the body uses; the body below is unchanged.
+    const auto& left_seam = seams.left;
+    const auto& right_seam = seams.right;
+    const auto& left_bridge = seams.left_bridge;
+    const auto& right_bridge = seams.right_bridge;
+
     // Compose the centre static layer at native 320, assemble the wide native
     // buffer (margins from neighbours / backdrop / self-tile), and extend the
     // background LAYERS into any no-neighbour margin so the backdrop, a spilling
@@ -356,13 +359,13 @@ void compose_static_wide_bg_native(
     const bool l3_deadend_right =
         state.current_level == 3 && right == nullptr &&
         (state.current_screen == 9 || state.current_screen == 17);
-    compose_widescreen(wide, margin, center, left, right, /*hud_rows=*/0,
+    compose_widescreen(wide, margin, center, left, right, MarginFill{/*hud_rows=*/0,
                        backdrop, /*reflect_pure=*/false,
                        /*margin_edge_brightness=*/1.0f,
                        /*repeat_no_backdrop=*/state.secret_flag == 0,
                        /*ground_backdrop=*/l1_end && backdrop != nullptr,
                        /*void_ground_left=*/false,
-                       /*void_ground_right=*/l3_deadend_right);
+                       /*void_ground_right=*/l3_deadend_right});
     const int wide_w = 320 + 2 * margin;
     // Tile-based surface levels (internal 3/7 — no FOND backdrop): a
     // no-neighbour margin gets a BLACK BASE before the tile layer-extension
@@ -567,15 +570,24 @@ void compose_static_wide_bg_native(
 
 const std::vector<std::uint8_t>& get_static_wide_bg_hd(
     systems::SystemsState& state, const LevelRenderAssets& a, int scale,
-    const std::string& profile, int margin,
-    const FrameBuffer* left, int left_screen,
-    const FrameBuffer* right, int right_screen,
-    const FrameBuffer* backdrop,
-    const std::vector<LevelRenderAssets::TileDraw>& left_seam,
-    const std::vector<LevelRenderAssets::TileDraw>& right_seam,
-    const std::vector<LevelRenderAssets::TileDraw>& left_bridge,
-    const std::vector<LevelRenderAssets::TileDraw>& right_bridge,
-    std::uint64_t peek_generation) {
+    const std::string& profile, int margin, const WidePeek& peek) {
+    // Local aliases keep the body below byte-identical to the fifteen-parameter
+    // version: only the boundary changed (§3.9), not a line of the compose.
+    static const std::vector<LevelRenderAssets::TileDraw> kNoTiles;
+    const FrameBuffer* left = peek.left;
+    const int left_screen = peek.left_screen;
+    const FrameBuffer* right = peek.right;
+    const int right_screen = peek.right_screen;
+    const FrameBuffer* backdrop = peek.backdrop;
+    const std::vector<LevelRenderAssets::TileDraw>& left_seam =
+        peek.left_seam != nullptr ? *peek.left_seam : kNoTiles;
+    const std::vector<LevelRenderAssets::TileDraw>& right_seam =
+        peek.right_seam != nullptr ? *peek.right_seam : kNoTiles;
+    const std::vector<LevelRenderAssets::TileDraw>& left_bridge =
+        peek.left_bridge != nullptr ? *peek.left_bridge : kNoTiles;
+    const std::vector<LevelRenderAssets::TileDraw>& right_bridge =
+        peek.right_bridge != nullptr ? *peek.right_bridge : kNoTiles;
+    const std::uint64_t peek_generation = peek.generation;
     std::uint64_t key = static_bg_key(state, a, scale, profile);
     auto mix = [&](std::uint64_t v) { key ^= v; key *= 1099511628211ull; };
     mix(0x57494445ull);   // "WIDE" salt — never collide with the 320 cache
@@ -608,8 +620,8 @@ const std::vector<std::uint8_t>& get_static_wide_bg_hd(
     const int wide_w = 320 + 2 * margin;
     std::vector<std::uint8_t> wide;
     compose_static_wide_bg_native(state, a, margin, left, right, backdrop, wide,
-                                  left_seam, right_seam, left_bridge,
-                                  right_bridge);
+                                  SeamTiles{left_seam, right_seam, left_bridge,
+                                            right_bridge});
     g_static_wide_bg_cache.push_front(WideBgEntry{
         key, margin, enhance::upscale_rgba(wide, wide_w, 200, scale, profile)});
     while (g_static_wide_bg_cache.size() > kStaticWideBgCacheMax)

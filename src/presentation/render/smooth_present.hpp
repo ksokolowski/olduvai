@@ -44,6 +44,11 @@ inline int smooth_subframe_count(SDL_Window* win) {
     }
     int n = std::clamp(static_cast<int>(std::lround(refresh_hz / 18.0)), 4, 5);
     if (const char* ov = std::getenv("OLDUVAI_SMOOTH_SUBFRAMES")) {
+        // atoi is safe HERE because the range check below is the validation:
+        // garbage parses to 0, 0 is outside [1,12], so a typo keeps the
+        // computed default instead of becoming one. Same policy parse_num
+        // gives config keys, arrived at by a guard the check cannot see.
+        // NOLINTNEXTLINE(bugprone-unchecked-string-to-number-conversion)
         const int v = std::atoi(ov);
         if (v >= 1 && v <= 12) n = v;
     }

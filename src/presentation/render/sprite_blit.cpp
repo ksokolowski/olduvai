@@ -17,6 +17,63 @@ namespace olduvai::presentation {
 using formats::Rgb;
 using formats::Sprite;
 
+namespace {
+
+// Blit an already-upscaled block to (fx, fy), clipped and alpha-composited.
+//
+// The one half of the HD path that `blit_sprite` and `blit_sprite_keyed` share
+// VERBATIM — thirty-three byte-identical lines, the largest clone in the tree
+// when it was measured.  Everything the two do differently (flip vs
+// background-key) is a decision about the SOURCE pixel and is already finished
+// by the time `hd` exists; from here on there is nothing left to disagree
+// about, which is why this half extracts without a per-pixel callback and the
+// native loop above it does not.  (The 2026-07-24 dedup audit retired the
+// NATIVE loop as churn for exactly that reason — it is a different block.)
+//
+// Rounding is at HD resolution, not native: a slow bubble rising 1px/logic
+// frame lerps to native sub-pixels 0.0/0.33/0.67 across the three 54 Hz
+// sub-frames, and truncated at native those collapse to one pixel (visible
+// 18 Hz stepping); at scale 4 they are 0/1.33/2.67 → distinct HD pixels, so the
+// sub-frame interpolation actually shows.  Integer callers round-trip exactly
+// (positions < 2^24), so this stays byte-identical for them.
+void blit_hd_block(RenderTarget& t, const enhance::HdAsset& hd, float fx,
+                   float fy) {
+    const int ox = static_cast<int>(std::lround((fx + t.origin_x) * t.scale));
+    const int oy = static_cast<int>(std::lround(fy * t.scale));
+    for (int sy = 0; sy < hd.h; ++sy) {
+        const int dy = oy + sy;
+        if (dy < 0 || dy >= t.h || dy >= t.clip_y) continue;
+        for (int sx = 0; sx < hd.w; ++sx) {
+            const std::size_t so =
+                (static_cast<std::size_t>(sy) * hd.w + sx) * 4;
+            const std::uint8_t av = hd.px[so + 3];
+            if (av == 0) continue;
+            const int dx = ox + sx;
+            if (dx < 0 || dx >= t.w || dx < t.clip_x_lo || dx >= t.clip_x_hi) continue;
+            const std::size_t off =
+                (static_cast<std::size_t>(dy) * t.w + dx) * 4;
+            if (av == 255) {
+                t.px[off] = hd.px[so];
+                t.px[off + 1] = hd.px[so + 1];
+                t.px[off + 2] = hd.px[so + 2];
+            } else {
+                // Partial-alpha edge from the blending scaler — composite over
+                // the already-drawn opaque background for a smooth silhouette.
+                const int ia = 255 - av;
+                t.px[off] = static_cast<std::uint8_t>(
+                    (hd.px[so] * av + t.px[off] * ia) / 255);
+                t.px[off + 1] = static_cast<std::uint8_t>(
+                    (hd.px[so + 1] * av + t.px[off + 1] * ia) / 255);
+                t.px[off + 2] = static_cast<std::uint8_t>(
+                    (hd.px[so + 2] * av + t.px[off + 2] * ia) / 255);
+            }
+            t.px[off + 3] = 255;
+        }
+    }
+}
+
+}  // namespace
+
 void blit_sprite(RenderTarget& t, const Sprite& s,
                  const std::vector<Rgb>& pal, int x, int y, bool flip_h) {
     // Integer entry → float core (round-trips exactly, positions < 2^24), so
@@ -76,42 +133,7 @@ void blit_sprite(RenderTarget& t, const Sprite& s,
             rgba[o + 3] = 255;
         }
     const auto& hd = t.cache->get(rgba, w, h, t.scale, *t.profile);
-    // Round the destination at HD resolution (see blit_sprite_keyed): a float
-    // position lerped between logic ticks then advances by whole HD pixels each
-    // sub-frame instead of snapping to the native grid (4-HD-px steps).
-    const int ox =
-        static_cast<int>(std::lround((fx + t.origin_x) * t.scale));
-    const int oy = static_cast<int>(std::lround(fy * t.scale));
-    for (int sy = 0; sy < hd.h; ++sy) {
-        const int dy = oy + sy;
-        if (dy < 0 || dy >= t.h || dy >= t.clip_y) continue;
-        for (int sx = 0; sx < hd.w; ++sx) {
-            const std::size_t so =
-                (static_cast<std::size_t>(sy) * hd.w + sx) * 4;
-            const std::uint8_t av = hd.px[so + 3];
-            if (av == 0) continue;
-            const int dx = ox + sx;
-            if (dx < 0 || dx >= t.w || dx < t.clip_x_lo || dx >= t.clip_x_hi) continue;
-            const std::size_t off =
-                (static_cast<std::size_t>(dy) * t.w + dx) * 4;
-            if (av == 255) {
-                t.px[off] = hd.px[so];
-                t.px[off + 1] = hd.px[so + 1];
-                t.px[off + 2] = hd.px[so + 2];
-            } else {
-                // Partial-alpha edge from the blending scaler — composite over
-                // the already-drawn opaque background for a smooth silhouette.
-                const int ia = 255 - av;
-                t.px[off] = static_cast<std::uint8_t>(
-                    (hd.px[so] * av + t.px[off] * ia) / 255);
-                t.px[off + 1] = static_cast<std::uint8_t>(
-                    (hd.px[so + 1] * av + t.px[off + 1] * ia) / 255);
-                t.px[off + 2] = static_cast<std::uint8_t>(
-                    (hd.px[so + 2] * av + t.px[off + 2] * ia) / 255);
-            }
-            t.px[off + 3] = 255;
-        }
-    }
+    blit_hd_block(t, hd, fx, fy);
 }
 
 void blit_sprite(FrameBuffer& fb, const Sprite& s,
@@ -200,45 +222,7 @@ void blit_sprite_keyed(RenderTarget& t, const Sprite& s,
         }
     const auto& hd =
         t.cache->get(rgba, w, h, t.scale, *t.profile, /*bleed=*/false);
-    // Round the destination at HD resolution, NOT native: a slow bubble rising
-    // 1px/logic-frame lerps to native sub-pixels 0.0/0.33/0.67 across the three
-    // 54Hz sub-frames — truncated at native those collapse to one pixel (visible
-    // 18Hz stepping); at scale 4 they are 0/1.33/2.67 → distinct HD pixels, so
-    // the sub-frame interpolation actually shows.  Integer callers round-trip
-    // exactly (positions < 2^24), so this is byte-identical for them.
-    const int ox =
-        static_cast<int>(std::lround((fx + t.origin_x) * t.scale));
-    const int oy = static_cast<int>(std::lround(fy * t.scale));
-    for (int sy = 0; sy < hd.h; ++sy) {
-        const int dy = oy + sy;
-        if (dy < 0 || dy >= t.h || dy >= t.clip_y) continue;
-        for (int sx = 0; sx < hd.w; ++sx) {
-            const std::size_t so =
-                (static_cast<std::size_t>(sy) * hd.w + sx) * 4;
-            const std::uint8_t av = hd.px[so + 3];
-            if (av == 0) continue;
-            const int dx = ox + sx;
-            if (dx < 0 || dx >= t.w || dx < t.clip_x_lo || dx >= t.clip_x_hi) continue;
-            const std::size_t off =
-                (static_cast<std::size_t>(dy) * t.w + dx) * 4;
-            if (av == 255) {
-                t.px[off] = hd.px[so];
-                t.px[off + 1] = hd.px[so + 1];
-                t.px[off + 2] = hd.px[so + 2];
-            } else {
-                // Partial-alpha edge from the blending scaler — composite over
-                // the already-drawn opaque background for a smooth silhouette.
-                const int ia = 255 - av;
-                t.px[off] = static_cast<std::uint8_t>(
-                    (hd.px[so] * av + t.px[off] * ia) / 255);
-                t.px[off + 1] = static_cast<std::uint8_t>(
-                    (hd.px[so + 1] * av + t.px[off + 1] * ia) / 255);
-                t.px[off + 2] = static_cast<std::uint8_t>(
-                    (hd.px[so + 2] * av + t.px[off + 2] * ia) / 255);
-            }
-            t.px[off + 3] = 255;
-        }
-    }
+    blit_hd_block(t, hd, fx, fy);
 }
 
 void blit_sprite_keyed(FrameBuffer& fb, const Sprite& s,

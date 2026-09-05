@@ -313,7 +313,12 @@ void run_title_menu(TitleMenuCtx& ctx) {
                         // straight into the chosen level (the CLI --level
                         // semantics), mirroring the Continue handler below.
                         const std::string lv = mbind.get("menu.start_level");
+                        // atoi is safe HERE for the same reason as
+                        // pause_flow's cheat.start_level: menus.json declares
+                        // menu.start_level as type "choice" over [1..7], and
+                        // this engine seeds it at :306. Nothing types into it.
                         if (!lv.empty() && lv != "1")
+                            // NOLINTNEXTLINE(bugprone-unchecked-string-to-number-conversion)
                             display = std::atoi(lv.c_str());
                         want_start = true;
                     }},
@@ -605,8 +610,8 @@ void run_title_menu(TitleMenuCtx& ctx) {
                             }
                             if (main_confirm.is_open())
                                 draw_confirm_vector(menu_overlay.buffer(), ow, oh,
-                                                    menu_font, main_confirm, mfx,
-                                                    mfy, mfw, mfh);
+                                                    menu_font, main_confirm,
+                                                    MenuFrame{mfx, mfy, mfw, mfh});
                             else
                                 draw_menu_vector(menu_overlay.buffer(), ow, oh,
                                                  menu_font, menu,
@@ -615,7 +620,7 @@ void run_title_menu(TitleMenuCtx& ctx) {
                                                  (shot_mode || script_mode)
                                                      ? 0.0f
                                                      : SDL_GetTicks() / 1000.0f,
-                                                 mfx, mfy, mfw, mfh);
+                                                 MenuFrame{mfx, mfy, mfw, mfh});
                             menu_overlay.flush(sw.ren, mld.w, mld.h);
                         }
                     }

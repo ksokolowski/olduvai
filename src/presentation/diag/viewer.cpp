@@ -26,7 +26,6 @@ using formats::MatFile;
 using formats::Pc1Image;
 using formats::Rgb;
 using formats::Sprite;
-using formats::SpriteFormat;
 
 constexpr int kWinW = 960;   // 320 x 3
 constexpr int kWinH = 600;   // 200 x 3

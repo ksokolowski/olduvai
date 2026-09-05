@@ -4,13 +4,18 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include "presentation/env_num.hpp"
 
 namespace olduvai::presentation {
 
 int boss_ws_margin(int out_w, int out_h, const char* force_env) {
     int m;
-    if (force_env != nullptr) {
-        m = std::atoi(force_env);
+    // A force value that is not a number falls through to the computed margin
+    // rather than becoming one: atoi turned OLDUVAI_WS_FORCE_MARGIN=<typo>
+    // into margin 0, i.e. "widescreen with no margins", which looks like a
+    // compose bug rather than like a mistyped variable.
+    if (force_env != nullptr && parse_int(force_env, m)) {
+        // m set by parse_int
     } else {
         const int desired = static_cast<int>(
             std::lround(200.0 * out_w / out_h));

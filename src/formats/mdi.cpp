@@ -106,14 +106,14 @@ int mt32_to_gm(int program) {
     return it == kMap.end() ? program : it->second;
 }
 
-int mdi_track_id(const std::string& n) {
+int mdi_track_id(const std::string& lower_name) {
     static const std::map<std::string, int> kIds = {
         {"mort.mdi", 0}, {"bonus.mdi", 1}, {"bonusbuz.mdi", 1},
         {"rik1.mdi", 2}, {"rik6.mdi", 3}, {"rocky.mdi", 4},
         {"boy16.mdi", 5}, {"intro.mdi", 6}, {"fin.mdi", 7},
         {"rik8.mdi", 8},
     };
-    const auto it = kIds.find(n);
+    const auto it = kIds.find(lower_name);
     return it == kIds.end() ? -1 : it->second;
 }
 

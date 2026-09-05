@@ -126,15 +126,36 @@ public:
 
     void mix(std::int16_t* out, int frames);       // audio-thread callback
 
-    // Headless deterministic render (offline ctor only): load a format-0 MIDI
-    // stream into the sequencer and render `frames` stereo samples by driving
-    // mix() in fixed chunks — the same event quantisation as real playback,
-    // reproducible run-to-run.  Sequencer-backed synths (mt32-builtin / gm)
-    // only; OPL plays raw game-MDI, not the sequencer.  Returns 2*frames s16.
+    // Headless deterministic render (offline ctor only): render `frames` stereo
+    // samples, reproducible run-to-run.  Returns 2*frames s16.
+    //
+    // TWO ARMS, because the backends consume different streams:
+    //   sequencer-backed (mt32-builtin / gm) — loads the format-0 MIDI into
+    //     seq_ and drives mix() in fixed chunks, the same event quantisation
+    //     as real playback;
+    //   OPL — plays the RAW game-MDI container (FF 7F voice patches) through
+    //     opl_music_ directly, because it never goes through the sequencer.
+    // This comment used to say "sequencer-backed only", which is what the OPL
+    // arm was added to stop being true: without it `--render-audio
+    // --music-device opl` printed a digest of silence.
     std::vector<std::int16_t> render_offline(
         const std::vector<std::uint8_t>& midi_stream, int frames);
 
 private:
+    // Constructor phases (§3.7's D shape).  Order is load-bearing:
+    // resolve_and_bake_sfx reads music_backend_, so it runs second.
+    void select_music_backend(const std::string& music_device,
+                              const std::string& rom_dir,
+                              const std::string& soundfont,
+                              const std::string& midi_port,
+                              const std::string& mt32_model);
+    void resolve_and_bake_sfx(const std::string& sfx_backend);
+    // Bake phases of resolve_and_bake_sfx (the ctor-phase shape continued):
+    // resolution stays in the named function, each backend's pre-render is a
+    // method over the members it fills.
+    void bake_opl_sfx();
+    void bake_midi_sfx();
+
     std::uint32_t device_ = 0;
     int device_rate_ = 48000;
     std::uint16_t device_samples_ = 2048;   // for the unplug-reopen path

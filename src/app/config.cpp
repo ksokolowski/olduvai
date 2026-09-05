@@ -95,12 +95,15 @@ std::string config_path() {
     return "olduvai-play.json";   // last resort: beside the exe's cwd
 #else
     const char* xdg = std::getenv("XDG_CONFIG_HOME");
-    std::string base = xdg != nullptr && *xdg != '\0'
-                           ? xdg
-                           : std::string(std::getenv("HOME") != nullptr
-                                             ? std::getenv("HOME") : ".") +
-                                 "/.config";
-    return base + "/olduvai/play.json";
+    if (xdg != nullptr && *xdg != '\0')
+        return std::string(xdg) + "/olduvai/play.json";
+    // getenv ONCE, into a local.  The previous form called it twice — once to
+    // null-test and once to construct from — and nothing makes the second call
+    // return what the first did, so std::string(nullptr) was reachable as
+    // written.  Same early-return shape as the Windows branch above.
+    const char* home = std::getenv("HOME");
+    return std::string(home != nullptr ? home : ".") +
+           "/.config/olduvai/play.json";
 #endif
 }
 

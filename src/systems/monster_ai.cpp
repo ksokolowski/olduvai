@@ -51,162 +51,187 @@ void set_away_sprite(Entity& e, int l3a_phase_counter) {
     e.sprite = use_alt ? e.alt_away_spr : e.away_spr;
 }
 
-}  // namespace
+// What every state handler reads about the world this tick.  A struct rather
+// than eight parameters threaded through six functions (§3.9's parameter
+// bar), and each handler's prologue binds the members straight back to the
+// names its body already used — so the bodies below are VERBATIM moves out of
+// the old single-function state machine, which is what keeps this refactor
+// out of the oracle's way.
+struct MonsterCtx {
+    int px;
+    int py;
+    int frame;
+    const CollisionBitmap* collision;
+    int l3a_phase_counter;
+    bool axe_powered;
+    bool fireball_active;
+    int di;   // e.probe_di, hoisted once by the dispatcher
+    int si;   // e.probe_si
+};
 
-void update_monster(Entity& e, int px, int py, int frame,
-                    const CollisionBitmap* collision,
-                    int l3a_phase_counter, bool axe_powered,
-                    bool fireball_active) {
-    const int di = e.probe_di;
-    const int si = e.probe_si;
-
-    // ── DEAD → respawn if lives remain ──
-    if (state_of(e) >= static_cast<int>(MonsterState::Dead)) {
-        e.fireball_request = 0;
-        if (e.respawns > 0) {
-            e.state = static_cast<int>(MonsterState::Reset);
-            --e.respawns;
-            e.x = e.init_x;
-            e.y = e.init_y;
-            e.direction = 0;
-            e.state_counter = 0;
-            e.ko_counter = 0;
-            e.visible = false;
-            e.facing_left = false;
-        } else {
-            e.active = false;
-        }
-        return;
-    }
-
-    // ── KO: counter counts DOWN from 40 ──
-    if (state_of(e) == static_cast<int>(MonsterState::Ko)) {
-        e.fireball_request = 0;
-        if (e.ko_counter <= 0) e.ko_counter = 40;
-        e.sprite = e.ko_spr + (e.ko_counter & 1);  // +0x10EA
-        // Decrement gated on tick parity (even frames only) — half rate.
-        if ((frame & 1) == 0) --e.ko_counter;      // +0x117E..0x1188
-        if (e.ko_counter <= 0) {                   // expired → recover
-            e.state = static_cast<int>(MonsterState::HeadingPlayer);
-            e.state_counter = 0;
-        }
-        return;
-    }
-
-    // ── RESET: activate when the player is near the monster's Y ──
-    if (state_of(e) == static_cast<int>(MonsterState::Reset)) {
-        if (px <= 2) return;
-        if (py + 30 <= e.y || py - 15 >= e.y) return;
-        e.state = static_cast<int>(MonsterState::Spawn);
+// ── DEAD → respawn if lives remain ──
+void tick_dead(Entity& e) {
+    e.fireball_request = 0;
+    if (e.respawns > 0) {
+        e.state = static_cast<int>(MonsterState::Reset);
+        --e.respawns;
+        e.x = e.init_x;
+        e.y = e.init_y;
+        e.direction = 0;
         e.state_counter = 0;
         e.ko_counter = 0;
-        e.direction = (e.x + 20 >= px) ? 1 : 0;
-        e.visible = true;
-        e.sprite = e.init_spr;
-        return;
+        e.visible = false;
+        e.facing_left = false;
+    } else {
+        e.active = false;
     }
+    return;
+}
 
-    // ── SPAWN: 2-frame spawn animation ──
-    if (state_of(e) == static_cast<int>(MonsterState::Spawn)) {
-        e.sprite = e.init_spr + e.state_counter;
-        ++e.state_counter;
-        if (e.state_counter >= 2) {
-            e.state = static_cast<int>(MonsterState::HeadingPlayer);
-            e.state_counter = 0;
-        }
-        return;
+// ── KO: counter counts DOWN from 40 ──
+void tick_ko(Entity& e, const MonsterCtx& c) {
+    const int frame = c.frame;
+    e.fireball_request = 0;
+    if (e.ko_counter <= 0) e.ko_counter = 40;
+    e.sprite = e.ko_spr + (e.ko_counter & 1);  // +0x10EA
+    // Decrement gated on tick parity (even frames only) — half rate.
+    if ((frame & 1) == 0) --e.ko_counter;      // +0x117E..0x1188
+    if (e.ko_counter <= 0) {                   // expired → recover
+        e.state = static_cast<int>(MonsterState::HeadingPlayer);
+        e.state_counter = 0;
     }
+    return;
+}
 
-    // ── HEADING_PLAYER ──
-    if (state_of(e) == static_cast<int>(MonsterState::HeadingPlayer)) {
-        // Tick-parity gate: odd frame → sprite/facing only.  // +0x0bd7
-        if (frame & 1) {
-            set_heading_sprite(e, l3a_phase_counter);
-            e.facing_left = (e.direction != 0);
-            return;
-        }
+// ── RESET: activate when the player is near the monster's Y ──
+void tick_reset(Entity& e, const MonsterCtx& c) {
+    const int px = c.px, py = c.py;
+    if (px <= 2) return;
+    if (py + 30 <= e.y || py - 15 >= e.y) return;
+    e.state = static_cast<int>(MonsterState::Spawn);
+    e.state_counter = 0;
+    e.ko_counter = 0;
+    e.direction = (e.x + 20 >= px) ? 1 : 0;
+    e.visible = true;
+    e.sprite = e.init_spr;
+    return;
+}
 
-        if (e.direction != 0) e.x -= 4;
-        else e.x += 4;
+// ── SPAWN: 2-frame spawn animation ──
+void tick_spawn(Entity& e) {
+    e.sprite = e.init_spr + e.state_counter;
+    ++e.state_counter;
+    if (e.state_counter >= 2) {
+        e.state = static_cast<int>(MonsterState::HeadingPlayer);
+        e.state_counter = 0;
+    }
+    return;
+}
 
-        bool has_ground = true;
-        if (collision != nullptr) {
-            if (collision->test(e.x + di, e.y + si) ||
-                collision->test(e.x, e.y + si)) {
-                has_ground = false;
+// Edge or obstacle ahead: clamp into the walkable band, reverse, then step
+// back until both probes are clear again.  Split out of tick_heading_player,
+// which sat at exactly 50 — clang-tidy's threshold — so neither half is on the
+// line.  Verbatim move; the 320-step cap is the original's.
+void recover_from_edge(Entity& e, const MonsterCtx& c) {
+    const CollisionBitmap* collision = c.collision;
+    const int di = c.di, si = c.si;
+    if (e.x < 20) e.x = 20;
+    else if (e.x > 275) e.x = 275;
+    e.direction ^= 1;
+    if (collision != nullptr) {
+        for (int n = 0; n < 320; ++n) {
+            if (!collision->test(e.x + di, e.y + si) &&
+                !collision->test(e.x, e.y + si)) {
+                break;
             }
+            if (e.direction != 0) --e.x;
+            else ++e.x;
         }
+    }
+}
 
-        if (e.x >= 20 && e.x <= 275 && has_ground) {
-            if (e.state_counter == 0) {
-                // 3-in-20 random direction flip.  // +0x0D0A
-                const int rng = (frame * 7 + e.x * 13 + e.y) % 20;
-                if (rng == 2 || rng == 12 || rng == 16) e.direction ^= 1;
-                // Player tracking within Y window +10/-5.  // +0x0D37
-                if (py + 10 > e.y && py - 5 < e.y) {
-                    e.direction = (e.x + 20 >= px) ? 1 : 0;
-                }
-            }
-            ++e.state_counter;
-        } else {
-            // Edge/obstacle: clamp, reverse, walk back to solid ground.
-            if (e.x < 20) e.x = 20;
-            else if (e.x > 275) e.x = 275;
-            e.direction ^= 1;
-            if (collision != nullptr) {
-                for (int n = 0; n < 320; ++n) {
-                    if (!collision->test(e.x + di, e.y + si) &&
-                        !collision->test(e.x, e.y + si)) {
-                        break;
-                    }
-                    if (e.direction != 0) --e.x;
-                    else ++e.x;
-                }
-            }
-            ++e.state_counter;
+// Fire-monster fireball spawn + attack sprite.  // +0x0d95..0x0e1c
+// LOS direction uses the ACTUAL player position (intentional divergence from
+// the stored-direction X-check; owner gameplay memory — no visible backward
+// fire in the original).
+void request_fireball_if_in_line(Entity& e, const MonsterCtx& c) {
+    const int px = c.px, py = c.py;
+    if (e.obj_type == ObjType::YellowFuzz && !c.fireball_active) {
+        e.fireball_request = 0;
+        if (std::abs(py - e.y) <= 5 && px != e.x) {
+            const int fire_dir = (px < e.x) ? 1 : 0;
+            e.direction = fire_dir;
+            e.fireball_request = fire_dir + 1;
+            e.sprite = e.spr_num + 2;  // attack sprite
         }
+    }
+}
 
-        e.state_counter &= 7;
+// ── HEADING_PLAYER ──
+void tick_heading_player(Entity& e, const MonsterCtx& c) {
+    const int px = c.px, py = c.py, frame = c.frame;
+    const CollisionBitmap* collision = c.collision;
+    const int l3a_phase_counter = c.l3a_phase_counter;
+    const int di = c.di, si = c.si;
+    // Tick-parity gate: odd frame → sprite/facing only.  // +0x0bd7
+    if (frame & 1) {
         set_heading_sprite(e, l3a_phase_counter);
         e.facing_left = (e.direction != 0);
-
-        // Fire-monster fireball spawn + attack sprite.  // +0x0d95..0x0e1c
-        // LOS direction uses the ACTUAL player position (intentional
-        // divergence from the stored-direction X-check; owner gameplay
-        // memory — no visible backward fire in the original).
-        if (e.obj_type == ObjType::YellowFuzz && !fireball_active) {
-            e.fireball_request = 0;
-            if (std::abs(py - e.y) <= 5 && px != e.x) {
-                const int fire_dir = (px < e.x) ? 1 : 0;
-                e.direction = fire_dir;
-                e.fireball_request = fire_dir + 1;
-                e.sprite = e.spr_num + 2;  // attack sprite
-            }
-        }
         return;
     }
 
-    // ── RUNNING_AWAY ──
-    if (state_of(e) == static_cast<int>(MonsterState::RunningAway)) {
-        // Tick-parity gate (odd frame): counter/sprite only.  // +0x0f5e
-        if (frame & 1) {
-            set_away_sprite(e, l3a_phase_counter);
-            e.facing_left = (e.direction != 0);
-            ++e.state_counter;
-            if (e.state_counter >= 2) {
-                e.state = static_cast<int>(MonsterState::HeadingPlayer);
-                e.direction ^= e.direction_flag;
-                e.state_counter = 0;
-                ++e.ko_counter;
-                // hits_to_ko reached OR axe one-shot → KO.  // +0x10c9
-                if (e.ko_counter >= e.hits_to_ko || axe_powered) {
-                    e.state = static_cast<int>(MonsterState::Ko);
-                    e.ko_counter = 40;
-                }
-            }
-            return;
-        }
+    if (e.direction != 0) e.x -= 4;
+    else e.x += 4;
 
+    bool has_ground = true;
+    if (collision != nullptr) {
+        if (collision->test(e.x + di, e.y + si) ||
+            collision->test(e.x, e.y + si)) {
+            has_ground = false;
+        }
+    }
+
+    if (e.x >= 20 && e.x <= 275 && has_ground) {
+        if (e.state_counter == 0) {
+            // 3-in-20 random direction flip.  // +0x0D0A
+            const int rng = (frame * 7 + e.x * 13 + e.y) % 20;
+            if (rng == 2 || rng == 12 || rng == 16) e.direction ^= 1;
+            // Player tracking within Y window +10/-5.  // +0x0D37
+            if (py + 10 > e.y && py - 5 < e.y) {
+                e.direction = (e.x + 20 >= px) ? 1 : 0;
+            }
+        }
+        ++e.state_counter;
+    } else {
+        recover_from_edge(e, c);
+        ++e.state_counter;
+    }
+
+    e.state_counter &= 7;
+    set_heading_sprite(e, l3a_phase_counter);
+    e.facing_left = (e.direction != 0);
+
+    request_fireball_if_in_line(e, c);
+    return;
+}
+
+// ── RUNNING_AWAY ──
+void tick_running_away(Entity& e, const MonsterCtx& c) {
+    const int frame = c.frame;
+    const CollisionBitmap* collision = c.collision;
+    const int l3a_phase_counter = c.l3a_phase_counter;
+    const bool axe_powered = c.axe_powered;
+    const int di = c.di, si = c.si;
+    // Tick-parity gate (+0x0f5e): the MOVEMENT is even-frame only.  The
+    // sprite/facing/counter tail below runs on every frame either way.
+    //
+    // The EXE writes that tail out twice — once per branch, at +0x10c9 and
+    // +0x10A0 — and so did this, verbatim, for fourteen lines.  Hoisting it
+    // is the same execution in both parities: on an odd frame the movement
+    // is skipped and the tail runs; on an even frame the movement runs and
+    // then the tail.  A structural divergence from the EXE, not a
+    // behavioural one, which is the ordinary trade this port makes.
+    if (!(frame & 1)) {
         // Direction sense reversed from HEADING.
         if (e.direction != 0) e.x += 8;
         else e.x -= 8;
@@ -232,23 +257,46 @@ void update_monster(Entity& e, int px, int py, int frame,
                 }
             }
         }
-
-        set_away_sprite(e, l3a_phase_counter);
-        e.facing_left = (e.direction != 0);
-
-        ++e.state_counter;
-        if (e.state_counter >= 2) {                 // +0x10A0
-            e.state = static_cast<int>(MonsterState::HeadingPlayer);
-            e.direction ^= e.direction_flag;
-            e.state_counter = 0;
-            ++e.ko_counter;
-            if (e.ko_counter >= e.hits_to_ko || axe_powered) {
-                e.state = static_cast<int>(MonsterState::Ko);
-                e.ko_counter = 40;
-            }
-        }
-        return;
     }
+
+    set_away_sprite(e, l3a_phase_counter);
+    e.facing_left = (e.direction != 0);
+
+    ++e.state_counter;
+    if (e.state_counter >= 2) {                 // +0x10A0 / +0x10c9
+        e.state = static_cast<int>(MonsterState::HeadingPlayer);
+        e.direction ^= e.direction_flag;
+        e.state_counter = 0;
+        ++e.ko_counter;
+        // hits_to_ko reached OR axe one-shot → KO.
+        if (e.ko_counter >= e.hits_to_ko || axe_powered) {
+            e.state = static_cast<int>(MonsterState::Ko);
+            e.ko_counter = 40;
+        }
+    }
+    return;
+}
+
+}  // namespace
+
+void update_monster(Entity& e, int px, int py, int frame,
+                    const CollisionBitmap* collision,
+                    int l3a_phase_counter, bool axe_powered,
+                    bool fireball_active) {
+    // One handler per state; every branch of the old chain already ended in
+    // `return`, so this dispatch is the same control flow it replaced.
+    const MonsterCtx c{px, py, frame, collision, l3a_phase_counter,
+                       axe_powered, fireball_active, e.probe_di, e.probe_si};
+
+    const int st = state_of(e);
+    if (st >= static_cast<int>(MonsterState::Dead))          tick_dead(e);
+    else if (st == static_cast<int>(MonsterState::Ko))       tick_ko(e, c);
+    else if (st == static_cast<int>(MonsterState::Reset))    tick_reset(e, c);
+    else if (st == static_cast<int>(MonsterState::Spawn))    tick_spawn(e);
+    else if (st == static_cast<int>(MonsterState::HeadingPlayer))
+        tick_heading_player(e, c);
+    else if (st == static_cast<int>(MonsterState::RunningAway))
+        tick_running_away(e, c);
 }
 
 void update_fish(Entity& e) {

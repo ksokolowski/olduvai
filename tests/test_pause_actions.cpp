@@ -218,9 +218,9 @@ TEST_CASE("configure_pause_bind seeds the enhanced master baseline") {
     ScaledWindow sw;   // null win/ren: SDL_GetWindowFlags(nullptr) is safe
     bool god = false, want_reinit = false;
     PendingReinit rr;
-    int lw = 0, lh = 0;
+    LogicalSize lsz(/*ren=*/nullptr, 0, 0);
     PauseBindWireDeps d{&god, /*audio=*/nullptr, &sw,  &opts, &session,
-                        &want_reinit, &rr, &lw, &lh, /*hd_scale=*/2,
+                        &want_reinit, &rr, &lsz, /*hd_scale=*/2,
                         /*display_level=*/1};
     configure_pause_bind(bind, d);
     CHECK(bind.mem["enhanced"] == "true");

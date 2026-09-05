@@ -113,34 +113,40 @@ inline constexpr int kWideDeadendVoidRows = 24;
 // at the outer screen edge — used by the boss arenas so the mirror-reflected
 // margins recede into cave shadow and the reflection symmetry stops drawing the
 // eye.  The centre 320 is never touched.
+// How the no-neighbour margin is filled.  §3.9: these were EIGHT trailing
+// parameters on compose_widescreen, which every call site already labelled by
+// hand with /*name=*/ comments — the codebase compensating for the width one
+// call at a time.  They are one thing: the margin-fill policy.
+//
+// Field order mirrors the old parameter order exactly, and the defaults are the
+// old defaults, so a call that passed nothing still means what it meant.
+struct MarginFill {
+    int hud_rows = 0;
+    const FrameBuffer* backdrop = nullptr;
+    bool reflect_pure = false;
+    float margin_edge_brightness = 1.0f;
+    // No-backdrop SURFACE levels (dark woods / volcanic) set this to REPEAT the
+    // scene into the no-neighbour margin (torus-wrap) instead of the mirror
+    // self-tile.  Secret rooms + boss arenas leave it false (keep the mirror).
+    bool repeat_no_backdrop = false;
+    // With a `backdrop`, also fill the GROUND band from it instead of mirroring
+    // the near floor — so the no-neighbour margin is PURE backdrop (sky +
+    // mountains), no foreground ground.  Used by L1's mid-air-island end
+    // screen, where the area beside the island should read as open sky.
+    bool ground_backdrop = false;
+    // IMPASSABLE dead-end edge (L3 trunk-entry screen 9 right): void ONLY the
+    // bottom kWideDeadendVoidRows (the chunky dirt/rock floor) of the
+    // no-neighbour margin to black, per side — the grass + forest above still
+    // fill, matching the "just backdrop" look of screen 0's left (whose floor
+    // doesn't reach that edge).  Shallower than the full ground band so the
+    // grass strip isn't cut into a floating shelf.
+    bool void_ground_left = false;
+    bool void_ground_right = false;
+};
+
 void compose_widescreen(std::vector<std::uint8_t>& out, int margin,
                         const FrameBuffer& center,
                         const FrameBuffer* left, const FrameBuffer* right,
-                        int hud_rows = 0,
-                        const FrameBuffer* backdrop = nullptr,
-                        bool reflect_pure = false,
-                        float margin_edge_brightness = 1.0f,
-                        // No-backdrop SURFACE levels (dark woods / volcanic) set
-                        // this to REPEAT the scene into the no-neighbour margin
-                        // (torus-wrap) instead of the mirror self-tile.  Secret
-                        // rooms + boss arenas leave it false (keep the mirror).
-                        bool repeat_no_backdrop = false,
-                        // When a `backdrop` is provided, also fill the GROUND
-                        // band from the backdrop instead of mirroring the near
-                        // floor — so the no-neighbour margin is PURE backdrop
-                        // (sky+mountains), no foreground ground.  Used by L1's
-                        // mid-air-island end screen, where the area beside the
-                        // island should read as open sky, not extended ground.
-                        bool ground_backdrop = false,
-                        // IMPASSABLE dead-end edge (L3 trunk-entry screen 9
-                        // right): void ONLY the bottom kWideDeadendVoidRows (the
-                        // chunky dirt/rock floor) of the no-neighbour margin to
-                        // black, per side — the grass + forest above still fill,
-                        // matching the "just backdrop" look of screen 0's left
-                        // (whose floor doesn't reach that edge).  Shallower than
-                        // the full ground band so the grass strip isn't cut into
-                        // a floating shelf.
-                        bool void_ground_left = false,
-                        bool void_ground_right = false);
+                        MarginFill fill = {});
 
 }  // namespace olduvai::presentation

@@ -173,6 +173,15 @@ ScaledWindow create_scaled_window(const char* title, int logical_w,
     return sw;
 }
 
+bool poll_screen_events(SDL_Window* win) {
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev)) {
+        if (handle_fullscreen_toggle(ev, win)) continue;
+        if (ev.type == SDL_QUIT) return false;
+    }
+    return true;
+}
+
 bool handle_fullscreen_toggle(const SDL_Event& ev, SDL_Window* win) {
     if (win == nullptr || ev.type != SDL_KEYDOWN) return false;
     if (ev.key.keysym.sym != SDLK_RETURN &&

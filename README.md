@@ -29,11 +29,11 @@ copy of the game: see [Getting the game](#getting-the-game) and
 
 ## Status
 
-**Beta — 0.9.5.** The full game is playable natively: all seven levels,
+**Beta — 0.9.6.** The full game is playable natively: all seven levels,
 the three boss fights, caves, secret rooms, flight sequences and the
 ending. Behaviour is validated frame-by-frame against an independent
-reference implementation — a 12-scenario cross-engine corpus plus a
-300-frame golden trace run in CI, with both engines in shared-RNG
+reference implementation — a 13-scenario cross-engine corpus plus
+per-level golden traces run in CI, with both engines in shared-RNG
 lockstep, zero tolerance.
 
 Under the hood, some parts are still convoluted — I know, and I'm not

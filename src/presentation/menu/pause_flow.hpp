@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "presentation/render/logical_size.hpp"
+
 #include <optional>
 
 #include "presentation/menu/confirm_dialog.hpp"   // ConfirmDialog
@@ -81,8 +83,7 @@ struct PauseBindWireDeps {
     SettingsSession* session;
     bool* want_reinit;
     PendingReinit* reinit_req;
-    int* logical_w;
-    int* logical_h;
+    LogicalSize* lsz;
     int hd_scale;
     int display_level;
 };

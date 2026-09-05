@@ -158,6 +158,12 @@ MenuActionTable make_pause_actions(PauseActionsDeps* d) {
         {"cheat_warp", [d] {
             if (d->replay->active()) return;
             const std::string v = d->bind->get("cheat.start_level");
+            // atoi is safe HERE: menus.json declares cheat.start_level as
+            // type "choice" over the closed list [1..7], so this bind only
+            // ever holds a digit this engine wrote (see :228). The user cycles
+            // the choice, never types into it. If it ever becomes a text field
+            // or gets persisted to play.json, this needs a checked parse.
+            // NOLINTNEXTLINE(bugprone-unchecked-string-to-number-conversion)
             const int lvl = v.empty() ? 0 : std::atoi(v.c_str());
             // Leave pause_open set: the run loop's pause block is the only
             // consumer of want_warp — closing the overlay here strands the
@@ -216,14 +222,11 @@ void configure_pause_bind(PauseBindings& bind, const PauseBindWireDeps& d) {
     seed_settings_mem(bind, seed);
     // Tier-1 live Aspect: SDL_RenderSetLogicalSize + update run-loop logical_w/h
     // + rt.aspect. No window/audio rebuild, no reload.
-    bind.apply_aspect = [opts = d.opts, lw = d.logical_w, lh = d.logical_h,
-                         ren = d.sw->ren,
+    bind.apply_aspect = [opts = d.opts, lsz = d.lsz,
                          hd_scale = d.hd_scale](const std::string& v) {
         opts->aspect = v;
         const LogicalDims ld = aspect_logical(hd_scale, v);
-        *lw = ld.w;
-        *lh = ld.h;
-        SDL_RenderSetLogicalSize(ren, ld.w, ld.h);
+        lsz->set(ld.w, ld.h);   // SDL + mirror together (§3.13)
     };
     bind.mem["cheat.start_level"] = std::to_string(d.display_level);
 }

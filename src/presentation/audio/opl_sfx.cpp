@@ -119,13 +119,20 @@ void install_adlib_sfx_voices(const prepare::AdlibSfxVoices& voices) {
     }
 }
 
-std::vector<std::int16_t> render_adlib_sfx(const OplSfxVoice& modulator,
-                                           const OplSfxVoice& carrier,
-                                           int modulator_waveform,
-                                           int carrier_waveform,
-                                           int note, int velocity, int channel,
-                                           int fb_alg, int sample_rate,
-                                           int gate_ms, int tail_ms) {
+std::vector<std::int16_t> render_adlib_sfx(const OplSfxDef& def,
+                                           int sample_rate) {
+    // Bind to the names the body already used; the body below is unchanged.
+    const OplSfxVoice& modulator = def.modulator;
+    const OplSfxVoice& carrier = def.carrier;
+    const int modulator_waveform = def.modulator_waveform;
+    const int carrier_waveform = def.carrier_waveform;
+    const int note = def.note;
+    const int velocity = def.velocity;
+    const int channel = def.channel;
+    const int fb_alg = def.fb_alg;
+    const int gate_ms = def.gate_ms;
+    const int tail_ms = def.tail_ms;
+
     if (channel < 0 || channel > 8) return {};
     if (modulator_waveform < 0 || modulator_waveform > 3) return {};
     if (carrier_waveform < 0 || carrier_waveform > 3) return {};
@@ -211,10 +218,7 @@ std::vector<std::int16_t> render_adlib_sfx_by_id(const std::string& id,
                                                  int sample_rate) {
     const OplSfxDef* d = opl_sfx_lookup(id);
     if (d == nullptr) return {};
-    return render_adlib_sfx(d->modulator, d->carrier, d->modulator_waveform,
-                            d->carrier_waveform, d->note, d->velocity,
-                            d->channel, d->fb_alg, sample_rate, d->gate_ms,
-                            d->tail_ms);
+    return render_adlib_sfx(*d, sample_rate);
 }
 
 }  // namespace olduvai::presentation

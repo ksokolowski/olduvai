@@ -3,6 +3,7 @@
 #include "presentation/diag/reinit_test_hook.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 #include "core/types.hpp"   // core::Entity
@@ -44,7 +45,8 @@ unsigned ent_checksum(const std::vector<core::Entity>& es) {
 }  // namespace
 
 void ReinitTestHook::maybe_write_result(const systems::SystemsState& state,
-                                        SDL_Window* win, bool& running) {
+                                        SDL_Window* win,
+                                        const GameOptions& opts, bool& running) {
     if (path_ == nullptr || !(s_triggered && !s_done)) return;
     s_done = true;
     int out_w = 0, out_h = 0;
@@ -55,12 +57,18 @@ void ReinitTestHook::maybe_write_result(const systems::SystemsState& state,
     const int post_y = state.player.y;
     const int post_entcount = static_cast<int>(state.entities.size());
     const unsigned post_entsum = ent_checksum(state.entities);
+    // Post-reinit present-path derivation — the fields §3.8 exists for.  A
+    // reinit that leaves these stale (the shipped smooth-after-classic bug)
+    // changes nothing the old fields could see.
+    const int post_enhanced = opts.enhanced ? 1 : 0;
+    const int post_smooth = opts.enhance.smooth_motion ? 1 : 0;
     // "wb": the file is machine-parsed by reinit_smoke.sh; text mode on Windows
     // would append \r to the last field and break the shell string compare.
     if (FILE* f = std::fopen(path_, "wb")) {
-        std::fprintf(f, "%d %d %d %d %d %d %d %d %u %u\n", out_w, out_h, s_pre_x,
-                     s_pre_y, post_x, post_y, s_pre_entcount, post_entcount,
-                     s_pre_entsum, post_entsum);
+        std::fprintf(f, "%d %d %d %d %d %d %d %d %u %u %d %d %s\n", out_w,
+                     out_h, s_pre_x, s_pre_y, post_x, post_y, s_pre_entcount,
+                     post_entcount, s_pre_entsum, post_entsum, post_enhanced,
+                     post_smooth, opts.hd_profile.c_str());
         std::fclose(f);
     }
     running = false;
@@ -81,7 +89,17 @@ void ReinitTestHook::maybe_trigger(const systems::SystemsState& state,
     // Force the save→reinit→restore MECHANISM directly (decoupled from the Pause
     // classifier): seed the target fields + raise want_reinit so the pause block
     // captures the snapshot and returns kReinitDisplay.
-    reinit_req.enhanced = opts.enhanced;
+    // OLDUVAI_REINIT_CLASSIC=1 targets the ENHANCED -> CLASSIC switch instead
+    // of a same-mode scale change — the direction the shipped present-path bug
+    // ran (smooth stuck on after Classic), and the one §3.8's gate must drive.
+    // Three targets: same-mode scale change (default), CLASSIC
+    // (OLDUVAI_REINIT_CLASSIC=1 — the shipped bug's direction), and ENHANCED
+    // (OLDUVAI_REINIT_ENHANCED=1 — classic/dos -> enhanced/smooth adoption,
+    // the reverse direction; untested until 2026-08-24 playtest raised it).
+    const bool to_classic = std::getenv("OLDUVAI_REINIT_CLASSIC") != nullptr;
+    const bool to_enhanced = std::getenv("OLDUVAI_REINIT_ENHANCED") != nullptr;
+    reinit_req.enhanced =
+        to_classic ? false : (to_enhanced ? true : opts.enhanced);
     reinit_req.render_scale = 4;
     reinit_req.hd_profile = opts.hd_profile;
     reinit_req.music_device = opts.music_device;

@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.21)
 project(olduvai
-    VERSION 0.9.5
+    VERSION 0.9.6
     DESCRIPTION "Native recreation of the Prehistorik (1991) engine"
     LANGUAGES CXX C)
 
@@ -28,6 +28,26 @@ if(MSVC)
         "MultiThreaded$<$<CONFIG:Debug>:Debug>")   # /MT (/MTd for Debug)
 else()
     add_compile_options(-Wall -Wextra)
+    # §4b #9 extended set (2026-08-24): every flag BELOW measured 0 sites in
+    # src/ at adoption, and the tree still builds clean with them.  MSVC
+    # excluded — its /W3 surface is a separate ledger (see §4b #10's
+    # boss-renderer rows).
+    #
+    # -Wdouble-promotion is NOT in this set, and the note here used to imply it
+    # was ("6 sites, fixed same day").  Re-measured 2026-08-24: 8 warnings over
+    # SIX locations, so nothing was fixed and nothing guards them —
+    #   render/widescreen.cpp:192,193,218,219  (the margin edge gradient)
+    #   render/lerp_snapshot.hpp:59            (the smooth-motion lerp; three
+    #     of the eight, because an inline header function is reported per TU)
+    #   presentation/game_app.cpp:2452
+    # Deliberately deferred rather than adopted: silencing these means writing
+    # `2.0f` where `2.0` is now, which CHANGES the arithmetic — and every one of
+    # them is in float-sensitive code the hash gates pin (the widescreen margin
+    # compose, the smooth-motion lerp).  That is a numerics change needing the
+    # widescreen/transition goldens re-verified, not a warning cleanup, and it
+    # does not belong in a release cut.  BACKLOG §4b #9.
+    add_compile_options(-Wold-style-cast -Wcast-qual -Wformat=2
+                        -Wnon-virtual-dtor -Wextra-semi -Wimplicit-fallthrough)
 endif()
 
 # Treat warnings as errors on demand (default OFF so a stray warning never
@@ -208,6 +228,30 @@ add_library(olduvai_formats
     src/systems/boss_l6.cpp
     src/systems/fluid_bubbles.cpp
 )
+# -Wconversion on the SDL-free engine library only (§4b item 10).  The
+# presentation layer is full of deliberate int<->float pixel math and SDL's own
+# integer types, where the warning is noise; the byte-decoder and gameplay
+# layers are exactly where a silent narrowing is a real bug.
+#
+# -Wno-sign-conversion, measured not assumed: §4b's "~7 sites" estimate
+# predates clang folding -Wsign-conversion into -Wconversion.  With it on, the
+# library reports ~30 warnings and they are ALL the `buf[static index]` int ->
+# size_t idiom — pervasive, deliberate, and not the narrowing bug class this
+# flag is here to catch.  Without it: the value-changing conversions below,
+# each now explicit.
+#
+# GUARDED FOR MSVC, and it was not: `cl` rejects the GCC/Clang spelling outright
+# ("D8021: invalid numeric argument '/Wconversion'") and the whole Windows build
+# died at Configure->Build.  Landed unguarded 2026-08-02, i.e. AFTER v0.9.5 was
+# tagged, so no release had exercised it — the 0.9.6 pre-tag dry run is what
+# surfaced it, which is precisely the failure mode that runbook step exists for
+# (0.9.4 learned it the expensive way, by failing the release itself).  MSVC's
+# nearest equivalent is /W4's C4244/C4267 family and is a separate ledger
+# (§4b #10); do not try to map the flags across.
+if(NOT MSVC)
+    target_compile_options(olduvai_formats PRIVATE -Wconversion -Wno-sign-conversion)
+endif()
+
 target_include_directories(olduvai_formats PUBLIC src)
 target_include_directories(olduvai_formats SYSTEM PUBLIC third_party/stb)
 
@@ -296,6 +340,8 @@ if(SDL2_FOUND)
         src/presentation/render/hud_render.cpp
         src/presentation/diag/debug_overlay.cpp
         src/presentation/sequence/screens.cpp
+        src/presentation/menu/cheat_picker.cpp
+        src/presentation/render/level_surface.cpp
         src/presentation/render/text_overlay.cpp
         src/presentation/title_menu_flow.cpp
         src/presentation/sequence/transition_players.cpp
@@ -325,6 +371,8 @@ if(SDL2_FOUND)
         src/presentation/level/save_state.cpp
         src/presentation/render/widescreen.cpp
         src/presentation/render/boss_widescreen.cpp
+        src/presentation/render/boss_hud.cpp
+        src/presentation/render/boss_arena.cpp
         src/presentation/sequence/l3_end_level.cpp
         third_party/nuked_opl3/opl3.c)
     target_include_directories(olduvai_presentation
@@ -453,6 +501,27 @@ if(SDL2_FOUND)
         # shared library we ship.  EXCLUDE_FROM_ALL so `--target all` does not
         # build munt's install/package targets.
         set(libmt32emu_SHARED OFF CACHE BOOL "" FORCE)
+        # And OFF for its tests, because `src/test/` is PRUNED from the vendored
+        # copy (OLDUVAI-VENDORING.md) while the CMake that builds it is not.
+        #
+        # This is not defensive tidying — the block is LIVE on every configure.
+        # third_party/mt32emu/CMakeLists.txt:26 does `if(NOT DEFINED
+        # BUILD_TESTING) set(BUILD_TESTING TRUE)`, and we define it nowhere
+        # before this line (our own enable_testing() is ~150 lines below), so
+        # munt's test branch is entered every single time. The ONLY thing that
+        # has been stopping it is `find_package(doctest 1.2.9 MODULE)` failing
+        # at :33 and self-disabling at :36 — visible in our own configure log as
+        # "doctest not found, testing unavailable".
+        #
+        # So a host with doctest installed builds a test runner whose sources do
+        # not exist. Found 2026-07-29 on a new macOS Intel box where installing
+        # doctest was enough to break configure; nothing about it is
+        # macOS-specific, and any lane that acquires doctest hits it.
+        #
+        # Forcing the project's OWN option rather than BUILD_TESTING: the latter
+        # is the standard CTest variable, and turning it off wholesale to fix a
+        # vendored subdirectory would be a side effect aimed at the wrong scope.
+        set(libmt32emu_BUILD_TESTING OFF CACHE BOOL "" FORCE)
         add_subdirectory(third_party/mt32emu EXCLUDE_FROM_ALL)
         # munt's LA32 mixer doubles samples with `IntSampleEx(x) << 1` on
         # values that are routinely negative (src/Synth.cpp, DACInputMode_NICE
@@ -627,6 +696,7 @@ add_executable(olduvai_tests EXCLUDE_FROM_ALL
     tests/test_snap_lerp.cpp
     tests/test_mdi.cpp
     tests/test_transitions.cpp
+    tests/test_post_frame_steps.cpp
     tests/test_screen_topology.cpp
     tests/test_upscale.cpp
     tests/test_hd_asset_cache.cpp
@@ -643,7 +713,10 @@ add_executable(olduvai_tests EXCLUDE_FROM_ALL
     tests/test_opl_music.cpp
     tests/test_options_resolve.cpp
     tests/test_options_build.cpp
+    tests/test_cli_args.cpp
+    tests/test_env_num.cpp
     src/app/config.cpp src/app/legacy_cache.cpp
+    src/app/cli_args.cpp
     src/app/options_resolve.cpp
     src/app/options_build.cpp
     src/presentation/audio/opl_music.cpp
@@ -739,12 +812,26 @@ target_include_directories(test_widescreen PRIVATE src)
 add_test(NAME widescreen COMMAND test_widescreen)
 
 # Pure (no-SDL) boss_widescreen helpers test (margin + surgical HUD inpaint +
-# compose_widescreen reflect_pure invariants — Task 6).
+# compose_widescreen reflect_pure invariants — Task 6; plus the §3.18 HUD-bar
+# capture, which is the other half of the same HUD-strip erase).
 add_executable(test_boss_widescreen EXCLUDE_FROM_ALL
     tests/test_boss_widescreen.cpp
     src/presentation/render/boss_widescreen.cpp
+    src/presentation/render/boss_hud.cpp
+    src/presentation/render/hud_render.cpp
+    src/presentation/render/sprite_blit.cpp
     src/presentation/render/widescreen.cpp)
-target_include_directories(test_boss_widescreen PRIVATE src)
+# LINK olduvai_formats rather than hand-listing mat/packbits/hd_text: MSVC
+# resolves every undefined symbol in a pulled-in object, even one the test never
+# calls, so hand-listing means chasing the whole transitive closure —
+# hud_render -> blit_sprite -> HdAssetCache::get -> hd_asset_cache.cpp -> zlib.
+# ld64 and GNU ld dead-strip that chain, which is why this target linked on
+# macOS and Linux for a fortnight while `link.exe` failed with LNK2001/LNK1120
+# (found by the 0.9.6 pre-tag dry run, after §3.18/§3.19 put hud_render.cpp and
+# mat.cpp in here).  olduvai_formats is SDL-free, so the no-SDL property this
+# target exists to hold is preserved — same shape as test_screen_tiles.
+target_include_directories(test_boss_widescreen PRIVATE src third_party/stb)
+target_link_libraries(test_boss_widescreen PRIVATE olduvai_formats)
 add_test(NAME boss_widescreen COMMAND test_boss_widescreen)
 
 add_executable(test_confirm_dialog EXCLUDE_FROM_ALL
@@ -802,6 +889,7 @@ if(SDL2_FOUND)
         tests/test_tile_patterns.cpp
         tests/test_midi_seq.cpp
         tests/test_opl_sfx.cpp
+        tests/test_sdl_audio.cpp
         tests/test_pause_actions.cpp
         tests/test_hud_render_stride.cpp
         tests/test_smooth_subpixel.cpp)
@@ -809,6 +897,12 @@ if(SDL2_FOUND)
     target_link_libraries(olduvai_sdl_tests PRIVATE olduvai_presentation
                                                     ${OLDUVAI_SDL2})
     add_test(NAME sdl_unit COMMAND olduvai_sdl_tests)
+    # Belt and braces with test_sdl_audio.cpp's own SDL_setenv: the SdlAudio
+    # cases need a driver that always opens.  Inheriting the shell's passed on
+    # macOS (CoreAudio) and failed on the Linux CI container, where there is no
+    # sound device — found by the 0.9.6 pre-tag dry run.
+    set_tests_properties(sdl_unit PROPERTIES
+        ENVIRONMENT "SDL_AUDIODRIVER=dummy")
 
     add_executable(test_text_overlay_edit EXCLUDE_FROM_ALL
         tests/test_text_overlay_edit.cpp)
@@ -907,6 +1001,20 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
+    # Level-complete fade gate: the 8b intercept on BOTH present paths, hashed
+    # pre-upscale. Added with §3.7 slice 2 because that path had NO coverage of
+    # any kind — it is reachable only by finishing a level — and 58 lines of it
+    # were about to move. The goldens were captured from the PRE-extraction
+    # binary, so the gate proves the move byte-identical rather than merely
+    # agreeing with itself. Skips (77) when game data is absent.
+    add_test(NAME level_fade
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/level_fade.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(level_fade PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
     # Title-screen Style Apply equivalence: drives the title menu via the
     # OLDUVAI_MENU_SCRIPT walk — apply Enhanced HD at the title, then reboot
     # on the persisted config — and byte-compares the two menu shots (no
@@ -957,6 +1065,182 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
+    # L1 walk-across: the corpus scenario that LEAVES screen 0 (BACKLOG §3.15).
+    # golden_trace runs screen 0 and boss_golden_trace runs the L2 arena, so
+    # until this existed nothing in the corpus crossed a screen boundary and
+    # transitions.cpp sat at 0.00%.  Recorded from this engine, NOT validated
+    # against the oracle — a regression gate, not a parity one; see the script
+    # header.  Additive; skips (77) without game data.
+    add_test(NAME golden_trace_walk
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_walk.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_walk PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # Display level 3 walk = internal L5 — reaches check_l5_transition, which
+    # nothing executed because the corpus only ran L1 and the L2 arena (§3.15).
+    # Shares walk_in.jsonl with golden_trace_walk; only --level differs.
+    add_test(NAME golden_trace_walk_l3
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_walk_l3.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_walk_l3 PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # Display level 7 walk = internal L7 — reaches check_l7_transition, which
+    # nothing executed because the corpus only ran L1 and the L2 arena (§3.15).
+    # Shares walk_in.jsonl with golden_trace_walk; only --level differs.
+    add_test(NAME golden_trace_walk_l7
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_walk_l7.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_walk_l7 PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # Clamp scenario: display 5, screen 10 (§3.16).  These pin the per-screen
+    # walk clamps, nine of which no gate executed before this — display 5 was
+    # not run at all.  Not traversals: the clamps hold the player in place.
+    add_test(NAME golden_trace_l5s10
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l5s10.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l5s10 PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # Clamp scenario: display 5, screen 11 (§3.16).  These pin the per-screen
+    # walk clamps, nine of which no gate executed before this — display 5 was
+    # not run at all.  Not traversals: the clamps hold the player in place.
+    add_test(NAME golden_trace_l5s11
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l5s11.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l5s11 PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # Clamp scenario: display 7, screen 4 (§3.16).  These pin the per-screen
+    # walk clamps, nine of which no gate executed before this — display 5 was
+    # not run at all.  Not traversals: the clamps hold the player in place.
+    add_test(NAME golden_trace_l7s4
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l7s4.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l7s4 PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # L1 secret room: the corpus scenario that goes UNDERWATER (§3.15 step 2).
+    # secret.cpp was 17.9% with three functions nothing executed.  Recorded
+    # from this engine, NOT oracle-validated — see the script header.
+    add_test(NAME golden_trace_secret
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_secret.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_secret PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # L1 cave WITH A BAT (§3.15).  The screen-2 caves hold a spider; only the
+    # screen-6 cave covers update_cave_bat — the last function nothing ran.
+    add_test(NAME golden_trace_cavebat
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_cavebat.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_cavebat PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # L1 fight + deep-run: the first native gates whose input presses ATTACK.
+    # Both inputs adopted verbatim from the oracle repo's scenario corpus
+    # (hand-authored key presses).  deep_run alone takes monster_ai 28.7->44.4%
+    # and collisions 31.8->58.0%; at ~79 s it stays under boss_pause_shot's
+    # 90 s, so the suite's critical path is unchanged.
+    add_test(NAME golden_trace_fight
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_fight.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_fight PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+    add_test(NAME golden_trace_deep_run
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_deep_run.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_deep_run PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # L1 climbing: the corpus scenario that goes UP A LADDER (§3.15).
+    # update_climbing needed Stairs plus the UP key held; no scenario held UP.
+    # Same golden caveat as the others — recorded from this engine.
+    add_test(NAME golden_trace_climb
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_climb.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_climb PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # L4 triceratops fight (§3.15 / RECORDING.md): only L2 had a boss
+    # scenario.  Patrol, tail-pocket club hits, kill zones, respawn i-frames.
+    # Same golden caveat as the others — recorded from this engine.
+    add_test(NAME golden_trace_l4_fight
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l4_fight.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l4_fight PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # L6 giant fight (§3.15): the plate-launch/head-window fight.  Same
+    # golden caveat as the others — recorded from this engine.
+    add_test(NAME golden_trace_l6_fight
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l6_fight.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l6_fight PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # L6 slam kills UNDER SMOOTH MOTION (§3.3c): the only gate that reaches
+    # the pose-hold's logic timing — OLDUVAI_FORCE_SMOOTH=1 overrides the
+    # max_frames and --trace guards for this run shape alone.
+    add_test(NAME golden_trace_l6_slam_hd
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l6_slam_hd.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l6_slam_hd PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # L1 cave: the corpus scenario that goes UNDERGROUND (§3.15 step 3).
+    # cave_logic.cpp was 3.1%; entry needs DOWN held on the entrance, which no
+    # scenario had ever pressed.  Same golden caveat as above.
+    add_test(NAME golden_trace_cave
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_cave.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_cave PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # L4 ride-off victory compose (§3.7 cluster 3).  Until this existed the
+    # branch could be neither reached (FORCE_WIN leaves win_flag at 0) nor
+    # captured (the REAL_SHOT path fell through to the pillarbox present), so a
+    # refactor of it had no gate at all.
+    add_test(NAME boss_l4_victory
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/boss_l4_victory.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(boss_l4_victory PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
     # HD + WIDESCREEN pause overlay compose. pause_shot above pins the CLASSIC
     # path only (--render-scale 1, no --aspect widescreen → margin 0), so the
     # wide/HD pause frame — where the overlay dropped the margins and the HUD —
@@ -966,6 +1250,26 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
                 "${CMAKE_SOURCE_DIR}/game_data"
                 "$<TARGET_FILE:olduvai>")
     set_tests_properties(pause_shot_wide PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # §3.20's two empty display-mode cells: --aspect 4:3 (the only mode with a
+    # different logical HEIGHT, 240) and --aspect stretch (the only mode that
+    # disables logical scaling). Each gate asserts its own output size — proof
+    # the mode took effect — plus a hash distinct from both keep-mode goldens.
+    add_test(NAME pause_shot_43
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/pause_shot_43.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(pause_shot_43 PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    add_test(NAME pause_shot_stretch
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/pause_shot_stretch.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(pause_shot_stretch PROPERTIES
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
@@ -979,6 +1283,45 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
                 "$<TARGET_FILE:olduvai>")
     set_tests_properties(boss_pause_shot PROPERTIES
         SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # CLASSIC (non-HD) boss HUD — BACKLOG §3.19. Every other boss gate passes
+    # --enhanced, so the bitmap HUD had NO coverage: §3.18 stopped it drawing
+    # entirely and the whole suite stayed green. Asserts behaviour, not a hash
+    # — two runs at different lives counts must differ, and only in the digits.
+    # Skips (77) without game data or python3.
+    add_test(NAME boss_classic_hud
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/boss_classic_hud.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(boss_classic_hud PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # Loading card + score tally, across 2 screens x 2 stacks x 2 MODES — the
+    # only coverage the classic (dos) text presenter has, on either stack
+    # (`tally_pause` is reachable from nowhere else), and the gate CLAUDE.md and
+    # BACKLOG §3.14a/§3.16 cite as theirs.
+    #
+    # LABELLED `slow`, AND THAT IS THE POINT. It runs ~256 s, so the `release`
+    # test preset filters label `slow` out and the everyday suite stays ~550 s —
+    # the runtime argument scripts/gate_local.sh has always made. What changes
+    # is that it is now a REGISTERED test rather than a loose script gate_local
+    # invoked by name: there is one registry to read instead of two. A sweep
+    # asking "what covers this?" read `ctest -N`, did not find it, and reported
+    # it as never run — it had been running in gate_local all along. Anything
+    # too slow for the default suite belongs HERE with the label, not outside
+    # the registry (§3.20).
+    #
+    # Run it with:  ctest --preset release -L slow      (gate_local does)
+    #               ctest --preset release-full         (everything)
+    add_test(NAME hd_text_screens
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/hd_text_screens.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(hd_text_screens PROPERTIES
+        SKIP_RETURN_CODE 77
+        LABELS slow
         DEPENDS olduvai)
 
     # In-game menu behaviour baseline: drives the pause menu via OLDUVAI_MENU_SCRIPT
@@ -1041,12 +1384,23 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
     # Win-ending compose gate.  end_sequence.cpp shipped with its own written
     # precondition unmet ("GATE FIRST: game-over/ending have no goldens"), so
     # the last thing a player ever sees was rendered by untested code.  Covers
-    # the ending; the game-over half needs a hook of its own (BACKLOG §6).
+    # the ending; the game-over half is gameover_shot below.
     add_test(NAME ending_shot
         COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/ending_shot.sh"
                 "${CMAKE_SOURCE_DIR}/game_data"
                 "$<TARGET_FILE:olduvai>")
     set_tests_properties(ending_shot PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # Game-over picture golden (BACKLOG §6): the uncapped slam replay reaches
+    # game_over (any --play-frames run sets `single`, which SKIPS the screen),
+    # and OLDUVAI_GAMEOVER_SHOT captures instead of waiting out the hold.
+    add_test(NAME gameover_shot
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/gameover_shot.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(gameover_shot PROPERTIES
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
@@ -1097,7 +1451,7 @@ list(LENGTH _olduvai_tests _olduvai_total)
 # register only the two non-SDL gated tests (screen_tiles, sqz_parity) — as do
 # builds with no shell interpreter, since the other 18 are all .sh-driven.
 if(SDL2_FOUND AND _olduvai_shell_tests)
-    set(_olduvai_gated_expected 20)
+    set(_olduvai_gated_expected 42)   # +1: hd_text_screens, +2: L4/L6 fights, +1: L6 slam-hd, +2: pause 4:3/stretch, +1: gameover_shot
 else()
     set(_olduvai_gated_expected 2)
 endif()

@@ -42,6 +42,7 @@ inline SDL_Keycode menu_token_sym(const std::string& t) {
     if (t == "enter") return SDLK_RETURN;
     if (t == "space") return SDLK_SPACE;
     if (t == "f5")    return SDLK_F5;      // open the bug-report form
+    if (t == "f7")    return SDLK_F7;      // open the --cheats picker
     if (t == "bksp")  return SDLK_BACKSPACE;
     if (t == "del")   return SDLK_DELETE;
     if (t == "home")  return SDLK_HOME;

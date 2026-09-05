@@ -9,6 +9,8 @@
 // releases.
 #include "doctest/doctest.h"
 
+#include "env_shim.hpp"
+
 #include <algorithm>
 #include <cstdlib>
 #include <string>
@@ -43,15 +45,15 @@ TEST_CASE("rom_search_dirs de-duplicates --rom-dir against the environment") {
     const char* prev = std::getenv("OLDUVAI_MT32_ROMS");
     const std::string saved = prev != nullptr ? prev : "";
 #ifndef _WIN32
-    setenv("OLDUVAI_MT32_ROMS", "/dup/roms", 1);
+    olduvai_test::set_env("OLDUVAI_MT32_ROMS", "/dup/roms");
 #else
     _putenv_s("OLDUVAI_MT32_ROMS", "/dup/roms");
 #endif
     const auto dirs = rom_search_dirs("/dup/roms");
     CHECK(std::count(dirs.begin(), dirs.end(), std::string("/dup/roms")) == 1);
 #ifndef _WIN32
-    if (saved.empty()) unsetenv("OLDUVAI_MT32_ROMS");
-    else setenv("OLDUVAI_MT32_ROMS", saved.c_str(), 1);
+    if (saved.empty()) olduvai_test::unset_env("OLDUVAI_MT32_ROMS");
+    else olduvai_test::set_env("OLDUVAI_MT32_ROMS", saved.c_str());
 #else
     _putenv_s("OLDUVAI_MT32_ROMS", saved.c_str());
 #endif

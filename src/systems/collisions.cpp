@@ -20,6 +20,13 @@ namespace {
 
 
 // Per-monster X-right damage bound (data-table word 5).
+//
+// One case per monster type even where consecutive types share a value: this
+// is a TRANSCRIPTION of a per-type data table, not a decision tree, and the
+// 1:1 type->value mapping is the evidence. Merging `YellowFuzz`/`BrownBear`
+// because both read 20 would assert they are the same rule; they are two
+// independent table words that happen to agree, and either can change alone.
+// NOLINTBEGIN(bugprone-branch-clone)
 int monster_x_right(ObjType t) {
     switch (t) {
         case ObjType::RedDino: return 30;
@@ -38,6 +45,7 @@ int monster_x_right(ObjType t) {
 // Per-type KO body-collect score (data-table word 7).  L7B scores 0 — the
 // enemy is a fellow caveman and the table author zeroed it; the score
 // helper's popup search also fails for 0, so no popup either.
+// (Same transcription rule as above — the NOLINT region covers both tables.)
 int monster_ko_score(ObjType t) {
     switch (t) {
         case ObjType::RedDino: return 100;
@@ -53,6 +61,7 @@ int monster_ko_score(ObjType t) {
         default: return 100;
     }
 }
+// NOLINTEND(bugprone-branch-clone)
 
 
 bool is_chimp(ObjType t) {
@@ -512,55 +521,82 @@ void run_club_phase(std::vector<Entity>& entities, const CollisionContext& ctx,
     }
 }
 
+// Spike damage when the player stands on top.  The only arm of the body-phase
+// chain that was written inline; extracted so every arm of that chain reads the
+// same way — `if (t == X) { check_X(...); continue; }` — and the reader can
+// scan the dispatch without one entry unfolding into six lines of geometry.
+void check_peak_spike(Entity& e, const CollisionContext& ctx,
+                      CollisionResult& result) {
+    const int px = ctx.player_x, py = ctx.player_y;
+    if (e.x - 21 < px && px < e.x + 5 && py + 27 > e.y &&
+        e.y - 16 > py) {
+        result.damage = std::max(result.damage, 1);
+    }
+}
+
 void run_body_phase(std::vector<Entity>& entities, const CollisionContext& ctx,
                     CollisionResult& result,
                     const std::set<const Entity*>& club_hit) {
     // ── phase 2: body overlaps ──
+    //
+    // Two switches, not one, because the visibility rule genuinely splits the
+    // dispatch: climb points, cave entrances, cave signs and hidden food are
+    // probed even while INVISIBLE (that is what makes hidden food hidden),
+    // everything else needs a drawn entity.  As an if-chain that rule was a
+    // bare `continue` you had to notice halfway down; here it is the boundary
+    // between the two blocks.
+    //
+    // NOTE on exhaustiveness: both switches carry a `default:`, so -Wswitch
+    // does NOT flag a newly added ObjType here.  That is a deliberate trade —
+    // the alternative is re-listing is_monster's ten monster cases in the
+    // second switch, where they would drift out of sync with is_monster the
+    // first time a monster type is added.  One source of truth for "what is a
+    // monster" beats a compiler warning on this dispatch.
     for (Entity& e : entities) {
         if (!e.active || club_hit.count(&e)) continue;
         const ObjType t = e.obj_type;
 
-        if (t == ObjType::Stairs || t == ObjType::VineL3) {
-            check_climb(e, ctx, result);
-            continue;
+        // Probed regardless of visibility.
+        switch (t) {
+            case ObjType::Stairs:
+            case ObjType::VineL3:       check_climb(e, ctx, result); continue;
+            case ObjType::CaveEntrance: check_cave_entrance(e, ctx, result); continue;
+            case ObjType::CaveSign:     check_cave_sign(e, ctx, result); continue;
+            case ObjType::HiddenFood:   check_hidden_food_pickup(e, ctx, result); continue;
+            default: break;
         }
-        if (t == ObjType::CaveEntrance) { check_cave_entrance(e, ctx, result); continue; }
-        if (t == ObjType::CaveSign) { check_cave_sign(e, ctx, result); continue; }
-        if (t == ObjType::HiddenFood) { check_hidden_food_pickup(e, ctx, result); continue; }
 
         if (!e.visible) continue;
 
-        if (t == ObjType::Peak) {
-            // Spike damage when the player stands on top.
-            const int px = ctx.player_x, py = ctx.player_y;
-            if (e.x - 21 < px && px < e.x + 5 && py + 27 > e.y &&
-                e.y - 16 > py) {
-                result.damage = std::max(result.damage, 1);
-            }
-            continue;
+        switch (t) {
+            case ObjType::Peak:           check_peak_spike(e, ctx, result); break;
+            case ObjType::PeakL7:         check_lava_spring(e, ctx, result); break;
+            case ObjType::Fire:           check_fire(e, ctx, result); break;
+            case ObjType::Fish:           check_fish(e, ctx, result); break;
+            case ObjType::Bird:           check_bird(e, ctx, result); break;
+            case ObjType::JumpingFishL5:  check_jumping_fish(e, ctx, result); break;
+            case ObjType::ChimpL7:        check_chimp_l7(e, ctx, result); break;
+            case ObjType::SecretFood:
+            case ObjType::FoodCave:       check_food_pickup(e, ctx, result); break;
+            case ObjType::AnimatedFoodL3: check_animated_food(e, ctx, result); break;
+            case ObjType::Rock:           check_rock_damage(e, ctx, result); break;
+            case ObjType::CaveSpider:     check_cave_spider(e, ctx, result); break;
+            case ObjType::CaveBat:        check_cave_bat(e, ctx, result); break;
+            case ObjType::Platform:       check_platform(e, ctx, result); break;
+            case ObjType::ProjectileL3:   check_projectile(e, ctx, result); break;
+            case ObjType::SnakeL3:        check_snake(e, ctx, result); break;
+
+            // Body phase does nothing for these — they are handled in the
+            // club phase (Egg, BreakableRockL3) or on pickup elsewhere
+            // (AncestorGhost).  Explicit so the reader does not wonder.
+            case ObjType::Egg:
+            case ObjType::BreakableRockL3:
+            case ObjType::AncestorGhost:  break;
+
+            default:
+                if (is_monster(t)) check_monster_body(e, ctx, result);
+                break;
         }
-        if (t == ObjType::PeakL7) { check_lava_spring(e, ctx, result); continue; }
-        if (t == ObjType::Fire) { check_fire(e, ctx, result); continue; }
-        if (t == ObjType::Fish) { check_fish(e, ctx, result); continue; }
-        if (t == ObjType::Bird) { check_bird(e, ctx, result); continue; }
-        if (t == ObjType::JumpingFishL5) { check_jumping_fish(e, ctx, result); continue; }
-        if (t == ObjType::ChimpL7) { check_chimp_l7(e, ctx, result); continue; }
-        if (t == ObjType::SecretFood || t == ObjType::FoodCave) {
-            check_food_pickup(e, ctx, result);
-            continue;
-        }
-        if (t == ObjType::AnimatedFoodL3) { check_animated_food(e, ctx, result); continue; }
-        if (t == ObjType::Egg || t == ObjType::BreakableRockL3 ||
-            t == ObjType::AncestorGhost) {
-            continue;
-        }
-        if (t == ObjType::Rock) { check_rock_damage(e, ctx, result); continue; }
-        if (is_monster(t)) { check_monster_body(e, ctx, result); continue; }
-        if (t == ObjType::CaveSpider) { check_cave_spider(e, ctx, result); continue; }
-        if (t == ObjType::CaveBat) { check_cave_bat(e, ctx, result); continue; }
-        if (t == ObjType::Platform) { check_platform(e, ctx, result); continue; }
-        if (t == ObjType::ProjectileL3) { check_projectile(e, ctx, result); continue; }
-        if (t == ObjType::SnakeL3) { check_snake(e, ctx, result); continue; }
     }
 }
 

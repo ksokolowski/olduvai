@@ -97,9 +97,25 @@ void draw_tally_rows_overlay(std::vector<std::uint8_t>& out, int ow, int oh,
     const int label_w = std::max({font.measure("BONUS:"), font.measure("LIFE:"),
                                    font.measure("SCORE:")});
     const int gap = static_cast<int>(std::lround(16.0 * ow / 320.0));
-    const int unit_w = std::max({font.measure("888888  x  10"),
-                                 font.measure("888888  x  1000"),
-                                 font.measure("888888")});
+    //   unit_w  : the widest VALUE actually being drawn, floored at the score
+    //             row's width.  This used to reserve "888888  x  1000" — six
+    //             digits in every field — but the real formats are "%d  x  10"
+    //             (bonus, unpadded), "%d  x  1000" (lives, unpadded) and
+    //             "%06ld" (score, always exactly six).  Only the score ever has
+    //             six digits, so the reservation was far wider than anything
+    //             drawn and the whole block sat left of centre inside it: rows
+    //             measured -40, -27 and -50 px off the window centre while the
+    //             title rows were exact.
+    //
+    //             The floor is what keeps the columns from sliding: the score
+    //             is fixed-width, so unit_w cannot shrink below it as the
+    //             counters run, and the anchors only move if a value is
+    //             genuinely wider than the score — which is a real content
+    //             change, not counter noise.
+    int unit_w = font.measure("888888");
+    for (const auto& row : rows) {
+        if (row.align == 2) unit_w = std::max(unit_w, font.measure(row.text));
+    }
     const int content_w = label_w + gap + unit_w;
     const int left = ow / 2 - content_w / 2;
     const int colon_x = left + label_w;   // labels right-aligned, ending here

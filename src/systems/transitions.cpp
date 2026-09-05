@@ -2,10 +2,63 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "systems/transitions.hpp"
 
+#include <climits>
+#include <iterator>
+
 #include "core/constants.hpp"
 #include "core/rng.hpp"
 
 namespace olduvai::systems {
+
+// Per-screen walk boundaries — the x limits a level imposes on the screens
+// that have them.  §3.16: these were ~11 statements of the form
+// `if (scr == N && p.x < K) p.x = K` spread through check_l3_transition and
+// check_l7_transition, which is a table written as control flow: the metric
+// counts each one as a branch, and the constants sit where they cannot be read
+// side by side.
+//
+// kLoOpen / kHiOpen are INT_MIN / INT_MAX rather than a sentinel needing its
+// own test, so an unbounded side simply never compares true.
+//
+// NOT every clamp is here, deliberately.  Three of L3's carry an extra
+// condition — `!screen_change` on screen 12, `p.y > 0x22` on screen 11,
+// `!cave_flag` on screen 9 — and folding those in would need a predicate
+// column, at which point the table is the code again. They stay written out.
+struct WalkClamp {
+    int screen;
+    int lo;
+    int hi;
+};
+constexpr int kLoOpen = INT_MIN;
+constexpr int kHiOpen = INT_MAX;
+
+void apply_walk_clamps(SystemsState& state, const WalkClamp* tab,
+                       std::size_t n) {
+    PlayerState& p = state.player;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (tab[i].screen != state.current_screen) continue;
+        if (p.x < tab[i].lo) p.x = tab[i].lo;
+        if (p.x > tab[i].hi) p.x = tab[i].hi;
+    }
+}
+
+// L3 (internal): screens 18 and 10.  Screens 12, 11 and 9 are the guarded ones
+// that stay in check_l3_transition.
+constexpr WalkClamp kL3Clamps[] = {
+    {18, 0x14, kHiOpen},
+    {10, 100,  0xCC},
+};
+
+// L7 (internal).
+constexpr WalkClamp kL7Clamps[] = {
+    {18,  kLoOpen, 0x132},
+    {0xD, 0xF,     kHiOpen},
+    {5,   kLoOpen, 0x109},
+    {6,   0x1E,    0x109},
+    {7,   0xF,     kHiOpen},
+    {9,   kLoOpen, 0x109},
+    {10,  7,       kHiOpen},
+};
 
 void check_l1_transition(SystemsState& state) {
     PlayerState& p = state.player;
@@ -50,15 +103,12 @@ void check_l1_transition(SystemsState& state) {
 void check_l3_transition(SystemsState& state) {
     PlayerState& p = state.player;
     const int scr = state.current_screen;
+    apply_walk_clamps(state, kL3Clamps, std::size(kL3Clamps));
+    // The guarded three: a plain {screen, lo, hi} row cannot carry these.
     if (scr == 12 && !state.screen_change && p.x < 10) p.x = 10;
-    if (scr == 18 && p.x < 0x14) p.x = 0x14;
     if (scr == 11) {
         if (p.x < 100 && p.y > 0x22) p.x = 100;
         else if (p.x > 0xCC) p.x = 0xCC;
-    }
-    if (scr == 10) {
-        if (p.x < 100) p.x = 100;
-        if (p.x > 0xCC) p.x = 0xCC;
     }
     if (scr == 9 && !state.cave_flag && p.x > 0x10E) p.x = 0x10E;
     // The screen-9 tree-trunk warp trigger (DOWN in the doorway).
@@ -154,7 +204,7 @@ void check_l5_transition(SystemsState& state) {
 void check_l7_transition(SystemsState& state) {
     PlayerState& p = state.player;
     int scr = state.current_screen;
-    if (scr == 18 && p.x > 0x132) p.x = 0x132;
+    apply_walk_clamps(state, kL7Clamps, std::size(kL7Clamps));
     // Screen-18 lava-spring exit trigger.
     if (scr == 18 && !state.screen_change &&
         state.screen_clear_of_monsters && p.cave_warp_freeze == 0 &&
@@ -163,8 +213,6 @@ void check_l7_transition(SystemsState& state) {
         p.cave_warp_freeze = 0xFA1;
         p.x = 0xF0;
     }
-    if (scr == 0xD && p.x < 0xF) p.x = 0xF;
-    if (scr == 5 && p.x > 0x109) p.x = 0x109;
     if (scr == 5 && p.y > 0xA0) {       // fall through 5 -> 6
         state.current_screen = 6;
         p.y = -10;
@@ -172,8 +220,6 @@ void check_l7_transition(SystemsState& state) {
         return;
     }
     if (state.current_screen == 6) {
-        if (p.x < 0x1E) p.x = 0x1E;
-        if (p.x > 0x109) p.x = 0x109;
         if (p.y > 0xA0) {               // fall through 6 -> 7
             state.current_screen = 7;
             p.y = 0;
@@ -181,9 +227,6 @@ void check_l7_transition(SystemsState& state) {
             return;
         }
     }
-    if (state.current_screen == 7 && p.x < 0xF) p.x = 0xF;
-    if (state.current_screen == 9 && p.x > 0x109) p.x = 0x109;
-    if (state.current_screen == 10 && p.x < 7) p.x = 7;
     if (p.x < 6 && state.current_screen != 0 && !state.screen_change) {
         state.current_screen -= 1;
         p.x = 0x11D;

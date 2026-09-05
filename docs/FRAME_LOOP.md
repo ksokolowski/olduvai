@@ -36,6 +36,11 @@ the shell loop (`presentation/game_app.cpp`).
 - Frame-counter wrap (after fc=61 has been used → a 62-value cycle)
   drives the timer decrement and the food-out death.
 - `run_frame(...)`.
+- `run_post_frame_steps(...)` — **6b through 8a below now live in
+  `systems/frame_runner.cpp`**, called as one step from the shell. They read
+  and write only `SystemsState`, so the shell holds none of them. The order
+  inside that function is this contract; 8b onward stayed in the shell because
+  they need the window, the framebuffer and the audio device.
 - **6b** death halo init/tick.
 - **6c/6d** L5 glider entry (screen-9/18 grabs) and the screen-12
   detach + fly-away.

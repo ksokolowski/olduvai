@@ -5,6 +5,24 @@ lands; 0.x releases are beta.
 
 ## Unreleased
 
+## 0.9.6 — 2026-09-05
+
+- Fixed: the L4 boss arena now spawns the fighter where the original does
+  (found by the new cross-engine fight scenarios; `boss_l4_victory`'s golden
+  was re-baselined with the reason in its header).
+- Fixed: `--render-audio` with `--music-device opl` rendered silence — the
+  offline path never handed the OPL player a track. It now renders real FM.
+- Added: L4 and L6 boss-fight replay gates, both verified frame-identical
+  against the reference engine, plus a smooth-motion L6 slam gate.
+- Added: `--render-sfx <id|all>` renders AdLib sound effects offline (digest
+  or WAV) — the SFX counterpart of `--render-audio`.
+- Added: `--aspect 4:3` and `--aspect stretch` render coverage; the win
+  ending's climb animation is now photographable (`OLDUVAI_ENDING_SHOT_FRAME`)
+  and gated at two points.
+- Changed: CLI parsing reorganized internally; no flag or message changed.
+- Changed: in-session display switches re-derive the present path reliably in
+  both directions (classic↔enhanced), verified by an extended reinit gate.
+
 ## 0.9.5 — 2026-07-29
 
 Audio reaches every platform for the first time, and the things that were

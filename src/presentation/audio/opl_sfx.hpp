@@ -50,15 +50,16 @@ struct OplSfxDef {
     int tail_ms;              // post-key-off release ring
 };
 
-// Render an AdLib voice to interleaved-stereo int16 PCM at `sample_rate`.
+// Render an AdLib SFX record to interleaved-stereo int16 PCM at `sample_rate`.
 // Returns gate+tail frames; empty on invalid input.
-std::vector<std::int16_t> render_adlib_sfx(const OplSfxVoice& modulator,
-                                           const OplSfxVoice& carrier,
-                                           int modulator_waveform,
-                                           int carrier_waveform,
-                                           int note, int velocity, int channel,
-                                           int fb_alg, int sample_rate,
-                                           int gate_ms, int tail_ms);
+//
+// §3.9: this took ELEVEN parameters which were, field for field, the contents
+// of OplSfxDef minus its id — the struct already existed and the signature
+// spelled it out by hand, so render_adlib_sfx_by_id looked a record up and
+// then unpacked it member by member to make the call.  `id` is unused here and
+// harmless to carry.
+std::vector<std::int16_t> render_adlib_sfx(const OplSfxDef& def,
+                                           int sample_rate);
 
 // Install the AdLib voice patches read from the user's executable
 // (prepare::read_adlib_sfx_voices).  Until this runs, the catalog is empty:

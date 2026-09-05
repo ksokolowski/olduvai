@@ -20,6 +20,7 @@
 #include "formats/mdi.hpp"
 #include "formats/pc1.hpp"
 #include "presentation/render/game_render.hpp"    // FrameBuffer, blit_sprite
+#include "presentation/env_num.hpp"         // env_int — ENDING_SHOT_FRAME
 #include "presentation/image_out.hpp"      // capture_renderer_output
 #include "presentation/render/smooth_present.hpp" // smooth_try_enable_vsync
 
@@ -67,6 +68,21 @@ void show_game_over_screen(const std::filesystem::path& game_dir,
         end_fb.px[i * 4 + 3] = 255;
     }
     upload_native_frame(gtex, end_fb, hd_scale, hd_profile);
+    // Debug/gate hook: OLDUVAI_GAMEOVER_SHOT=<path> captures one presented
+    // frame and skips the 8-second hold + music fade — the game-over picture
+    // had no golden at all (BACKLOG §6) because reaching it headlessly meant
+    // waiting out the hold under the dummy driver.  Same shape as the pause/
+    // boss-pause shot hooks: readback through the LIVE presenter, so a logical-
+    // size defect is visible in the capture.
+    if (const char* shot = std::getenv("OLDUVAI_GAMEOVER_SHOT")) {
+        SDL_RenderClear(sw.ren);
+        SDL_RenderCopy(sw.ren, gtex, nullptr, nullptr);
+        SDL_RenderPresent(sw.ren);
+        capture_renderer_output(sw.ren, shot);
+        audio.stop_music();
+        SDL_DestroyTexture(gtex);
+        return;
+    }
     // Hold ~8 seconds (8*18 frames @ 18 Hz), re-presenting each tick and polling
     // QUIT/ESC to abort early.
     constexpr int kHoldFrames = 8 * 18;
@@ -145,9 +161,16 @@ void show_win_ending(const std::filesystem::path& game_dir, SdlAudio& audio,
         }
         const std::vector<formats::Rgb> pal(bg.palette.begin(),
                                             bg.palette.end());
-        // OLDUVAI_ENDING_SHOT: dump the first composited frame via readback,
-        // then quit (the OLDUVAI_MAINMENU_SHOT headless-verify pattern).
+        // OLDUVAI_ENDING_SHOT: dump a composited frame via readback, then
+        // quit (the OLDUVAI_MAINMENU_SHOT headless-verify pattern).
+        // OLDUVAI_ENDING_SHOT_FRAME=<n> selects WHICH rise step (y -= 2 per
+        // step, 198 -> 73): 0 = the first frame (default, historical
+        // behaviour), e.g. 30 photographs the caveman mid-climb — until
+        // 2026-08-24 nothing had photographed past frame 1 of this sequence.
         const char* const ending_shot = std::getenv("OLDUVAI_ENDING_SHOT");
+        const int ending_shot_frame =
+            olduvai::presentation::env_int("OLDUVAI_ENDING_SHOT_FRAME", 0);
+        int rise_step = 0;
         auto render_at = [&](int render_y, Uint32 delay_ms) -> bool {
             FrameBuffer fb2 = bg_fb;   // copy background
             blit_sprite(fb2, sprite, pal, 64, render_y);
@@ -162,7 +185,7 @@ void show_win_ending(const std::filesystem::path& game_dir, SdlAudio& audio,
             upload_native_frame(etex, fb2, hd_scale, hd_profile);
             SDL_RenderClear(sw.ren);
             SDL_RenderCopy(sw.ren, etex, nullptr, nullptr);
-            if (ending_shot) {
+            if (ending_shot && rise_step == ending_shot_frame) {
                 capture_renderer_output(sw.ren, ending_shot);
                 quit_requested = true;
                 return false;
@@ -185,7 +208,9 @@ void show_win_ending(const std::filesystem::path& game_dir, SdlAudio& audio,
         const bool e_vsync = smooth_try_enable_vsync(sw.ren, smooth);
         bool aborted = false;
         int prev_y = kYStart;
+        int logic_step = 0;
         for (int y = kYStart; y >= kYEnd && !aborted; y -= kDY) {
+            rise_step = logic_step++;
             if (smooth && e_vsync) {
                 const Uint32 t0 = SDL_GetTicks();
                 while (!aborted) {

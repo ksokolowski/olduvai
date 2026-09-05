@@ -25,7 +25,8 @@ void log_spawn_side(int direction) {
     if (direction == 1) ++right; else ++left;
     std::fprintf(stderr, "[L2-spawn] %-5s  running: right=%ld left=%ld (%.0f%% right)\n",
                  direction == 1 ? "RIGHT" : "left", right, left,
-                 100.0 * right / static_cast<double>(right + left));
+                 100.0 * static_cast<double>(right) /
+                     static_cast<double>(right + left));
 }
 
 void update_stomp(L2BossState& boss) {

@@ -53,35 +53,24 @@ fi
 STATUS=0
 SUMMARY=""
 
-for lane in ${LANES}; do
-    echo ""
-    echo "═══ ${lane} ═══════════════════════════════════════════════════════"
-    cmake --preset "${lane}" >/dev/null
-    cmake --build --preset "${lane}" --parallel 8 --target all tests >/dev/null
-
+# run_ctest <summary-name> <preset> [extra ctest args...]
+#
+# One copy of the skip audit, which is the point of this whole script: on a
+# machine WITH the game files a SKIP means the gate ran nowhere at all, so it
+# is a failure unless acknowledged.  Both call sites (the build lanes and the
+# `slow` label below) need identical handling, and this repo has paid for
+# "three copies of one policy" before (BACKLOG §3.14a) — so it is a function.
+#
+# NOT `ctest ... | tee "${LOG}"`.  In a pipeline `$?` is the status of the LAST
+# command — tee — which is always 0, so a real ctest failure read as success.
+# This gate shipped with exactly that bug and reported "release: OK / asan: OK"
+# for a run whose log said "30 - ending_shot (Failed)".  PIPESTATUS would fix
+# it in bash; this is /bin/sh, so redirect and print afterwards.
+run_ctest() {
+    _name="$1"; shift
+    _preset="$1"; shift
     LOG="$(mktemp -t olduvai_gate_XXXXXX)"
-    # The suite must run to completion even when a test fails: the skip audit
-    # below is the point of this script, and an early exit would hide it.
-    #
-    # NOT `ctest ... | tee "${LOG}"`.  In a pipeline `$?` is the status of the
-    # LAST command — tee — which is always 0, so a real ctest failure read as
-    # success.  This gate shipped with exactly that bug and reported "release:
-    # OK / asan: OK" for a run whose log said "30 - ending_shot (Failed)".
-    # PIPESTATUS would fix it in bash; this is /bin/sh, so redirect instead
-    # and print afterwards.
-    # Run the suite in parallel.  MEASURED on this corpus: 239 s serial vs
-    # 90 s at -j6, and 90 s is exactly boss_pause_shot's own runtime — that
-    # single test is the critical path, so more jobs buy nothing until it is
-    # faster.  The tests are parallel-safe by construction: each makes its own
-    # mktemp config dir and shot file, and the only shared input (the game
-    # files) is read-only.
-    #
-    # Most of the wall-clock is 18.2 Hz gameplay, not CPU, so the jobs overlap
-    # rather than contend.  If a timing-sensitive test ever does turn flaky
-    # here, drop to -j1 to confirm before assuming the change under test broke
-    # it.
-    if ctest --preset "${lane}" --output-on-failure -j "${OLDUVAI_GATE_JOBS:-6}" \
-            > "${LOG}" 2>&1; then
+    if ctest --preset "${_preset}" --output-on-failure "$@" > "${LOG}" 2>&1; then
         CTEST_RC=0
     else
         CTEST_RC=$?
@@ -102,15 +91,56 @@ for lane in ${LANES}; do
     done
 
     if [ ${CTEST_RC} -ne 0 ]; then
-        SUMMARY="${SUMMARY}\n  ${lane}: FAIL — ctest exited ${CTEST_RC}"
+        SUMMARY="${SUMMARY}\n  ${_name}: FAIL — ctest exited ${CTEST_RC}"
         STATUS=1
     elif [ -n "${UNEXPECTED}" ]; then
-        SUMMARY="${SUMMARY}\n  ${lane}: FAIL — skipped on an asset machine: ${UNEXPECTED}"
+        SUMMARY="${SUMMARY}\n  ${_name}: FAIL — skipped on an asset machine: ${UNEXPECTED}"
         STATUS=1
     else
-        SUMMARY="${SUMMARY}\n  ${lane}: OK"
+        SUMMARY="${SUMMARY}\n  ${_name}: OK"
     fi
+}
+
+for lane in ${LANES}; do
+    echo ""
+    echo "═══ ${lane} ═══════════════════════════════════════════════════════"
+    cmake --preset "${lane}" >/dev/null
+    cmake --build --preset "${lane}" --parallel 8 --target all tests >/dev/null
+
+    # Run the suite in parallel.  MEASURED on this corpus: 239 s serial vs
+    # 90 s at -j6, and 90 s is exactly boss_pause_shot's own runtime — that
+    # single test is the critical path, so more jobs buy nothing until it is
+    # faster.  The tests are parallel-safe by construction: each makes its own
+    # mktemp config dir and shot file, and the only shared input (the game
+    # files) is read-only.
+    #
+    # Most of the wall-clock is 18.2 Hz gameplay, not CPU, so the jobs overlap
+    # rather than contend.  If a timing-sensitive test ever does turn flaky
+    # here, drop to -j1 to confirm before assuming the change under test broke
+    # it.
+    run_ctest "${lane}" "${lane}" -j "${OLDUVAI_GATE_JOBS:-6}"
 done
+
+# ── The `slow` label: registered tests kept out of the everyday suite ───────
+# hd_text_screens runs the loading card and the score tally through BOTH present
+# stacks in BOTH modes (~256 s), nearly all of it sleeping at 18 Hz through a
+# fight, a victory sequence and a fade.  Its four dos cells are the only
+# coverage the CLASSIC present path has, on either stack — `tally_pause` is
+# reachable from nowhere else.
+#
+# It is a REGISTERED ctest carrying LABELS `slow`, and the `release` / `asan`
+# test presets filter that label out, so the everyday suite stays ~550 s.  This
+# runs it — by LABEL, not by filename, so a future slow test joins in without
+# touching this script.
+#
+# IT USED TO BE A LOOSE SCRIPT INVOKED HERE BY NAME, and that cost something
+# real: a coverage sweep read `ctest -N`, did not find it, reported it as never
+# run, and registered it — when it had been running here the whole time.  Two
+# registries, and the one people reach for first did not list it.  Now there is
+# one: everything is a ctest, and `slow` decides what the default lane skips.
+echo ""
+echo "── slow-labelled gates (not in the everyday suite) ──"
+run_ctest "slow gates" release-full -L slow
 
 echo ""
 echo "═══ gate_local ════════════════════════════════════════════════════════"

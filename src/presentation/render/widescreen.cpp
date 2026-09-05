@@ -71,10 +71,18 @@ PeekNeighbors widescreen_neighbors(int internal_level, int current_screen,
 void compose_widescreen(std::vector<std::uint8_t>& out, int margin,
                         const FrameBuffer& center,
                         const FrameBuffer* left, const FrameBuffer* right,
-                        int hud_rows, const FrameBuffer* backdrop,
-                        bool reflect_pure, float margin_edge_brightness,
-                        bool repeat_no_backdrop, bool ground_backdrop,
-                        bool void_ground_left, bool void_ground_right) {
+                        MarginFill fill) {
+    // Bind the policy back to the names the body uses, so the body below is
+    // unchanged — the same technique FramePresenter::present and DescentCtx use.
+    const int hud_rows = fill.hud_rows;
+    const FrameBuffer* backdrop = fill.backdrop;
+    const bool reflect_pure = fill.reflect_pure;
+    const float margin_edge_brightness = fill.margin_edge_brightness;
+    const bool repeat_no_backdrop = fill.repeat_no_backdrop;
+    const bool ground_backdrop = fill.ground_backdrop;
+    const bool void_ground_left = fill.void_ground_left;
+    const bool void_ground_right = fill.void_ground_right;
+
     constexpr int kCenterW = 320;
     constexpr int kH = 200;
     static const std::uint8_t kVoidPx[4] = {0, 0, 0, 255};   // dead-end floor

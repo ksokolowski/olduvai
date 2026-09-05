@@ -13,8 +13,22 @@
 # the golden hashes.
 #
 #   check_tidy.sh              lint files changed vs origin/master (the gate)
+#   check_tidy.sh --diff       lint only the changed LINES (the CI gate)
 #   check_tidy.sh --all        whole tree (the periodic health read)
 #   check_tidy.sh --metrics    just the size / cognitive-complexity KPIs
+#
+# --diff vs the default: the default lints whole FILES that changed, so touching
+# one line of game_app.cpp reports run_platform_level's cognitive complexity and
+# the gate is red for a pre-existing, tracked, deliberate condition.  --diff
+# reports only diagnostics ON THE CHANGED LINES (clang-tidy-diff.py, shipped
+# with clang-tidy), which is what makes it safe to run in CI on a tree that has
+# 81 known findings.  Use --diff in automation, the default by hand.
+#
+# BASE SELECTION IS THE WHOLE GAME.  origin/master is right for a topic branch
+# and WRONG for a direct push to master: there origin/master IS the pushed
+# commit, the diff is empty, and the gate passes without checking anything —
+# the same silent-green rot the missing-base-ref guard below exists to stop.
+# CI must pass the push's before-SHA via OLDUVAI_TIDY_BASE.
 #
 # clang-tidy needs a compile database: CMakePresets sets
 # CMAKE_EXPORT_COMPILE_COMMANDS=ON, so configure any preset first.
@@ -25,16 +39,31 @@ SKIP=77
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DB="${OLDUVAI_COMPILE_DB:-${ROOT}/build/release}"
 
-# brew's llvm is keg-only, so clang-tidy is usually NOT on PATH.
+# ONE supported install: the pinned wheel from requirements-dev.txt — `uv tool
+# install` locally, pip-into-a-venv on the runner (.gitea/workflows/ci.yml).
+# Both put clang-tidy on PATH, so PATH is the lookup.
+#
+# No brew/xcrun fallback, deliberately.  A distribution LLVM is a DIFFERENT
+# clang-tidy from the one CI runs, and the two can disagree about whether a
+# change passes: checks are added, removed and retuned between releases.  A
+# gate that goes red in CI and green on the author's machine is a gate people
+# learn to route around — the failure mode section 4b warns about, and the same
+# argument the version check below makes about the version rather than the
+# install.  Skipping is the honest outcome: the gate is not "unavailable on a
+# Mac", it is unavailable until the pinned tool is installed, on either OS.
+#
+# uv's bin dir is checked as well as PATH because `uv tool install` does not
+# itself put ~/.local/bin on a login shell's PATH — a fresh install otherwise
+# looks absent to this script while sitting exactly where uv reported it.
 TIDY="$(command -v clang-tidy 2>/dev/null)"
-[ -n "${TIDY}" ] || for c in /opt/homebrew/opt/llvm/bin/clang-tidy \
-                             /usr/local/opt/llvm/bin/clang-tidy \
-                             "$(xcrun --find clang-tidy 2>/dev/null)"; do
-    [ -x "$c" ] && TIDY="$c" && break
-done
+if [ -z "${TIDY}" ]; then
+    c="${UV_TOOL_BIN_DIR:-${HOME}/.local/bin}/clang-tidy"
+    [ -x "$c" ] && TIDY="$c"
+fi
 
 if [ -z "${TIDY}" ]; then
-    echo "check_tidy: SKIP — clang-tidy not found (brew install llvm)"
+    echo "check_tidy: SKIP — clang-tidy not found."
+    echo "  uv tool install clang-tidy==22.1.8   (see requirements-dev.txt)"
     exit ${SKIP}
 fi
 if [ ! -f "${DB}/compile_commands.json" ]; then
@@ -45,19 +74,123 @@ fi
 
 cd "${ROOT}" || exit 1
 
+# The pin exists because a different LLVM shifts the cognitive-complexity
+# numbers BACKLOG section 5 compares ACROSS COMMITS — an unpinned bump reads as
+# code churn rather than as a tool change, which is the one thing that table
+# must never do.  Restricting resolution to the pinned wheel narrows this but
+# does not close it: the installed tool can be upgraded, and anything named
+# clang-tidy earlier on PATH still wins.  So check rather than assume.
+#
+# A warning, not a failure.  The wrong version still lints correctly; what it
+# cannot do is produce numbers comparable to the recorded table.  Failing here
+# would break a working gate over a reporting concern, and a gate that refuses
+# to run is a gate people stop running.
+#
+# Pin read from requirements-dev.txt rather than repeated here, so there is one
+# place to bump.  Both spellings carry the version the same way: "LLVM version
+# 22.1.8" (pip/uv wheel) and "Homebrew LLVM version 22.1.8" (brew).
+PIN="$(sed -n 's/^clang-tidy==\([0-9.]*\).*/\1/p' \
+        "${ROOT}/requirements-dev.txt" 2>/dev/null | head -1)"
+GOT="$("${TIDY}" --version 2>/dev/null |
+        sed -n 's/.*LLVM version \([0-9.]*\).*/\1/p' | head -1)"
+if [ -n "${PIN}" ] && [ -n "${GOT}" ] && [ "${PIN}" != "${GOT}" ]; then
+    echo "check_tidy: WARNING — clang-tidy is ${GOT}, requirements-dev.txt pins ${PIN}."
+    echo "  ${TIDY}"
+    echo "  Findings and the section 5 KPI numbers are comparable to the"
+    echo "  recorded table only at the pinned version."
+    echo "  uv tool install clang-tidy==${PIN}   (see requirements-dev.txt)"
+fi
+
 # macOS: the compile database is generated with /usr/bin/c++ (AppleClang) and
-# carries no -isysroot, so brew's keg-only clang-tidy cannot find the SDK's C++
-# headers — <filesystem> et al fail to resolve.  A BROKEN PARSE STILL EMITS
-# WARNINGS, just wrong ones (it invented a second empty-catch finding and
-# under-reported cognitive complexity by ~160), which is worse than no gate.
+# carries no -isysroot, so a non-Apple clang-tidy cannot find the SDK's C++
+# headers — <filesystem> et al fail to resolve.  This is NOT a brew artifact:
+# the pinned wheel fails exactly the same way, which is why the injection stays
+# after dropping the brew fallback.  A BROKEN PARSE STILL EMITS WARNINGS, just
+# wrong ones (it invented a second empty-catch finding and under-reported
+# cognitive complexity by ~160), which is worse than no gate.
 # Pass the SDK explicitly and treat any clang-diagnostic-error as fatal below.
+# DIFF_EXTRA carries the same SDK to clang-tidy-diff.py, which needs it just
+# as badly — without it the --diff gate dies on "'string' file not found" and
+# reports FAIL for every change made on a Mac.  The spelling differs because
+# the shim parses its own argv: clang-tidy takes --extra-arg, the shim's
+# argparse option is registered as -extra-arg and will not match a '--' form.
 EXTRA=""
+DIFF_EXTRA=""
 if [ "$(uname -s)" = "Darwin" ]; then
     SDK="$(xcrun --show-sdk-path 2>/dev/null)"
-    [ -n "${SDK}" ] && EXTRA="--extra-arg=-isysroot${SDK}"
+    if [ -n "${SDK}" ]; then
+        EXTRA="--extra-arg=-isysroot${SDK}"
+        DIFF_EXTRA="-extra-arg=-isysroot${SDK}"
+    fi
 fi
 
 case "${1:-}" in
+--diff)
+    BASE="${OLDUVAI_TIDY_BASE:-origin/master}"
+    if ! git rev-parse --verify --quiet "${BASE}^{commit}" >/dev/null; then
+        echo "check_tidy: FAIL — base ref '${BASE}' does not exist here."
+        echo "  A diff gate with no base checks NOTHING while reporting success."
+        exit 1
+    fi
+    # Run the shim DIRECTLY, never as `python3 <path>`: pip/uv install it with a
+    # shebang pointing at the environment that owns the clang_tidy module, and
+    # the system python3 cannot import it.
+    # The wheel installs the shim into the same bin/ as the binary, so those
+    # two locations are the whole search.  (An LLVM distribution puts it in
+    # ../share/clang/ instead — not looked for here, because such an install is
+    # not a supported source for TIDY either.  See the resolution above.)
+    DIFFTOOL="$(command -v clang-tidy-diff.py 2>/dev/null)"
+    [ -n "${DIFFTOOL}" ] || DIFFTOOL="$(dirname "${TIDY}")/clang-tidy-diff.py"
+    if [ ! -x "${DIFFTOOL}" ]; then
+        echo "check_tidy: SKIP — clang-tidy-diff.py not found."
+        echo "  Searched: PATH and $(dirname "${TIDY}")/"
+        echo "  Install the pinned tool: uv tool install clang-tidy==22.1.8"
+        exit ${SKIP}
+    fi
+    # -U0: clang-tidy-diff.py needs zero context or it attributes untouched
+    # lines to the change.  -p1 strips git's a//b/ prefix.
+    PATCH=$(git diff -U0 "${BASE}...HEAD" -- 'src/*.cpp' 'src/**/*.cpp')
+    if [ -z "${PATCH}" ]; then
+        echo "check_tidy: OK — no C++ sources changed vs ${BASE}"
+        exit 0
+    fi
+    echo "check_tidy: linting CHANGED LINES vs ${BASE}"
+    OUT=$(mktemp /tmp/olduvai_tidy.XXXXXX)
+    # Subtract the two KPI checks (a leading '-' removes from the configured
+    # set rather than replacing it).  They are function-level, so touching the
+    # FIRST LINE of a big function reports its whole-function score as if the
+    # change caused it — editing one line of parse_args reported its 142.  Both
+    # are measurements by design (see .clang-tidy) and are tracked in BACKLOG
+    # section 5 and reported by --metrics; a gate is the wrong instrument.
+    printf '%s\n' "${PATCH}" | "${DIFFTOOL}" \
+        -clang-tidy-binary "${TIDY}" -path "${DB}" -p1 -j4 -quiet \
+        -checks='-readability-function-size,-readability-function-cognitive-complexity' \
+        ${DIFF_EXTRA} \
+        >"${OUT}" 2>&1
+    if grep -q "clang-diagnostic-error" "${OUT}" 2>/dev/null; then
+        echo "check_tidy: FAIL — clang-tidy could not parse the sources."
+        grep "clang-diagnostic-error" "${OUT}" | head -3 | sed 's|.*/src/|  src/|'
+        rm -f "${OUT}"
+        exit 1
+    fi
+    # `grep -c || echo 0` is WRONG: grep -c already prints 0 and then exits 1,
+    # so the fallback appends a SECOND 0 and the test dies on "Illegal number".
+    N=$(grep -c "warning:" "${OUT}" 2>/dev/null || true)
+    [ -n "${N}" ] || N=0
+    if [ "${N}" -eq 0 ]; then
+        echo "check_tidy: OK — no findings on changed lines"
+        rm -f "${OUT}"
+        exit 0
+    fi
+    echo "check_tidy: ${N} finding(s) on lines this change touched:"
+    grep "warning:" "${OUT}" | sed 's|.*/src/|  src/|' | sort -u
+    echo ""
+    echo "These are on code you just wrote or edited. Fix them, or if a finding"
+    echo "is a deliberate, justified exception, silence it at the line with a"
+    echo "// NOLINT(<check-name>) comment AND say why."
+    rm -f "${OUT}"
+    exit 1
+    ;;
 --all)
     FILES=$(git ls-files 'src/*.cpp' 'src/**/*.cpp')
     LABEL="whole tree"
@@ -108,7 +241,9 @@ if grep -q "clang-diagnostic-error" "${OUT}" 2>/dev/null; then
     rm -f "${OUT}"
     exit 1
 fi
-N=$(grep -c "warning:" "${OUT}" 2>/dev/null || echo 0)
+# See the --diff branch: `|| echo 0` doubles the count grep already printed.
+N=$(grep -c "warning:" "${OUT}" 2>/dev/null || true)
+[ -n "${N}" ] || N=0
 
 if [ "${N}" -eq 0 ]; then
     echo "check_tidy: OK — no findings"

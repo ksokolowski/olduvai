@@ -266,48 +266,79 @@ void redraw_bg_tiles(RenderTarget& t, systems::SystemsState& state,
 // their screen indices (for cache keying); `backdrop` is the FOND extend source
 // (null = self-tile).  Only valid for surface peek screens (NOT secret rooms,
 // whose animated bubbles need the live whole-frame path).
+// The peek state `get_static_wide_bg_hd` needs, as one argument (§3.9).
+//
+// It was fifteen positional parameters, ten of which are already members of
+// `WidescreenPresenter` — the only caller that matters.  §3.9 notes why the
+// §3.7 objection to context structs does NOT apply here: these parameters
+// already ARE an ABI, and the receiving state already has an owner, so this
+// groups an existing boundary rather than inventing one.
+struct WidePeek {
+    // Pre-composed native neighbour screens (null = no neighbour) and their
+    // screen indices, which are part of the cache key.
+    const FrameBuffer* left = nullptr;
+    int left_screen = 0;
+    const FrameBuffer* right = nullptr;
+    int right_screen = 0;
+    // FOND extend source (null = self-tile).
+    const FrameBuffer* backdrop = nullptr;
+    // Neighbour seam-straddling tiles, drawn CENTRE-ONLY: a straddler's margin
+    // part already exists in the peek with the neighbour's authored z-order
+    // (re-blitting it buried S14's dirt-top row under its own subsurface rock).
+    const std::vector<LevelRenderAssets::TileDraw>* left_seam = nullptr;
+    const std::vector<LevelRenderAssets::TileDraw>* right_seam = nullptr;
+    // Synthetic seam-hole fills (tile_patterns::seam_row_bridges), kept SEPARATE
+    // from the straddlers: these do not exist in the peek at all, so they draw
+    // into the margin too.
+    const std::vector<LevelRenderAssets::TileDraw>* left_bridge = nullptr;
+    const std::vector<LevelRenderAssets::TileDraw>* right_bridge = nullptr;
+    // Bumped by the caller whenever the peek buffers are REBUILT; the peeks'
+    // CONTENT is invisible to the cache key, so this is what makes a rebuild
+    // invalidate it.
+    std::uint64_t generation = 0;
+};
+
 const std::vector<std::uint8_t>& get_static_wide_bg_hd(
     systems::SystemsState& state, const LevelRenderAssets& assets, int scale,
-    const std::string& profile, int margin,
-    const FrameBuffer* left, int left_screen,
-    const FrameBuffer* right, int right_screen,
-    const FrameBuffer* backdrop,
-    const std::vector<LevelRenderAssets::TileDraw>& left_seam = {},
-    const std::vector<LevelRenderAssets::TileDraw>& right_seam = {},
-    // Synthetic seam-hole fills (tile_patterns::seam_row_bridges), kept
-    // SEPARATE from the straddler lists: a straddler's margin part already
-    // exists in the peek WITH the neighbour's authored z-order (re-blitting
-    // it buried S14's dirt-top row under its own subsurface rock), so
-    // straddlers draw CENTRE-ONLY; bridges don't exist in the peek at all,
-    // so they draw into the margin too.
-    const std::vector<LevelRenderAssets::TileDraw>& left_bridge = {},
-    const std::vector<LevelRenderAssets::TileDraw>& right_bridge = {},
-    // Bumped by the caller whenever the peek buffers are REBUILT (screen
-    // bind): the key can't see the peek pixels, and a neighbour's live
-    // entity state (a destroyed L7 spike rock, collected food near the
-    // seam) is baked into them — without the generation, a revisit served
-    // the stale margin from cache.
-    std::uint64_t peek_generation = 0);
+    const std::string& profile, int margin, const WidePeek& peek);
 
 // Compose the NATIVE (un-upscaled) wide static background: centre 320 bg+tiles
 // assembled into a (320+2*margin)x200 RGBA buffer with the margins filled from
 // neighbours / backdrop / self-tile and the no-neighbour layer extension (the
 // shared core of get_static_wide_bg_hd, which upscales + caches this).  The L3
 // trunk-descent reuses it raw to fill the descent margins with the destination
-// screen's static bg instead of pillarbox bars.  `out` is resized as needed.
+// screen's static bg instead of pillarbox bars.  `wide` is resized as needed.
+//
+// Names match the definition rather than the other way round, deliberately:
+// aligning them the other way meant 65 renames inside a 250-line function that
+// the byte-exact widescreen gates pin, and swamping `git blame` there to
+// improve two parameter names is the same trade §4b refuses for clang-format.
+// Neighbour tiles re-blitted across a seam so an object straddling it is
+// completed whole (tile_patterns::seam_straddling_tiles, in the NEIGHBOUR's own
+// coords): the left neighbour's x=320-straddling tiles and the right
+// neighbour's x=0-straddling tiles, re-blitted at -/+320 so a trunk, pillar or
+// bush peeked across a seam is not sliced.  Empty list = no completion (levels
+// without straddling tiles).
+//
+// §3.9: these were four trailing parameters on compose_static_wide_bg_native,
+// which every one of its three callers passed together — they are one thing.
+// References rather than pointers, sharing one empty default, so "no
+// completion" stays an EMPTY LIST exactly as before and the body needs no null
+// checks.
+struct SeamTiles {
+    using Tiles = std::vector<LevelRenderAssets::TileDraw>;
+    static const Tiles kNone;
+    const Tiles& left = kNone;
+    const Tiles& right = kNone;
+    const Tiles& left_bridge = kNone;
+    const Tiles& right_bridge = kNone;
+};
+
 void compose_static_wide_bg_native(
-    systems::SystemsState& state, const LevelRenderAssets& assets, int margin,
+    systems::SystemsState& state, const LevelRenderAssets& a, int margin,
     const FrameBuffer* left, const FrameBuffer* right,
-    const FrameBuffer* backdrop, std::vector<std::uint8_t>& out,
-    // Neighbour seam-straddling tiles (tile_patterns::seam_straddling_tiles,
-    // in the NEIGHBOUR's own coords): the left neighbour's x=320-straddling
-    // tiles and the right neighbour's x=0-straddling tiles, re-blitted at ∓320
-    // so a trunk/pillar/bush peeked across a seam is completed whole.  Empty
-    // lists = no completion (levels without straddling tiles).
-    const std::vector<LevelRenderAssets::TileDraw>& left_seam = {},
-    const std::vector<LevelRenderAssets::TileDraw>& right_seam = {},
-    const std::vector<LevelRenderAssets::TileDraw>& left_bridge = {},
-    const std::vector<LevelRenderAssets::TileDraw>& right_bridge = {});
+    const FrameBuffer* backdrop, std::vector<std::uint8_t>& wide,
+    SeamTiles seams = {});
 
 // L1 mid-air-island END screen: continue the lake's water tile to the right of
 // the island (the no-neighbour margin / centre void / panorama off-level slot).

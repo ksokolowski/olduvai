@@ -77,6 +77,7 @@
 #include "systems/fluid_bubbles.hpp"
 #include "systems/monster_ai.hpp"
 #include "systems/secret.hpp"
+#include "systems/sprite_ids.hpp"          // is_monster — one truth table
 #include "systems/transitions.hpp"
 
 
@@ -527,28 +528,15 @@ void build_surface_screen_assets(const Loaded& g, int screen,
 // materializes them exactly where the margin showed them).
 std::vector<core::Entity> collect_spawn_post_monsters(const Loaded& g,
                                                              int screen) {
-    auto is_peek_monster = [](core::ObjType t) {
-        switch (t) {
-            case core::ObjType::RedDino:
-            case core::ObjType::YellowFuzz:
-            case core::ObjType::BrownBear:
-            case core::ObjType::GreenDino:
-            case core::ObjType::MonsterL3A:
-            case core::ObjType::MonsterL3B:
-            case core::ObjType::MonsterL5A:
-            case core::ObjType::MonsterL5B:
-            case core::ObjType::MonsterL7A:
-            case core::ObjType::MonsterL7B:
-                return true;
-            default:
-                return false;
-        }
-    };
+    // The peeking monsters ARE the shared-state-machine monsters: this used to
+    // carry its own byte-identical copy of that ten-type truth table, which is
+    // the third copy `systems/sprite_ids.hpp` was written to prevent — its own
+    // comment names the two it collapsed and this one outlived it.
     std::vector<core::Entity> out;
     auto sit = g.store.find(screen);
     if (sit == g.store.end()) return out;
     for (const auto& e : sit->second) {
-        if (!e.active || !is_peek_monster(e.obj_type)) continue;
+        if (!e.active || !systems::is_monster(e.obj_type)) continue;
         if (e.state == static_cast<int>(core::MonsterState::Dead) &&
             e.respawns <= 0)
             continue;

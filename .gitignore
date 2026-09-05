@@ -14,3 +14,11 @@ game_data
 *.dmg
 *.AppImage
 olduvai-*-windows-x86_64.zip
+
+# coverage / PGO artifacts.  A stray `default.profraw` (289 KB) was committed in
+# b88a668 and sat tracked for three weeks — it would have shipped in 0.9.6, and
+# the release runbook's gate e (export file-list diff vs public main) is what
+# caught it.  scripts/metrics/oracle_reach.sh sets LLVM_PROFILE_FILE to a temp
+# dir; a run that forgets to drops this file in the repo root instead.
+*.profraw
+*.profdata

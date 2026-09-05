@@ -117,36 +117,36 @@ EnhancedHudLayout compute_enhanced_hud_layout(
     return L;
 }
 
-void draw_enhanced_hud_bars(std::vector<std::uint8_t>& px, int bw, int bh,
-                            int s, const EnhancedHudLayout& L, int x_off_native) {
-    // Gauge outline + dark empty fill, native coords x s (x shifted by the
+void draw_enhanced_hud_bars(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
+                            int scale, const EnhancedHudLayout& layout, int x_off_native) {
+    // Gauge outline + dark empty fill, native coords x scale (x shifted by the
     // native x-origin so the bars land at the centre in a wide buffer).
-    for (const auto& b : L.boxes) {
-        const int x = (b.x + x_off_native) * s, y = b.y * s,
-                  w = b.w * s, h = b.h * s;
-        fill_rect(px, bw, bh, x, y, w, s, kWhite);             // top
-        fill_rect(px, bw, bh, x, y + h - s, w, s, kWhite);     // bottom
-        fill_rect(px, bw, bh, x, y, s, h, kWhite);             // left
-        fill_rect(px, bw, bh, x + w - s, y, s, h, kWhite);     // right
-        fill_rect(px, bw, bh, x + s, y + s, w - 2 * s, h - 2 * s, kEmpty);
+    for (const auto& b : layout.boxes) {
+        const int x = (b.x + x_off_native) * scale, y = b.y * scale,
+                  w = b.w * scale, h = b.h * scale;
+        fill_rect(rgba, buf_w, buf_h, x, y, w, scale, kWhite);             // top
+        fill_rect(rgba, buf_w, buf_h, x, y + h - scale, w, scale, kWhite);     // bottom
+        fill_rect(rgba, buf_w, buf_h, x, y, scale, h, kWhite);             // left
+        fill_rect(rgba, buf_w, buf_h, x + w - scale, y, scale, h, kWhite);     // right
+        fill_rect(rgba, buf_w, buf_h, x + scale, y + scale, w - 2 * scale, h - 2 * scale, kEmpty);
     }
     // Food fill / energy pips.
-    for (const auto& f : L.fills) {
-        fill_rect(px, bw, bh, (f.x + x_off_native) * s, f.y * s, f.w * s,
-                  f.h * s, {f.r, f.g, f.b});
+    for (const auto& f : layout.fills) {
+        fill_rect(rgba, buf_w, buf_h, (f.x + x_off_native) * scale, f.y * scale, f.w * scale,
+                  f.h * scale, {f.r, f.g, f.b});
     }
 }
 
-void draw_enhanced_hud_text(std::vector<std::uint8_t>& px, int ow, int oh,
-                            const HdText& text, const EnhancedHudLayout& L) {
-    // Native x scales by ow/320, native baseline by oh/200.  The font is
+void draw_enhanced_hud_text(std::vector<std::uint8_t>& rgba, int out_w, int out_h,
+                            const HdText& text, const EnhancedHudLayout& layout) {
+    // Native x scales by out_w/320, native baseline by out_h/200.  The font is
     // already sized to the output cap height by the caller.
-    const double sx = ow / 320.0;
-    const double sy = oh / 200.0;
-    for (const auto& t : L.texts) {
+    const double sx = out_w / 320.0;
+    const double sy = out_h / 200.0;
+    for (const auto& t : layout.texts) {
         const int x = static_cast<int>(t.x * sx + 0.5);
         const int y = static_cast<int>(t.baseline_y * sy + 0.5);
-        text.draw(px, ow, oh, x, y, t.str, t.r, t.g, t.b);
+        text.draw(rgba, out_w, out_h, x, y, t.str, t.r, t.g, t.b);
     }
 }
 

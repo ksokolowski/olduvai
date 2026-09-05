@@ -24,36 +24,59 @@ void draw_centered(FrameBuffer& fb,
     draw_text(fb, charset, pal, x, baseline_y, text);
 }
 
-// Wait up to `frames` at 18 Hz, returning early on a fresh SPACE/RETURN
-// KEYDOWN event (edge-triggered — held keys from gameplay do NOT fire).
-// Returns false only on QUIT (window close); ESC skips like SPACE/RETURN — a
-// post-win tally must never abort (the boss caller turned that into game-over).
-// Mirrors the reference's _wait_skippable (FUN_1847_0670 fire-key polling):
-// the EXE's polled loop is calibrated-delay; we translate to event edges so
-// a key held when the tally begins does not blow through the pause instantly.
+// What one poll of the tally's input means.  Every waiting loop on this screen
+// asks the same question, so it is asked in one place.
+enum class TallyKey { None, Skip, Quit };
+
+// Drain the event queue and classify.  Edge-triggered: only a fresh KEYDOWN
+// counts, so a key held from gameplay does not blow through the pause the
+// instant the tally opens.  Mirrors the reference's _wait_skippable
+// (FUN_1847_0670 fire-key polling) — the EXE's polled loop is calibrated-delay;
+// we translate to event edges.
+//
+// Quit is a window close and nothing else.  ESC SKIPS, like SPACE/RETURN: a
+// post-win tally must never abort, which the boss caller once turned into a
+// game-over.
+//
+// This was written out three times — `tally_pause`, the HD `pause` lambda and
+// `roll_keys` — identical but for how each encoded its answer (two bools and a
+// tri-state int).  The tri-state was the general one, so it is what survives;
+// the bools were readings of it (`k < 0`, `k > 0`).  Three copies of an input
+// policy is three places to fix when the policy changes, and the ESC rule here
+// is one the owner has already flagged for revisiting.
+TallyKey poll_tally_key() {
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev)) {
+        if (ev.type == SDL_QUIT) return TallyKey::Quit;
+        if (ev.type == SDL_KEYDOWN) {
+            if (ev.key.keysym.sym == SDLK_ESCAPE) return TallyKey::Skip;
+            // Alt+Enter belongs to the fullscreen chord, not the skip
+            // (enter_skip_allowed convention); requeue so the present path's
+            // poll sees and handles the toggle, and stop draining so it is
+            // still there when it looks.
+            if ((ev.key.keysym.sym == SDLK_RETURN ||
+                 ev.key.keysym.sym == SDLK_KP_ENTER) &&
+                (ev.key.keysym.mod & KMOD_ALT) != 0) {
+                SDL_PushEvent(&ev);
+                break;
+            }
+            if (ev.key.keysym.sym == SDLK_SPACE ||
+                ev.key.keysym.sym == SDLK_RETURN) {
+                return TallyKey::Skip;   // fresh key-down → skip
+            }
+        }
+    }
+    return TallyKey::None;
+}
+
+// Wait up to `frames` at 18 Hz on a static bitmap frame, returning early on a
+// skip.  Returns false only on quit (window close).
 bool tally_pause(const PresentFn& present, const FrameBuffer& fb,
                  int frames) {
     for (int f = 0; f < frames; ++f) {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_QUIT) return false;
-            if (ev.type == SDL_KEYDOWN) {
-                if (ev.key.keysym.sym == SDLK_ESCAPE) return true;  // post-win: skip, never abort
-                // Alt+Enter belongs to the fullscreen chord, not the skip
-                // (enter_skip_allowed convention); requeue so the present
-                // path's poll sees and handles the toggle.
-                if ((ev.key.keysym.sym == SDLK_RETURN ||
-                     ev.key.keysym.sym == SDLK_KP_ENTER) &&
-                    (ev.key.keysym.mod & KMOD_ALT) != 0) {
-                    SDL_PushEvent(&ev);
-                    break;
-                }
-                if (ev.key.keysym.sym == SDLK_SPACE ||
-                    ev.key.keysym.sym == SDLK_RETURN) {
-                    return true;   // fresh key-down → skip pause
-                }
-            }
-        }
+        const TallyKey k = poll_tally_key();
+        if (k == TallyKey::Quit) return false;
+        if (k == TallyKey::Skip) return true;
         if (!present(fb)) return false;
     }
     return true;
@@ -94,14 +117,14 @@ bool show_loading_screen(const FrameBuffer* from, int display_level,
                          const std::vector<formats::Sprite>& charset,
                          const std::vector<formats::Rgb>& pal,
                          const PresentFn& present,
-                         const LoadingHd& hd) {
+                         const TextScreenHd& hd) {
     char line2[40];
     std::snprintf(line2, sizeof line2, "while loading Level %d",
                   display_level);
 
     // --enhance hd-text: render the two rows through the cartoon vector font on
     // an HD-upscaled black buffer, presented via hd.present_hd — mirrors the
-    // TallyHd path in show_score_tally.  Null hd_text →
+    // TextScreenHd path in show_score_tally.  Null hd_text →
     // classic bitmap path below (byte-identical).
     const bool hd_on = hd.hd_text != nullptr && hd.hd_text->ok() &&
                        hd.present_hd && hd.upscale;
@@ -235,7 +258,7 @@ bool show_score_tally(int& lives, long& score, int display_level,
                       int bonus, const std::vector<formats::Sprite>& charset,
                       const std::vector<formats::Rgb>& pal,
                       const PresentFn& present, const SkipFn& /*skip*/,
-                      const TallyHd& hd, const TallyAudio& sfx) {
+                      const TextScreenHd& hd, const TallyAudio& sfx) {
     // Odd display levels award an extra life before the tally.
     if (display_level & 1) ++lives;
 
@@ -336,22 +359,9 @@ bool show_score_tally(int& lives, long& score, int display_level,
         const int hh = 200 * hd.scale;
         const std::vector<HdTextRow> row_list = build_rows();
         for (int f = 0; f < frames; ++f) {
-            SDL_Event ev;
-            while (SDL_PollEvent(&ev)) {
-                if (ev.type == SDL_QUIT) return false;
-                if (ev.type == SDL_KEYDOWN) {
-                    if (ev.key.keysym.sym == SDLK_ESCAPE) return true;  // post-win: skip, never abort
-                    if ((ev.key.keysym.sym == SDLK_RETURN ||
-                         ev.key.keysym.sym == SDLK_KP_ENTER) &&
-                        (ev.key.keysym.mod & KMOD_ALT) != 0) {
-                        SDL_PushEvent(&ev);
-                        break;
-                    }
-                    if (ev.key.keysym.sym == SDLK_SPACE ||
-                        ev.key.keysym.sym == SDLK_RETURN)
-                        return true;
-                }
-            }
+            const TallyKey k = poll_tally_key();
+            if (k == TallyKey::Quit) return false;
+            if (k == TallyKey::Skip) return true;
             if (!hd.present_hd(hd_px, hw, hh, row_list)) return false;
         }
         return true;
@@ -367,26 +377,8 @@ bool show_score_tally(int& lives, long& score, int display_level,
     // post-tally pause.  The EXE cannot skip the rolls (FUN_270a_01b4
     // 0x0303-0x03bd are vsync-only loops, no input poll — catalog #06).
     // QUIT (window close) aborts mid-roll; ESC skips like SPACE/RETURN — a
-    // post-win tally must never abort (consistent with the pause handling above).
-    auto roll_keys = [&]() -> int {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_QUIT) return -1;
-            if (ev.type == SDL_KEYDOWN) {
-                if (ev.key.keysym.sym == SDLK_ESCAPE) return 1;  // post-win: skip, never abort
-                if ((ev.key.keysym.sym == SDLK_RETURN ||
-                     ev.key.keysym.sym == SDLK_KP_ENTER) &&
-                    (ev.key.keysym.mod & KMOD_ALT) != 0) {
-                    SDL_PushEvent(&ev);
-                    break;
-                }
-                if (ev.key.keysym.sym == SDLK_SPACE ||
-                    ev.key.keysym.sym == SDLK_RETURN)
-                    return 1;
-            }
-        }
-        return 0;
-    };
+    // post-win tally must never abort (poll_tally_key, one policy for the whole
+    // screen).
     auto fast_forward = [&]() {
         while (bonus_remaining > 0) step_tally_bonus(bonus_remaining, score);
         while (lives_remaining > 0) step_tally_lives(lives_remaining, score);
@@ -395,17 +387,17 @@ bool show_score_tally(int& lives, long& score, int display_level,
     while (bonus_remaining > 0) {
         step_tally_bonus(bonus_remaining, score);
         if (!present_state()) return false;
-        const int k = roll_keys();
-        if (k < 0) return false;
-        if (k > 0) { fast_forward(); break; }
+        const TallyKey k = poll_tally_key();
+        if (k == TallyKey::Quit) return false;
+        if (k == TallyKey::Skip) { fast_forward(); break; }
     }
     // Lives countdown: -1 per frame, +1000 score.
     while (lives_remaining > 0) {
         step_tally_lives(lives_remaining, score);
         if (!present_state()) return false;
-        const int k = roll_keys();
-        if (k < 0) return false;
-        if (k > 0) { fast_forward(); break; }
+        const TallyKey k = poll_tally_key();
+        if (k == TallyKey::Quit) return false;
+        if (k == TallyKey::Skip) { fast_forward(); break; }
     }
     if (!present_state()) return false;
     // Enhanced completion chime — engine extension, NOT EXE-derived.  Fires
@@ -441,7 +433,7 @@ bool show_score_tally(systems::SystemsState& state, int display_level,
                       int bonus, const std::vector<formats::Sprite>& charset,
                       const std::vector<formats::Rgb>& pal,
                       const PresentFn& present, const SkipFn& skip,
-                      const TallyHd& hd, const TallyAudio& sfx) {
+                      const TextScreenHd& hd, const TallyAudio& sfx) {
     // Delegate to the lives/score-reference overload.
     return show_score_tally(state.player.lives, state.score, display_level,
                             bonus, charset, pal, present, skip, hd, sfx);

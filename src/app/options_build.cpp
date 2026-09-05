@@ -9,6 +9,7 @@
 #include "config.hpp"                  // Config, load/save_config_file, config_path
 #include "enhance/upscale.hpp"         // is_supported_hd_profile, supported_hd_profiles
 #include "presentation/enhance_flags.hpp"
+#include "presentation/env_num.hpp"    // env_int — OLDUVAI_FORCE_SMOOTH gate escape
 
 namespace olduvai::app {
 
@@ -156,7 +157,8 @@ BuildOutcome build_game_options(const CliArgs& args, PlaySettings& ps,
     // WITH --trace still forces classic via the trace branch.
     if (ps.transitions == "classic") {
         enhance_flags.smooth_motion = false;
-    } else if (!args.play_trace.empty()) {
+    } else if (!args.play_trace.empty() &&
+               olduvai::presentation::env_int("OLDUVAI_FORCE_SMOOTH", 0) != 1) {
         if (enhance_flags.smooth_motion) {
             oc.warnings.push_back(
                 "olduvai: --trace set → forcing transitions classic "
@@ -170,6 +172,14 @@ BuildOutcome build_game_options(const CliArgs& args, PlaySettings& ps,
         ps.transitions = "classic";
         enhance_flags.smooth_motion = false;
     }
+    // OLDUVAI_FORCE_SMOOTH=1 + --trace keeps smooth motion ON: the blanket
+    // rule above exists because render SUB-FRAME counts track the display,
+    // but the boss trace pins per-LOGIC-tick state, which DosTicker paces
+    // deterministically either way.  The one thing this exposes is exactly
+    // what golden_trace_l6_fight_hd gates — the L6 slam pose-hold's logic
+    // timing (§3.3c).  GATE-ONLY: an interactive session must never run
+    // this combination (a pause-menu Style change would re-derive smooth
+    // motion mid-trace, the hazard the forced-classic branch exists for).
 
     // widescreen_active requires the HD substrate (enhanced AND a non-
     // native hd profile) — anything else silently pillarboxed before;

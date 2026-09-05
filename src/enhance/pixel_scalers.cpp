@@ -90,11 +90,18 @@ std::vector<std::uint8_t> scale2x(const std::vector<std::uint8_t>& rgba,
             const bool e3d = (B == D && B != A && D != C);
             const std::size_t base =
                 (static_cast<std::size_t>(y * 2) * ow + x * 2) * 4;
-            copy_px(rgba, w, h, e0a ? x : x, e0a ? y - 1 : y, out, base);
-            copy_px(rgba, w, h, e1b ? x + 1 : x, e1b ? y : y, out, base + 4);
-            copy_px(rgba, w, h, e2c ? x - 1 : x, e2c ? y : y, out,
+            // Each sub-pixel takes its own side's neighbour when the rule
+            // fires, else the centre — and the neighbour differs from the
+            // centre in exactly ONE coordinate: E0/E3 in y, E1/E2 in x. The
+            // invariant coordinate was previously also written as a ternary
+            // (`e0a ? x : x`) for visual symmetry between the four lines.
+            // Both arms were the same token, so the compiler folded it and the
+            // output is unchanged; spelling it plainly says which axis moves.
+            copy_px(rgba, w, h, x, e0a ? y - 1 : y, out, base);
+            copy_px(rgba, w, h, e1b ? x + 1 : x, y, out, base + 4);
+            copy_px(rgba, w, h, e2c ? x - 1 : x, y, out,
                     base + static_cast<std::size_t>(ow) * 4);
-            copy_px(rgba, w, h, e3d ? x : x, e3d ? y + 1 : y, out,
+            copy_px(rgba, w, h, x, e3d ? y + 1 : y, out,
                     base + static_cast<std::size_t>(ow) * 4 + 4);
         }
     return out;

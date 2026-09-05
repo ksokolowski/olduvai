@@ -63,22 +63,46 @@ export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}"
 CFG_DIR="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
 # --level 8 is past the last playable level: run_game goes straight to the win
 # ending.  The hook self-quits after the first frame; timeout is a hang net.
-XDG_CONFIG_HOME="${CFG_DIR}" OLDUVAI_ENDING_SHOT="${SHOT}" timeout 60 \
-    "${BINARY}" --play --level 8 --render-scale 1 --window 640x400 \
-    --game-dir "${GAME_DIR}" >/dev/null 2>&1
-rm -rf "${CFG_DIR}"
+check_one() {   # <frame-arg ""> <golden> <label>
+    _f="$1"; _g="$2"; _label="$3"
+    CFG_DIR="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
+    if [ -n "${_f}" ]; then
+        XDG_CONFIG_HOME="${CFG_DIR}" OLDUVAI_ENDING_SHOT="${SHOT}" \
+            OLDUVAI_ENDING_SHOT_FRAME="${_f}" \
+            timeout 60 "${BINARY}" --play --level 8 --render-scale 1 \
+            --window 640x400 --game-dir "${GAME_DIR}" >/dev/null 2>&1
+    else
+        XDG_CONFIG_HOME="${CFG_DIR}" OLDUVAI_ENDING_SHOT="${SHOT}" \
+            timeout 60 "${BINARY}" --play --level 8 --render-scale 1 \
+            --window 640x400 --game-dir "${GAME_DIR}" >/dev/null 2>&1
+    fi
+    rm -rf "${CFG_DIR}"
+    if [ ! -s "${SHOT}" ]; then
+        echo "ending_shot: FAIL — no shot produced (${_label})"
+        FAIL=1; return
+    fi
+    if [ "$(sha256 "${SHOT}")" = "$(cat "${_g}")" ]; then
+        echo "ending_shot: PASS (${_label})"
+        return
+    fi
+    echo "ending_shot: FAIL — rendered ending differs from the golden hash (${_label})."
+    echo "  shot=${SHOT}  golden=${_g}"
+    FAIL=1
+}
 
-if [ ! -s "${SHOT}" ]; then
-    echo "ending_shot: FAIL — no shot produced (ending not reached?)"
-    rm -f "${SHOT}"
-    exit 1
-fi
+FAIL=0
 
-if [ "$(sha256 "${SHOT}")" = "$(cat "${GOLDEN}")" ]; then
-    echo "ending_shot: PASS"
-    rm -f "${SHOT}"
-    exit 0
-fi
+# Frame 0: the historical golden — caveman at y=198, first composited frame.
+check_one "" "${GOLDEN}" "first frame"
+
+# Rise step 30 (y ≈ 138): mid-climb, the phase nothing photographed before
+# 2026-08-24 (OLDUVAI_ENDING_SHOT_FRAME).  Classic mode, deterministic.
+RISE_GOLDEN="$(dirname "$0")/fixtures/ending_rise30_golden.sha256"
+check_one 30 "${RISE_GOLDEN}" "rise step 30"
+
+[ ${FAIL} -eq 0 ] && rm -f "${SHOT}"
+[ ${FAIL} -eq 0 ] || exit 1
+exit 0
 
 echo "ending_shot: FAIL — rendered ending differs from the golden hash."
 echo "  shot=${SHOT}  golden=${GOLDEN}"

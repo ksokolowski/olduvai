@@ -127,8 +127,7 @@ int main() {
         put_col(center, 100, 77, 88, 99);   // interior marker (center verbatim)
 
         std::vector<std::uint8_t> out;
-        compose_widescreen(out, margin, center, nullptr, nullptr,
-                           /*hud_rows=*/0, &backdrop);
+        compose_widescreen(out, margin, center, nullptr, nullptr, MarginFill{/*hud_rows=*/0, &backdrop});
         const int W = kW + 2 * margin;
         CHECK(out.size() == static_cast<std::size_t>(W) * kH * 4);
         auto at = [&](int x, int y) -> const std::uint8_t* {
@@ -168,8 +167,7 @@ int main() {
         // Upper-band wrap applies for ALL rows incl. the HUD strip: row 0,
         // left x=0 wraps backdrop col (kW-margin) → R=210, G=0.
         std::vector<std::uint8_t> out2;
-        compose_widescreen(out2, margin, center, nullptr, nullptr,
-                           /*hud_rows=*/32, &backdrop);
+        compose_widescreen(out2, margin, center, nullptr, nullptr, MarginFill{/*hud_rows=*/32, &backdrop});
         const std::uint8_t* row0 = &out2[0];   // x=0, y=0 (upper band)
         CHECK(row0[0] == 210 && row0[1] == 0);  // wraps backdrop col kW-margin
 
@@ -188,8 +186,7 @@ int main() {
             }
         }
         std::vector<std::uint8_t> out3;
-        compose_widescreen(out3, margin, center, nullptr, nullptr,
-                           /*hud_rows=*/0, &backdrop);
+        compose_widescreen(out3, margin, center, nullptr, nullptr, MarginFill{/*hud_rows=*/0, &backdrop});
         bool void_clamps_black = true;
         for (int y = ground_top; y < kH; ++y) {
             const std::uint8_t* l = &out3[(static_cast<std::size_t>(y) * W) * 4];
@@ -220,8 +217,7 @@ int main() {
             put(center, kW - 1 - c, 0, static_cast<std::uint8_t>(10 + c), 0);
         }
         std::vector<std::uint8_t> out;
-        compose_widescreen(out, margin, center, nullptr, nullptr,
-                           /*hud_rows=*/0, /*backdrop=*/nullptr);
+        compose_widescreen(out, margin, center, nullptr, nullptr, MarginFill{/*hud_rows=*/0, /*backdrop=*/nullptr});
         const int W = kW + 2 * margin;
         auto at = [&](int x, int y) -> const std::uint8_t* {
             return &out[(static_cast<std::size_t>(y) * W + x) * 4];
@@ -252,8 +248,8 @@ int main() {
         // mirror_col = M-1-x = 0-0 = 0 for x=0, so col 0 = black (void).
         const int M = 1;
         std::vector<std::uint8_t> def, pure;
-        compose_widescreen(def,  M, center, nullptr, nullptr, 0, nullptr, false);
-        compose_widescreen(pure, M, center, nullptr, nullptr, 0, nullptr, true);
+        compose_widescreen(def,  M, center, nullptr, nullptr, MarginFill{0, nullptr, false});
+        compose_widescreen(pure, M, center, nullptr, nullptr, MarginFill{0, nullptr, true});
         const int W = 320 + 2 * M;
         // Left-most margin pixel mirrors column 0 (black).
         auto px = [&](const std::vector<std::uint8_t>& b, int x, int y) {

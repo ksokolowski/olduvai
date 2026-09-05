@@ -47,6 +47,9 @@ struct CliArgs {
     std::string render_audio;       // input format-0 MIDI stream (SMF)
     std::string render_audio_out;   // WAV out; empty → print "sha256  frames"
     double render_audio_secs = 2.0; // render duration
+    // AdLib SFX render: one id, or "all".  Needs --game-dir: the patch bytes
+    // live in the user's executable, never in this repo.
+    std::string render_sfx;
 };
 
 // What main() should do after parsing.  When should_exit is set, main returns
