@@ -481,14 +481,24 @@ void WidescreenPresenter::present(
     // slow base→bubbles→tiles order).  HD only (scale>1).
     if (hd() && hd_scale() > 1 && wtex_ != nullptr) {
         const FrameBuffer* ws_bd = ws_backdrop();
+        // `peek` is NAMED rather than passed as a braced temporary, and that is
+        // not style: GCC's -Wdangling-reference (13..15) fires on binding a
+        // reference to the result of a reference-returning function that took a
+        // TEMPORARY argument, and CI builds with -Werror.  The reference is in
+        // fact long-lived — get_static_wide_bg_hd returns into a function-local
+        // static cache, never into its arguments — so the diagnostic is a false
+        // positive, but a named local satisfies the heuristic without
+        // suppressing a warning that is worth keeping elsewhere.  GCC 16 no
+        // longer reports it; ubuntu-latest's g++ still does, which is why this
+        // was invisible on macOS/clang AND on a newer local GCC.
+        const WidePeek peek{left_ok_ ? &left_ : nullptr, left_screen_,
+                            right_ok_ ? &right_ : nullptr, right_screen_,
+                            ws_bd, &left_seam_, &right_seam_, &left_bridge_,
+                            &right_bridge_, peek_generation_};
         const std::vector<std::uint8_t>& bg_hd =
             presentation::get_static_wide_bg_hd(
                 *ctx_.state, *ctx_.render, hd_scale(), *hd_profile(),
-                margin_,
-                WidePeek{left_ok_ ? &left_ : nullptr, left_screen_,
-                         right_ok_ ? &right_ : nullptr, right_screen_,
-                         ws_bd, &left_seam_, &right_seam_, &left_bridge_,
-                         &right_bridge_, peek_generation_});
+                margin_, peek);
         const int uw = native_w_ * hd_scale(), uh = 200 * hd_scale();
         const std::size_t n =
             static_cast<std::size_t>(uw) * uh * 4;
