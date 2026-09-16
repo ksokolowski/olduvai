@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "presentation/render/boss_arena.hpp"
 
+#include "presentation/diag/frame_stats.hpp"
+
 #include <algorithm>
 #include <cstdlib>   // std::getenv (OLDUVAI_WS_FORCE_MARGIN widescreen override)
 
@@ -110,6 +112,10 @@ void BossArenaPresenter::hud_overlay_wide(bool draw_lives) {
 }
 
 void BossArenaPresenter::present_frame(bool draw_lives, bool do_present) {
+    // Brackets the WHOLE present, matching FramePresenter::present, so the two
+    // drivers' present_total columns mean the same thing.
+    FrameStats::Timer pt(stats, &FrameStats::present_ms);
+    if (stats != nullptr) stats->note_present();
     ws_.rebuild_if_resized();
     SDL_Renderer* const ren = surface_.ren();
     SDL_Texture* const tex = surface_.tex();
@@ -120,11 +126,14 @@ void BossArenaPresenter::present_frame(bool draw_lives, bool do_present) {
     if (!surface_.use_hd_text()) {
         if (draw_lives) hud_.draw_classic_lives(fb_);
     }
-    if (hd) {
-        // Arena fb is already HD — upload directly (no upscale, no text).
-        SDL_UpdateTexture(tex, nullptr, fb_.px.data(), fb_.w * 4);
-    } else {
-        SDL_UpdateTexture(tex, nullptr, fb_.px.data(), 320 * 4);
+    {
+        FrameStats::Timer ut(stats, &FrameStats::upload_ms);
+        if (hd) {
+            // Arena fb is already HD — upload directly (no upscale, no text).
+            SDL_UpdateTexture(tex, nullptr, fb_.px.data(), fb_.w * 4);
+        } else {
+            SDL_UpdateTexture(tex, nullptr, fb_.px.data(), 320 * 4);
+        }
     }
     SDL_RenderClear(ren);
     if (ws_.active) {
@@ -142,7 +151,10 @@ void BossArenaPresenter::present_frame(bool draw_lives, bool do_present) {
         // Vector HUD labels at OUTPUT resolution (crisp at any window scale).
         if (surface_.use_hd_text()) hud_overlay(draw_lives);
     }
-    if (do_present) SDL_RenderPresent(ren);
+    if (do_present) {
+        FrameStats::Timer st(stats, &FrameStats::swap_ms);
+        SDL_RenderPresent(ren);
+    }
 }
 
 std::vector<std::uint8_t> BossArenaPresenter::build_wide_up() {
@@ -162,7 +174,15 @@ std::vector<std::uint8_t> BossArenaPresenter::build_wide_up() {
         bg_hd_profile_ = profile;
     }
 
-    std::vector<std::uint8_t> out = bg_hd_;   // copy cached HD wide bg
+    // Timed as the two SEPARATE costs they are: a 2.5 MB allocate-and-copy at
+    // scale 3 that is identical work on every boss, and a sprite blit whose
+    // cost scales with the boss.  Only the second can explain a per-level
+    // spread, so reporting them summed would answer the wrong question.
+    std::vector<std::uint8_t> out;
+    {
+        FrameStats::Timer bt(stats, &FrameStats::bg_copy_ms);
+        out = bg_hd_;   // copy cached HD wide bg
+    }
     // 2. draw the live fight sprites over the HD buffer at origin_x = M (per-
     //    asset HD cache) so edge-crossing sprites overflow into the margins.
     RenderTarget wrt = boss_visual_target(out.data(), ws_.w * hd_scale,
@@ -171,20 +191,31 @@ std::vector<std::uint8_t> BossArenaPresenter::build_wide_up() {
     boss_smooth_pos(wrt, smooth_use_float != nullptr && *smooth_use_float,
                     smooth_fx != nullptr ? *smooth_fx : 0.0f,
                     smooth_fy != nullptr ? *smooth_fy : 0.0f);
-    draw_fight_sprites(wrt);
+    {
+        FrameStats::Timer st(stats, &FrameStats::scene_ms);
+        draw_fight_sprites(wrt);
+    }
     return out;
 }
 
 void BossArenaPresenter::show_wide_up(const std::vector<std::uint8_t>& up,
                                       bool draw_lives, bool do_present) {
+    FrameStats::Timer pt(stats, &FrameStats::present_ms);
+    if (stats != nullptr) stats->note_present();
     SDL_Renderer* const ren = surface_.ren();
-    SDL_UpdateTexture(ws_.wtex, nullptr, up.data(),
-                      ws_.w * surface_.hd_scale() * 4);
+    {
+        FrameStats::Timer ut(stats, &FrameStats::upload_ms);
+        SDL_UpdateTexture(ws_.wtex, nullptr, up.data(),
+                          ws_.w * surface_.hd_scale() * 4);
+    }
     SDL_RenderClear(ren);
     SDL_RenderCopy(ren, ws_.wtex, nullptr, nullptr);
     // Vector HUD over the center 320 sub-region (mapped into the wide domain).
     if (surface_.hd_text().ok()) hud_overlay_wide(draw_lives);
-    if (do_present) SDL_RenderPresent(ren);
+    if (do_present) {
+        FrameStats::Timer st(stats, &FrameStats::swap_ms);
+        SDL_RenderPresent(ren);
+    }
 }
 
 void BossArenaPresenter::present_wide(bool draw_lives, bool do_present) {
@@ -203,6 +234,8 @@ void BossArenaPresenter::present_wide(bool draw_lives, bool do_present) {
 void BossArenaPresenter::present_wide_native(const FrameBuffer& nat,
                                              bool draw_lives, bool do_present,
                                              bool draw_hud) {
+    FrameStats::Timer pt(stats, &FrameStats::present_ms);
+    if (stats != nullptr) stats->note_present();
     ws_.rebuild_if_resized();
     ws_.last_native = nat;
     SDL_Renderer* const ren = surface_.ren();
@@ -212,23 +245,35 @@ void BossArenaPresenter::present_wide_native(const FrameBuffer& nat,
     if (!ws_.active || ws_.wtex == nullptr) {
         std::vector<std::uint8_t> up =
             enhance::upscale_rgba(nat.px, 320, 200, hd_scale, profile);
-        SDL_UpdateTexture(surface_.tex(), nullptr, up.data(),
-                          320 * hd_scale * 4);
+        {
+            FrameStats::Timer ut(stats, &FrameStats::upload_ms);
+            SDL_UpdateTexture(surface_.tex(), nullptr, up.data(),
+                              320 * hd_scale * 4);
+        }
         SDL_RenderClear(ren);
         SDL_RenderCopy(ren, surface_.tex(), nullptr, nullptr);
         if (draw_hud && surface_.use_hd_text()) hud_overlay(draw_lives);
-        if (do_present) SDL_RenderPresent(ren);
+        if (do_present) {
+            FrameStats::Timer st(stats, &FrameStats::swap_ms);
+            SDL_RenderPresent(ren);
+        }
         return;
     }
     std::vector<std::uint8_t> wide;
     compose_arena_wide(wide, ws_.M, nat);
     std::vector<std::uint8_t> up =
         enhance::upscale_rgba(wide, ws_.w, 200, hd_scale, profile);
-    SDL_UpdateTexture(ws_.wtex, nullptr, up.data(), ws_.w * hd_scale * 4);
+    {
+        FrameStats::Timer ut(stats, &FrameStats::upload_ms);
+        SDL_UpdateTexture(ws_.wtex, nullptr, up.data(), ws_.w * hd_scale * 4);
+    }
     SDL_RenderClear(ren);
     SDL_RenderCopy(ren, ws_.wtex, nullptr, nullptr);
     if (draw_hud && surface_.hd_text().ok()) hud_overlay_wide(draw_lives);
-    if (do_present) SDL_RenderPresent(ren);
+    if (do_present) {
+        FrameStats::Timer st(stats, &FrameStats::swap_ms);
+        SDL_RenderPresent(ren);
+    }
 }
 
 void BossArenaPresenter::present_any(bool draw_lives, bool do_present) {

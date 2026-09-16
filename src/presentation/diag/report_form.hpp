@@ -64,6 +64,11 @@ public:
         bool want_presented;      // hd || wsp.present_path()
         WidescreenPresenter& wsp;
         SDL_Renderer* ren;
+        // Passed in, not derived from `ren`: SDL_RenderGetWindow is SDL
+        // 2.0.22+, and the Linux release builds against 2.0.20 (jammy — the
+        // AppImage's library floor, release.yml).  The 0.9.7 dry run caught
+        // the call on that job only.
+        SDL_Window* win;
         std::uint32_t frame_ms;
         // run_platform_level's upload_and_show(frame, with_hud, do_present).
         const std::function<void(FrameBuffer&, bool, bool)>& upload_and_show;

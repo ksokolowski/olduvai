@@ -28,6 +28,15 @@ if "%OUTDIR%"=="" set "OUTDIR=%CD%"
 
 set FS_VER=2.5.7
 set FS_SHA=CE27840221AB00DD59BF27E85ECBBA480C6C2A7C9FBEC4243658F68F59C07F4A
+rem gcem — fetched HERE so FluidSynth's configure does not (BACKLOG §3.6d).
+rem Its cmake_admin/FindGCEM.cmake looks for gcem/include/gcem.hpp under the
+rem source root; the release tarball ships that directory EMPTY, so CMake
+rem downloads the zip itself MID-CONFIGURE.  Same hole as the POSIX script had:
+rem a release build reached GitHub twice, once visibly and once from inside a
+rem nested configure.  Revision and hash are FluidSynth's own, read from its
+rem FindGCEM.cmake — re-read them when FS_VER moves.
+set GCEM_REV=012ae73c6d0a2cb09ffe86475f5c6fba3926e200
+set GCEM_SHA=28159274C54E9640354852E172D10D88EB159F4E7F2FEA42EDBCD20105ED3526
 
 if not exist "%WORK%" mkdir "%WORK%"
 pushd "%WORK%" || exit /b 1
@@ -39,6 +48,22 @@ powershell -NoProfile -Command "$h=(Get-FileHash fs.tar.gz -Algorithm SHA256).Ha
 if exist fluidsynth-%FS_VER% rmdir /s /q fluidsynth-%FS_VER%
 if exist build rmdir /s /q build
 tar -xzf fs.tar.gz || exit /b 1
+
+rem Pre-populate gcem: pinned URL, verified hash, then assert the ARTIFACT —
+rem the path FindGCEM actually probes — not merely that a download happened.
+if not exist gcem.zip (
+  powershell -NoProfile -Command "Invoke-WebRequest -Uri https://github.com/kthohr/gcem/archive/%GCEM_REV%.zip -OutFile gcem.zip" || exit /b 1
+)
+powershell -NoProfile -Command "$h=(Get-FileHash gcem.zip -Algorithm SHA256).Hash; if ($h -ne '%GCEM_SHA%') { throw ('gcem checksum mismatch: ' + $h) }" || exit /b 1
+if exist gcem-unpacked rmdir /s /q gcem-unpacked
+powershell -NoProfile -Command "Expand-Archive -Path gcem.zip -DestinationPath gcem-unpacked -Force" || exit /b 1
+mkdir fluidsynth-%FS_VER%\gcem 2>nul
+xcopy /E /I /Q /Y gcem-unpacked\gcem-%GCEM_REV%\* fluidsynth-%FS_VER%\gcem\ >nul || exit /b 1
+if not exist fluidsynth-%FS_VER%\gcem\include\gcem.hpp (
+  echo build_fluidsynth_windows: gcem pre-populate FAILED - include\gcem.hpp missing.
+  echo   FluidSynth would silently fall back to downloading it mid-configure.
+  exit /b 1
+)
 
 rem Everything optional OFF: each would be another DLL to ship, sign and
 rem license, and none is reachable through the small C-API subset the engine

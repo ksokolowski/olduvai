@@ -12,6 +12,7 @@
 // produced.  It never changes rendered output; it only avoids recompute.
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -44,6 +45,32 @@ class HdAssetCache {
     void clear();
     std::size_t size() const { return map_.size(); }
 
+    // ── Batch interface, for warming ────────────────────────────────────
+    // get() fuses key -> lookup -> build -> insert.  That is right for the
+    // per-frame path and useless for a warm pass: there is no way to compute
+    // an entry without mutating the map, so a warm could not be threaded
+    // without a lock, and the only place to put one is the path get() is on
+    // — the per-frame blit.  Splitting the phases moves the lock out of the
+    // problem entirely: a caller runs the EXPENSIVE phase (build) on many
+    // threads and keeps the map strictly single-threaded.  get() below is
+    // rewritten in terms of these and still takes no lock.
+    static std::uint64_t key_for(const std::vector<std::uint8_t>& src, int w,
+                                 int h, int scale, const std::string& profile,
+                                 bool bleed = true);
+    bool contains(std::uint64_t k) const { return map_.find(k) != map_.end(); }
+
+    // Produce exactly what get() would have produced, without touching the
+    // map.  THREAD-SAFE: reads only its arguments and the disk config, which
+    // enable_disk() must not be racing; the only shared writes are the atomic
+    // diagnostic counters.
+    HdAsset build(const std::vector<std::uint8_t>& src, int w, int h, int scale,
+                  const std::string& profile, bool bleed = true) const;
+
+    // Adopt a prebuilt asset.  False if the key was already present — the
+    // existing entry wins, so a late insert can never change what a blit that
+    // already holds a reference sees.
+    bool insert(std::uint64_t k, HdAsset a);
+
     // Enable the disk persistence layer, writing/reading baked blocks under
     // `dir` (created if absent).  When unset (the default) the cache is
     // in-memory only — gameplay-faithful by construction.  Stage-2 HD assets
@@ -52,15 +79,24 @@ class HdAssetCache {
     void enable_disk(const std::filesystem::path& dir);
 
     // Test/diagnostic counters for the disk layer.
-    std::size_t disk_loads() const { return disk_loads_; }
-    std::size_t disk_stores() const { return disk_stores_; }
+    std::size_t disk_loads() const { return disk_loads_.load(); }
+    std::size_t disk_stores() const { return disk_stores_.load(); }
 
  private:
+    // Shared key+build half of get(), so the per-frame path hashes `src` ONCE
+    // rather than once for the lookup and again inside build().  That hash
+    // walks every source byte, which is 256 kB for a full background.
+    HdAsset build_with_key(std::uint64_t k, const std::vector<std::uint8_t>& src,
+                           int w, int h, int scale, const std::string& profile,
+                           bool bleed) const;
+
     std::unordered_map<std::uint64_t, HdAsset> map_;
     std::filesystem::path disk_dir_;   // empty = disk layer off
     bool disk_enabled_ = false;
-    std::size_t disk_loads_ = 0;
-    std::size_t disk_stores_ = 0;
+    // Atomic only because build() is callable from several warm threads at
+    // once.  Diagnostics, so relaxed ordering is all they need.
+    mutable std::atomic<std::size_t> disk_loads_{0};
+    mutable std::atomic<std::size_t> disk_stores_{0};
 };
 
 }  // namespace olduvai::enhance

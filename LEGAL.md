@@ -15,15 +15,38 @@ Nothing here is legal advice; it states what the project is and does.
 
 ## No game content — ever
 
-- The repository and every release binary contain **no code, art, audio,
-  levels, music, or any other data** from the original game, and none will
-  ever be accepted.
+- The repository and every release binary contain **no code, audio, music,
+  levels, or data files** from the original game, and none will ever be
+  accepted.
 - This is machine-enforced in CI (`scripts/check_tree.sh`): no game files, no
-  byte ranges of them, no data tables copied from the executable, no game
-  screenshots — test goldens are SHA-256 hashes, never images.
+  byte ranges of them, no data tables copied from the executable, and no
+  images or video outside the directories allowed for them — test goldens
+  are SHA-256 hashes, never images.
 - The full content policy is in [CONTRIBUTING.md](CONTRIBUTING.md).
 - The engine reads the data files from **your** copy of the game, in place,
   and never modifies, copies or redistributes them.
+
+## Screenshots and clips — the one curated exception
+
+- [`assets/screenshots/`](assets/screenshots/README.md) holds a small set of
+  stills and short, **silent** clips of *this engine* running a legitimately
+  owned copy of the game — enough to show what the engine does: the classic
+  mode, the HD scalers, and the widescreen margins and vector HUD it adds.
+- This follows established practice: Wikipedia articles about games
+  illustrate gameplay with a reduced screenshot to identify the work, and
+  stores show gameplay screenshots in their listings — including the game's
+  [GOG.com page](https://www.gog.com/game/prehistorik_12), which is where we
+  recommend getting the game.
+- The game's artwork visible in these frames belongs to its rights holders,
+  and this project holds **no license** to it. The frames are few, reduced in
+  size, carry no audio, and are shown to identify the game and illustrate the
+  engine — never as a substitute for the game. None of them is part of a
+  release binary.
+- The limits are enforced in CI where a machine can check them (location; at
+  most 16 files of at most 2 MiB each; no audio track in any clip). The rest
+  is curated by hand, under the rules in the directory's README.
+- **Removal on request:** a rights holder who wants any of these files removed
+  can open an issue on the project, and it will be taken down.
 
 ## The original game
 

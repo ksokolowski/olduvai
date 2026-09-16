@@ -32,6 +32,23 @@
 # commit's line-by-line reading of boss_l6.py::_advance_frame_counter.  This
 # fixture pins behaviour CHANGE.
 #
+# ⚠️ STILL TRUE AFTER §3.15 ITEM 1, AND THE NEAR-MISS IS WORTH RECORDING.
+# l6_slam_deaths.jsonl WAS run through olduvai_scenario_diff.py on 2026-09-06
+# and came back green — 315 aligned frames identical on 17 fields — and it
+# would have been easy to write that up as "this gate is now oracle-verified".
+# It is not.  The diff runs both engines in their DEFAULT mode; this gate runs
+# the native side with OLDUVAI_FORCE_SMOOTH=1 --enhanced --render-scale 2.
+# Measured rather than argued: the fixture here is 371 frames, the diff's
+# native run is 316, and they part company at frame 92.  Two different runs.
+#
+# So what IS oracle-verified is l6_slam_deaths in CLASSIC mode — real new
+# coverage of the slam-kill routing and the boss-side game over, and it lives
+# in the reference corpus as scenarios/l6_slam_deaths.jsonl.  The smooth-motion
+# pose-hold that this gate exists for is NOT covered by it, and cannot be until
+# the diff tool can drive both sides in a matching mode.  The general rule the
+# near-miss gives: a promotion only counts if the diffed invocation is the
+# gate's invocation — check env vars and flags, not just the input script.
+#
 # Determinism: verified byte-identical over two consecutive runs (mmpx is the
 # integer upscaler; the trace holds no pixels).
 #

@@ -43,6 +43,18 @@ public:
     // classic keeps the pre-baked sprites untouched.
     void draw(std::vector<std::uint8_t>& b, int ow, int oh);
 
+    // Overlay-skip key.  0 means "never skip": returned whenever ANYTHING
+    // would be drawn, because both banners animate off the wall clock and so
+    // change every frame while visible.  A stable non-zero value means the
+    // banner contributes nothing to the overlay this frame.
+    //
+    // WHY VISIBILITY IS ENOUGH, side effect included.  draw() mutates exactly
+    // one thing -- it clears gr_anim_active_ when the fly-away finishes -- and
+    // that can only happen while gr_anim_active_ is true, which is precisely
+    // when this returns 0 and the caller is forced to call draw() anyway.  So
+    // skipping never swallows the latch.
+    std::uint64_t key() const;
+
 private:
     enhance::HdText& hd_text_;
     const systems::SystemsState& state_;

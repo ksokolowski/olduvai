@@ -98,6 +98,13 @@ struct GameOptions {
     // banners (and the OLDUVAI title): caveman | fire | rainbow | gold | pulse.
     // The OLDUVAI_BANNER_FX env var overrides this at runtime when set.
     std::string banner_fx = "caveman";
+    // Smooth-present tuning (config keys smooth_subframes / smooth_vsync,
+    // presentation/render/smooth_config.hpp).  run_game publishes them.
+    int smooth_subframes = 0;      // 0 = auto
+    bool smooth_vsync_off = false;
+    // The session's profile family (presentation/menu/profile_table.hpp):
+    // decides what the Options menu's Classic/Enhanced preset applies.
+    std::string profile_family = "desktop";
     // --window WxH: force the window pixel size (0 = integer-scaled default).
     // E.g. 1680x720 ≈ 21:9 to simulate an ultrawide widescreen viewport on a
     // non-ultrawide panel.  Needs --aspect widescreen for the peek margins.

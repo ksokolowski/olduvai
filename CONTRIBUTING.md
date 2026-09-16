@@ -14,6 +14,19 @@ This repository may contain:
   edge cases. **Never bytes taken from the game files.**
 - Bundled third-party libraries (as sources, with their license
   files) — inventoried in THIRD-PARTY-NOTICES.md.
+- A **small, curated** set of stills and short **silent** clips of the
+  engine's own output, under `assets/screenshots/` and nowhere else (owner
+  rulings: stills 2026-09-08, clips 2026-09-13). This replaces a blanket
+  ban. An engine whose point is rendering fidelity cannot show what it does
+  without frames — classic DOS mode, the HD profiles, widescreen with its
+  margins — and the widescreen margins and the vector HUD are *this
+  project's* output, not the original's. The rules, the copyright notes and
+  the regeneration recipe are in
+  [assets/screenshots/README.md](assets/screenshots/README.md); the public
+  position is in [LEGAL.md](LEGAL.md). `check_tree.sh` enforces location,
+  count, size and silence — **the rest of the curation is a human job**:
+  engine output only, never game art on its own, and never a route for
+  shipping game files.
 
 It must NEVER contain:
 
@@ -23,7 +36,8 @@ It must NEVER contain:
   the user's machine, from the user's files, at first run.
 - Decompilation or disassembly text in any form — not even in comments.
   Cite offsets instead.
-- Screenshots of the game, including in the README.
+- Screenshots, clips or any other game imagery outside
+  `assets/screenshots/`, and any clip with audio.
 - Roland MT-32 / CM-32L ROMs.
 - AI co-authorship trailers or attributions (`Co-Authored-By`,
   "Generated with ..."), anywhere — commit messages or files.

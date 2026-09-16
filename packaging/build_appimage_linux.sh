@@ -216,7 +216,16 @@ echo ">> glibc floor OK: everything <= GLIBC_${GLIBC_MAX}"
 # pinned image does — which is the point.  (-static-libstdc++ -static-libgcc
 # would remove this floor entirely, but that changes the shipped binary and is
 # a separate decision.)
-GLIBCXX_MAX="${OLDUVAI_GLIBCXX_MAX:-3.4.29}"   # jammy g++-11
+#
+# RAISED to 3.4.30 at the 0.9.7 cut (owner, 2026-09-16).  The compiler is
+# jammy's g++-11, but the RUNTIME it links against is jammy's libstdc++6,
+# which is GCC 12's and exports 3.4.30 — the linker binds new references to
+# the newest default version it finds there.  0.9.7's threaded upscaler pool
+# (src/enhance/parallel_rows.cpp) is the first code to wait on a
+# std::condition_variable, whose wait() GCC 12 re-versioned to 3.4.30.  No
+# supported user is dropped: Ubuntu 22.04 / Mint 21 ship exactly this runtime,
+# and every distro meeting the GLIBC 2.35 floor above ships GCC 12+ too.
+GLIBCXX_MAX="${OLDUVAI_GLIBCXX_MAX:-3.4.30}"   # jammy's libstdc++6 (GCC 12)
 CXXABI_MAX="${OLDUVAI_CXXABI_MAX:-1.3.9}"
 for pair in "GLIBCXX_ ${GLIBCXX_MAX}" "CXXABI_ ${CXXABI_MAX}"; do
     set -- ${pair}
@@ -224,9 +233,15 @@ for pair in "GLIBCXX_ ${GLIBCXX_MAX}" "CXXABI_ ${CXXABI_MAX}"; do
     [[ -n "${v}" ]] || continue
     if [[ "$(printf '%s\n%s\n' "${v}" "$2" | sort -V | tail -1)" != "$2" ]]; then
         echo "!! olduvai needs $1${v} — above the declared $1$2 floor" >&2
+        readelf --wide --dyn-syms "${appdir}/usr/bin/olduvai" 2>/dev/null \
+            | grep -F "$1${v}" | head -5 >&2      # name the symbols
         exit 1
     fi
     echo ">> $1 floor OK: $1${v} (<= $2)"
+    # Name what sits AT the floor too: the evidence for the declared number,
+    # printed on every green run instead of re-derived at the next bump.
+    readelf --wide --dyn-syms "${appdir}/usr/bin/olduvai" 2>/dev/null \
+        | grep -F "@$1${v}" | awk '{print "     " $NF}' | head -5
 done
 
 # LGPL corresponding-source provision: record exactly which host libraries

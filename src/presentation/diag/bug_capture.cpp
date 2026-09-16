@@ -16,6 +16,7 @@
 #include <tuple>
 #include <vector>
 
+#include "core/build_id.hpp"
 #include "core/types.hpp"
 #include "presentation/diag/debug_overlay.hpp"
 #include "presentation/image_out.hpp"
@@ -178,7 +179,8 @@ void write_report_md(const fs::path& path,
                      const std::vector<const core::Entity*>& ents,
                      int display_level, int internal_level,
                      const std::string& captured_at,
-                     const BugAnnotations& ann, bool has_presented) {
+                     const BugAnnotations& ann, bool has_presented,
+                     const DisplayInfo& display) {
     std::ofstream f(path);
     if (!f) return;
     const auto& p = state.player;
@@ -193,7 +195,8 @@ void write_report_md(const fs::path& path,
     f << "# Bug report - L" << display_level << " (int." << internal_level
       << ") screen " << state.current_screen << " - f5\n\n";
     f << "**When:** " << captured_at << "\n";
-    f << "**Engine:** olduvai " << OLDUVAI_VERSION << "\n";
+    f << "**Engine:** olduvai " << OLDUVAI_VERSION << " ("
+      << olduvai::build_id() << ")\n";
     f << "**Tag:** " << (ann.tag.empty() ? "f5" : ann.tag) << "\n";
     f << "**Reproducibility:** "
       << (ann.reproducibility.empty() ? "unknown" : ann.reproducibility)
@@ -213,6 +216,50 @@ void write_report_md(const fs::path& path,
     f << "| Frame counter | " << state.frame_counter << " |\n";
     f << "| Active entities | " << ents.size() << " |\n";
     f << "| God mode | " << (state.god_mode ? "yes" : "no") << " |\n\n";
+
+    // Display / present path.  A visual report is not actionable without it:
+    // "widescreen gone" is a claim about ws_active and ws_margin, and neither
+    // is visible in a screenshot taken through a pillarbox.
+    if (display.supplied) {
+        f << "## Display\n\n";
+        f << "| Field | Value |\n|-------|-------|\n";
+        f << "| Renderer output | " << display.out_w << "x" << display.out_h
+          << " (" << (display.out_h > 0
+                          ? static_cast<double>(display.out_w) / display.out_h
+                          : 0.0)
+          << ":1) |\n";
+        f << "| Logical size | "
+          << (display.logical_w == 0 && display.logical_h == 0
+                  ? std::string("none (1:1)")
+                  : std::to_string(display.logical_w) + "x" +
+                        std::to_string(display.logical_h))
+          << " |\n";
+        f << "| Fullscreen | " << (display.fullscreen ? "yes" : "no") << " |\n";
+        f << "| HD | " << (display.hd ? "yes" : "no") << " (scale "
+          << display.hd_scale << ") |\n";
+        f << "| Aspect setting | " << (display.aspect.empty() ? "(unset)"
+                                                              : display.aspect)
+          << " |\n";
+        f << "| Widescreen active | " << (display.ws_active ? "YES" : "NO")
+          << " |\n";
+        // Say WHY it is off.  Margin is only ever computed under aspect
+        // "widescreen", so 0 has two very different meanings and the reader of
+        // a "widescreen gone" report needs to be told which one applies.
+        f << "| Widescreen margin | " << display.ws_margin;
+        if (display.ws_margin == 0) {
+            if (display.aspect != "widescreen")
+                f << "  (0 = widescreen not selected; Aspect is \""
+                  << (display.aspect.empty() ? "(unset)" : display.aspect)
+                  << "\")";
+            else if (!display.hd)
+                f << "  (0 = widescreen needs enhanced/HD mode)";
+            else
+                f << "  (0 = display not wider than 16:10)";
+        }
+        f << " |\n";
+        f << "| Wide native width | " << display.ws_native_w << " |\n";
+        f << "| Upscale threads | " << display.upscale_threads << " |\n\n";
+    }
     f << "## Screenshots\n\n";
     // Presented shot first when it exists — it is what the player actually saw
     // (HD upscale + widescreen + HUD).  The other three are native 320x200
@@ -317,7 +364,8 @@ std::string write_bug_report(const systems::SystemsState& state,
                              const std::vector<formats::Sprite>& entity_sprites,
                              int display_level, int internal_level,
                              int overlay_scale, const BugAnnotations& ann,
-                             bool has_presented) {
+                             bool has_presented,
+                             const DisplayInfo& display) {
     const std::string ts = timestamp_dir();
     const std::string iso = timestamp_iso();
 
@@ -372,7 +420,7 @@ std::string write_bug_report(const systems::SystemsState& state,
     }
 
     write_report_md(root / "report.md", state, ents, display_level,
-                    internal_level, iso, ann, has_presented);
+                    internal_level, iso, ann, has_presented, display);
 
     std::printf("bug report: %s\n", root.string().c_str());
     std::fflush(stdout);

@@ -47,6 +47,15 @@ struct MenuBindings {
     virtual ~MenuBindings() = default;
     virtual std::string get(const std::string& key) = 0;
     virtual void set(const std::string& key, const std::string& value) = 0;
+
+    // Optional narrowing of a choice row's AUTHORED value list, for a value
+    // that exists but is inert in the current configuration (Aspect's
+    // "widescreen" without HD).  Display labels are still resolved against
+    // the authored list, so withholding a value never costs it its label.
+    // Default: no narrowing.
+    virtual std::vector<std::string> allowed_values(const MenuItem& it) {
+        return it.values;
+    }
 };
 
 struct MenuRow {

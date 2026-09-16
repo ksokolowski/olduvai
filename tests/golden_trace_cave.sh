@@ -3,6 +3,19 @@
 # Copyright (C) 2026 Krzysztof Sokołowski
 # L1 cave trace gate — the corpus scenario that goes UNDERGROUND.
 #
+# ✅ ORACLE-VERIFIED 2026-09-06 (§3.15 item 1, second pass) — this fixture is
+# cross-engine truth and may be cited as parity.  It was recorded from THIS
+# engine and pinned behaviour CHANGE only; it could not be promoted at first
+# because the diff harness had no way to enter a level mid-way, so every gate
+# starting at a non-zero screen was excluded.  The reference gained
+# `--start-screen` (mirroring this engine's flag field for field) and the diff
+# tool learned the lNsM_ filename convention, so `l1s2_cave.jsonl`
+# now runs `--level 1 --start-screen 2` on BOTH engines.
+#
+# 170 aligned frames IDENTICAL on 17 fields — the exact length of this gate's
+# own fixture, so the promotion covers the whole run and not a prefix.  Re-run
+# the diff after regenerating, or the promotion goes stale in silence.
+#
 # WHY THIS EXISTS.  §3.15 measured cave_logic.cpp at 3.1%, with
 # setup_cave_collision and update_cave_bat executed by nothing in the tree.
 # The reason was one key: cave entry requires holding DOWN on the entrance

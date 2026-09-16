@@ -14,14 +14,20 @@
 # systems lines and 23.5% to 44.8% of its functions — spawning 11->74%,
 # player 35->78%, frame_runner 32->56%, transitions 0->14%.
 #
-# WHAT KIND OF GOLDEN THIS IS — READ BEFORE TRUSTING IT.  golden_trace and
-# boss_golden_trace were validated frame-by-frame against the Python oracle;
-# their fixtures are cross-engine truth.  THIS ONE IS NOT.  It was recorded
-# from this engine, so it pins BEHAVIOUR CHANGE, not correctness: it will catch
-# a regression in screen transitions, spawning or respawn, and it will happily
-# bless a divergence that was already there when it was recorded.  Promoting it
-# to oracle truth means running the same input script through the reference and
-# diffing — tracked in BACKLOG §3.15.  Until then, do not cite it as parity.
+# WHAT KIND OF GOLDEN THIS IS.  ✅ ORACLE-VERIFIED 2026-09-06 (§3.15 item 1).
+# It was originally recorded from THIS engine and pinned behaviour CHANGE only;
+# it has since been promoted.  walk_in.jsonl was replayed through both engines
+# and the traces diffed with frame-offset alignment
+# (olduvai_scenario_diff.py): 300 aligned frames IDENTICAL on 17 fields.  The
+# input now lives in the reference corpus as scenarios/l1_walk_hold_right.jsonl,
+# so `--all` keeps it verified rather than leaving this a one-off measurement.
+#
+# So this fixture is cross-engine truth, like golden_trace and
+# boss_golden_trace — it may be cited as parity.  What that does NOT mean: the
+# diff aligns on gameplay state and compares 17 trace fields, so anything
+# outside those fields (rendering, audio, sub-frame pacing) is still unproven
+# here.  Re-run the diff after regenerating, or the promotion goes stale
+# silently.
 #
 # Determinism: verified over three consecutive runs, byte-identical.  The LCG
 # is seeded by level entry, the dummy drivers mute audio and video, and the

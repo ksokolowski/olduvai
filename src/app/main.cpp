@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "config.hpp"
+#include "core/build_id.hpp"
 #include "options_resolve.hpp"
 #include "cli_args.hpp"
 #include "legacy_cache.hpp"
@@ -27,6 +28,7 @@
 #include "formats/voc.hpp"
 #include "presentation/audio/opl_sfx.hpp"
 #include "presentation/audio/wav_io.hpp"
+#include "presentation/menu/profile_table.hpp"
 
 #ifdef OLDUVAI_HAVE_SDL
 #include "presentation/diag/bug_capture.hpp"
@@ -199,11 +201,12 @@ void print_usage() {
         "  olduvai [options]\n"
         "\n"
         "Runs game-file detection in game_dir.  With no mode flag it reports\n"
-        "whether the required files are present; --play launches the game and\n"
-        "--viewer opens the asset browser.  Original Prehistorik game files are\n"
-        "required (FILESA.CUR, FILESB.CUR, FILESA.VGA, FILESB.VGA, and\n"
-        "HISTORIK.EXE — or PREH.SQZ as the GOG release ships it).  A GOG\n"
-        "install root works directly as game_dir (data/PREH is found).\n"
+        "whether the required files are present and prints this help; --play\n"
+        "launches the game and --viewer opens the asset browser.  Original\n"
+        "Prehistorik game files are required (FILESA.CUR, FILESB.CUR,\n"
+        "FILESA.VGA, FILESB.VGA, and HISTORIK.EXE — or PREH.SQZ as the GOG\n"
+        "release ships it).  A GOG install root works directly as game_dir\n"
+        "(data/PREH is found).\n"
         "\n"
         "General:\n"
         "  -h, --help              Show this help and exit.\n"
@@ -289,11 +292,17 @@ void print_usage() {
         "                          level's screen count.\n"
         "\n"
         "Config:\n"
-        "      --profile <name>    Built-in profile: dos|hd.  Overrides the\n"
+        "      --profile <name>    Built-in profile: dos|hd (handhelds:\n"
+        "                          dos-handheld|hd-handheld).  Overrides the\n"
         "                          saved config (CLI flags still win): dos =\n"
         "                          byte-faithful; hd = full enhanced +\n"
         "                          widescreen peeks (add --aspect 4:3 for the\n"
         "                          classic CRT look).\n"
+        "      --default-profile <name>\n"
+        "                          A launcher's device defaults: applied BELOW\n"
+        "                          the saved config, so the player's own\n"
+        "                          choices win.  Also decides what Classic and\n"
+        "                          Enhanced mean in the menu.\n"
         "      --no-config         Ignore the saved config file for this run.\n"
         "      --save-config       Persist the effective CLI settings to the config\n"
         "                          file, then continue.\n"
@@ -341,7 +350,8 @@ int main(int argc, char** argv) {
         const auto pr = olduvai::app::parse_args(argc, argv, args, ps);
         if (pr.show_help) { print_usage(); return 0; }
         if (pr.show_version) {
-            std::printf("olduvai %s\n", OLDUVAI_VERSION);
+            std::printf("olduvai %s (%s)\n", OLDUVAI_VERSION,
+                        olduvai::build_id());
             return 0;
         }
         if (pr.should_exit) return pr.exit_code;
@@ -364,25 +374,24 @@ int main(int argc, char** argv) {
 #endif
 
     {
-        olduvai::app::Config merged;
-        if (!args.no_config) {
-            for (const auto& [k, v] : olduvai::app::load_config_file()) {
-                merged[k] = v;
-            }
-        }
-        // An explicit --profile states INTENT — it must beat the saved
-        // config, or "--profile dos" silently stays enhanced under a saved
-        // hd play.json (the trap from the 2026-07-04 CLI review).  New
-        // precedence: defaults < config < profile < CLI flags.
-        if (!args.profile.empty()) {
-            // Includes the dos-side clears (see apply_profile).
-            olduvai::app::apply_profile(merged, args.profile);
-        }
+        const olduvai::app::Config file_cfg =
+            args.no_config ? olduvai::app::Config{}
+                           : olduvai::app::load_config_file();
+        // Precedence: defaults < --default-profile < play.json < --profile <
+        // CLI flags (options_resolve.hpp, layer_config).  An explicit
+        // --profile states INTENT and beats the saved config (the 2026-07-04
+        // trap: "--profile dos" silently staying enhanced under a saved hd
+        // play.json).  A --default-profile is a launcher's device defaults
+        // and yields to the player's own saved choices.
+        const olduvai::app::LayeredConfig lc = olduvai::app::layer_config(
+            file_cfg, args.profile, args.default_profile);
+        for (const auto& w : lc.warnings) std::fputs(w.c_str(), stderr);
+        ps.profile_family = lc.family;
         // Pure per-key precedence resolution (options_resolve.cpp, CC3
         // phase 3 — unit-tested precedence matrix).  game_dir bridges
         // through the string mirror.
         ps.game_dir = args.game_dir.string();
-        olduvai::app::merge_config(ps, merged);
+        olduvai::app::merge_config(ps, lc.merged);
         if (ps.config_game_dir) args.game_dir = ps.game_dir;
 #ifdef OLDUVAI_HAVE_SDL
         // F5 bug-report destination (config-only; $OLDUVAI_BUG_DIR still
@@ -391,14 +400,8 @@ int main(int argc, char** argv) {
             olduvai::presentation::set_bug_report_dir(ps.bug_report_dir);
 #endif
         if (args.save_config) {
-            olduvai::app::Config out = merged;
-            if (ps.cli.enhanced) out["enhanced"] = ps.enhanced ? "true" : "false";
-            if (ps.cli.enhanced && !ps.enhance_list.empty())
-                out["enhance"] = ps.enhance_list;
-            if (ps.cli.hd) out["hd_profile"] = ps.hd_profile;
-            if (ps.cli.scale) out["render_scale"] = std::to_string(ps.render_scale);
-            if (ps.cli.aspect) out["aspect"] = ps.aspect;
-            if (ps.cli.game_dir) out["game_dir"] = args.game_dir.string();
+            const olduvai::app::Config out = olduvai::app::config_to_save(
+                file_cfg, args.profile, ps, args.game_dir.string());
             if (olduvai::app::save_config_file(out)) {
                 std::printf("Saved settings to %s\n",
                             olduvai::app::config_path().c_str());
@@ -503,7 +506,8 @@ int main(int argc, char** argv) {
             if (olduvai::app::launched_from_gui()) {
                 std::string chosen_preset;
                 const auto picked = olduvai::app::first_run_dialog(
-                    args.game_dir, gf.problems(), &chosen_preset);
+                    args.game_dir, gf.problems(), &chosen_preset,
+                    ps.profile_family);
                 if (!picked) return 1;                 // user quit
                 args.game_dir = *picked;
                 // Adopt the dialog's presentation choice for THIS session
@@ -531,7 +535,14 @@ int main(int argc, char** argv) {
         // launch whose config never answered it (2026-07-19 Windows field
         // report: GOG auto-find → silent classic DOS, no question asked).
         if (olduvai::app::launched_from_gui() && !ps.style_answered) {
-            const std::string preset = olduvai::app::ask_preset_choice();
+            // The answer is a ROLE; the session's family decides which
+            // profile plays it (presentation/menu/profile_table.hpp).
+            const std::string choice = olduvai::app::ask_preset_choice();
+            const std::string preset =
+                choice.empty()
+                    ? std::string()
+                    : std::string(olduvai::presentation::resolve_preset(
+                                      ps.profile_family, choice).name);
             if (!preset.empty()) {   // "" = box unavailable; ask again later
                 olduvai::app::Config c = olduvai::app::load_config_file();
                 olduvai::app::apply_profile(c, preset);
@@ -566,6 +577,10 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "%s", bo.error.c_str());
             return bo.exit_code;
         }
+        // Name the build in every play log: a handheld's olduvai.log is often
+        // the only record of which binary actually ran.
+        std::fprintf(stderr, "olduvai %s (%s)\n", OLDUVAI_VERSION,
+                     olduvai::build_id());
         // Any decoder can throw on a corrupt or truncated game file
         // (CurError, LzssError, Pc1Error, DurError, SqzError, ExeTableError —
         // all std::runtime_error).  load_level catches its own, but the audio
@@ -606,7 +621,16 @@ int main(int argc, char** argv) {
 #endif
     }
 
-    std::printf("Game files found. Engine not yet implemented — "
-                "run with --viewer to browse the game's images.\n");
+    // No mode flag, and detection succeeded.  This printed "Engine not yet
+    // implemented" from 0.1.0 until 0.9.6 — user-facing text that outlived
+    // the thing it described by seven releases, because nothing a bare run
+    // does is gated and nobody types the bare command twice.  A bare run has
+    // no work to do, so it says what was found and then does the only useful
+    // thing left: prints the help.
+    // No trailing period: a game_dir that ends in "/" would render it as
+    // "/." and read like part of the path.
+    std::printf("Game files found in %s\n\n",
+                args.game_dir.string().c_str());
+    print_usage();
     return 0;
 }

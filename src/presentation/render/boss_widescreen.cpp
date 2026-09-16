@@ -3,6 +3,7 @@
 #include "presentation/render/boss_widescreen.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include "presentation/env_num.hpp"
 
@@ -23,6 +24,23 @@ int boss_ws_margin(int out_w, int out_h, const char* force_env) {
     }
     if (m < 0) m = 0;
     if (m > 120) m = 120;
+    // OLDUVAI_WS_DEBUG: what the margin was computed FROM, on the one function
+    // both the boss arena and the platform presenter call.
+    //
+    // Reported 2026-09-10: black bars above and below the arena on a 1280x720
+    // handheld panel.  The arithmetic here cannot produce them -- 1280x720
+    // gives desired=356, m=18, a 356x200 canvas at 1.7780 against the panel's
+    // 1.7778 -- so if bars appear, `out_w`/`out_h` are not the panel, and this
+    // line is what says so.  Cheap enough to leave in: one fprintf behind an
+    // env var, on a function called a handful of times per level.
+    if (std::getenv("OLDUVAI_WS_DEBUG") != nullptr)
+        std::fprintf(stderr,
+                     "[WS] out=%dx%d (%.4f) -> margin=%d canvas=%dx200 (%.4f)"
+                     "%s\n",
+                     out_w, out_h,
+                     out_h > 0 ? static_cast<double>(out_w) / out_h : 0.0,
+                     m, 320 + 2 * m, (320.0 + 2 * m) / 200.0,
+                     (force_env != nullptr) ? "  [FORCED]" : "");
     return m;
 }
 

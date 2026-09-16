@@ -46,6 +46,15 @@
         "CMAKE_EXE_LINKER_FLAGS": "-fprofile-instr-generate",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
+    },
+    {
+      "name": "trimui",
+      "displayName": "TrimUI Smart Pro (KNULLI, aarch64) cross-build",
+      "binaryDir": "${sourceDir}/build/trimui",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/aarch64-knulli.cmake"
+      }
     }
   ],
   "buildPresets": [
@@ -64,6 +73,10 @@
     {
       "name": "coverage",
       "configurePreset": "coverage"
+    },
+    {
+      "name": "trimui",
+      "configurePreset": "trimui"
     }
   ],
   "testPresets": [

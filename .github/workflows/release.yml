@@ -194,6 +194,10 @@ jobs:
           [*Prehistorik 1+2* on GOG.com](https://www.gog.com/game/prehistorik_12).
           Olduvai ships no game content.
 
+          **Handhelds (KNULLI):** `olduvai-*-knulli-trimui.zip` (TrimUI Smart
+          Pro) and `olduvai-*-knulli-a12.zip` (Powkiddy A12) — install steps
+          in `docs/HANDHELD.md`.
+
           Binaries are **not code-signed**: on macOS right-click the app and
           choose *Open* on first launch; on Windows SmartScreen click
           *More info → Run anyway*.  Verify downloads against

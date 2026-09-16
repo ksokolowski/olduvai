@@ -22,8 +22,16 @@
 # the obstacles: 2 crossings, 0 -> 1 -> 2, and coverage rises
 # to 50.0%.
 #
-# WHAT KIND OF GOLDEN THIS IS.  Recorded from THIS engine: it pins behaviour
-# CHANGE, not correctness, like every scenario added under §3.15.
+# WHAT KIND OF GOLDEN THIS IS.  ✅ ORACLE-VERIFIED 2026-09-06 (§3.15 item 1).
+# Recorded from THIS engine originally, so it pinned behaviour CHANGE; since
+# promoted by replaying walk_jump_in.jsonl through both engines and diffing —
+# 170 aligned frames IDENTICAL on 17 fields, the exact length of this gate's
+# own fixture, so the promotion covers the whole run and not a prefix.  The
+# input is scenarios/l3_walk_jump.jsonl in the reference corpus.
+#
+# Note the pair: l1_walk_jump.jsonl and l3_walk_jump.jsonl are the SAME BYTES.
+# The diff tool derives the display level from the lN_ filename prefix, so the
+# name is the level argument — which is why one input appears twice there.
 #
 # Determinism: verified over two consecutive runs, byte-identical.
 #

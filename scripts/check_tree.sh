@@ -31,15 +31,49 @@ if git ls-files | grep -iE '(tile_tables|objects|sprite_defs)\.json$'; then
     fail=1
 fi
 
-# 3. Screenshots (no game imagery in the repo, README included).
-# assets/ holds the ONLY graphics: the project's own marks (bone logo,
-# fire-styled wordmark, per-platform icons) — original authored art, never
-# game-derived.  Provenance + regeneration: assets/README.md.
-if git ls-files | grep -iE '\.(png|jpg|jpeg|gif|bmp|webp|icns|ico|ttf|otf|woff2?)$' \
-        | grep -vE '^assets/(icon|logo|fonts)/[^/]+\.(png|icns|ico|ttf)$'; then
-    echo "check_tree: image files are not allowed (no game screenshots)." >&2
+# 3. Images and video live in named directories and nowhere else.
+# assets/icon|logo|fonts are the project's own marks — original authored art.
+# assets/screenshots is a SMALL CURATED set of the engine's own output: stills
+# (owner ruling 2026-09-08) and short silent clips (2026-09-13) — see
+# CONTRIBUTING.md, LEGAL.md and assets/screenshots/README.md.  Checked here by
+# LOCATION, COUNT, SIZE and one content property (clips carry no audio: the
+# game's music and sound are not ours).  Nothing here can tell a frame from a
+# photograph, so the rest of the curation is a human job.
+media_re='\.(png|jpg|jpeg|gif|bmp|webp|icns|ico|ttf|otf|woff2?|mp4|m4v|mov|webm|mkv|avi)$'
+if git ls-files | grep -iE "$media_re" \
+        | grep -vE '^assets/(icon|logo|fonts)/[^/]+\.(png|icns|ico|ttf)$' \
+        | grep -vE '^assets/screenshots/[a-z0-9-]+\.(png|jpg|mp4)$'; then
+    echo "check_tree: images/video only under assets/{icon,logo,fonts,screenshots}" \
+         "(screenshots: lower-case-hyphen names, .png/.jpg/.mp4)." >&2
     fail=1
 fi
+shots=$(git ls-files 'assets/screenshots/*.png' 'assets/screenshots/*.jpg' \
+                     'assets/screenshots/*.mp4')
+n_shots=$(printf '%s\n' "$shots" | grep -c . || true)
+if [ "$n_shots" -gt 16 ]; then
+    echo "check_tree: assets/screenshots holds $n_shots files — the curated set" \
+         "is capped at 16." >&2
+    fail=1
+fi
+for f in $shots; do
+    [ -f "$f" ] || continue
+    size=$(wc -c < "$f" | tr -d ' ')
+    if [ "$size" -gt 2097152 ]; then
+        echo "check_tree: $f is $size bytes — curated media are capped at 2 MiB." >&2
+        fail=1
+    fi
+    case "$f" in
+        *.mp4)
+            # An MP4 audio track declares a handler box of type 'soun'; with
+            # the zero bytes between them removed it reads "hdlrsoun".
+            # Verified against ffprobe (silent clip: 0, audio muxed in: 1,
+            # index at either end of the file).
+            if LC_ALL=C tr -d '\000' < "$f" | LC_ALL=C grep -aq 'hdlrsoun'; then
+                echo "check_tree: $f has an audio track — curated clips must be silent." >&2
+                fail=1
+            fi ;;
+    esac
+done
 
 # 4. AI-attribution lines inside tracked files.
 if git grep -ilE 'Co-Authored-By: .*Claude|Generated with.*Claude' -- . ':!scripts/' >/dev/null 2>&1; then

@@ -20,6 +20,7 @@
 #include "presentation/render/boss_widescreen.hpp"   // boss_ws_margin (shared margin math)
 #include "presentation/image_out.hpp"
 #include "presentation/window_util.hpp"   // create_stream_tex
+#include "presentation/render/text_overlay.hpp"
 #include "presentation/render/tile_patterns.hpp"
 #include "presentation/render/widescreen.hpp"
 #include "systems/player.hpp"
@@ -36,10 +37,30 @@ void dump_steady_wide(const std::uint8_t* px, int w, int h) {
     const char* dir = std::getenv("OLDUVAI_DUMP_STEADY");
     if (dir == nullptr) return;
     static int seq = 0;
+    char name[32];
     char path[512];
-    std::snprintf(path, sizeof path, "%s/steady_ws_%04d.bmp", dir, seq++);
+    std::snprintf(name, sizeof name, "steady_ws_%04d.bmp", seq++);
+    std::snprintf(path, sizeof path, "%s/%s", dir, name);
     save_rgba_image(px, w, h, path);
+    note_dump_time(dir, name);
 }
+// Mirrors frame_presenter.cpp's PresentTimer.  Duplicated rather than shared
+// because it is six lines and hoisting it would put a header between two
+// presenters that otherwise do not know about each other.
+struct WsPresentTimer {
+    double* accum;
+    double perf_ms;
+    bool on;
+    Uint64 t0;
+    WsPresentTimer(double* a, double pm, bool o)
+        : accum(a), perf_ms(pm), on(o && a != nullptr),
+          t0(on ? SDL_GetPerformanceCounter() : 0) {}
+    ~WsPresentTimer() {
+        if (on)
+            *accum += static_cast<double>(SDL_GetPerformanceCounter() - t0) *
+                      perf_ms;
+    }
+};
 }  // namespace
 
 // ── Widescreen adjacent-screen peek (§8.7), enhanced-only ──────────────
@@ -107,6 +128,10 @@ void WidescreenPresenter::set_draw_overlay_tail(
     ctx_.draw_overlay_tail = std::move(fn);
 }
 
+void WidescreenPresenter::set_banners_key(std::function<std::uint64_t()> fn) {
+    ctx_.banners_key = std::move(fn);
+}
+
 void WidescreenPresenter::set_draw_banners(
     std::function<void(std::vector<std::uint8_t>&, int, int)> fn) {
     ctx_.draw_banners = std::move(fn);
@@ -122,6 +147,7 @@ void WidescreenPresenter::set_draw_banners(
 // The wide foreground pass — see the header for why the clip setup that
 // precedes it stays at the call sites.
 void WidescreenPresenter::draw_wide_foreground(RenderTarget& wrt) {
+    WsPresentTimer fg(fg_ms, perf_ms, stats_on);
     presentation::draw_entities(wrt, *ctx_.state, *ctx_.render,
                                 /*draw_player=*/true);
     // Lava bubbles are intentionally reflected INTO the margin (L7) — un-clip
@@ -137,22 +163,58 @@ void WidescreenPresenter::draw_wide_foreground(RenderTarget& wrt) {
     draw_margin_monsters(wrt);   // Tier-1 living margins
 }
 
+// Everything draw_wide_hud_text will put in the overlay, as one value: the HUD
+// strings with their positions and colours, the geometry that maps them to
+// output pixels, and the banner's own key.  A zero from the banner (it is
+// drawing something wall-clock animated) poisons the whole key to
+// kAlwaysRedraw, which is the fail-safe direction.
+std::uint64_t WidescreenPresenter::overlay_key(
+    const enhance::EnhancedHudLayout& L, int ow, int oh) const {
+    const std::uint64_t bk = ctx_.banners_key ? ctx_.banners_key()
+                                              : TextOverlay::kAlwaysRedraw;
+    if (bk == TextOverlay::kAlwaysRedraw) return TextOverlay::kAlwaysRedraw;
+    std::uint64_t h = 1469598103934665603ull;
+    const auto mix = [&h](std::uint64_t v) { h = (h ^ v) * 1099511628211ull; };
+    mix(bk);
+    mix(static_cast<std::uint64_t>(ow));
+    mix(static_cast<std::uint64_t>(oh));
+    mix(static_cast<std::uint64_t>(margin_));
+    mix(static_cast<std::uint64_t>(native_w_));
+    for (const auto& t : L.texts) {
+        for (const char c : t.str) mix(static_cast<unsigned char>(c));
+        mix(0x1ull);                       // separator: "ab","c" != "a","bc"
+        mix(static_cast<std::uint64_t>(t.x));
+        mix(static_cast<std::uint64_t>(t.baseline_y));
+        mix((static_cast<std::uint64_t>(t.r) << 16) |
+            (static_cast<std::uint64_t>(t.g) << 8) |
+            static_cast<std::uint64_t>(t.b));
+    }
+    // Never collide with the kAlwaysRedraw sentinel.
+    return h == TextOverlay::kAlwaysRedraw ? 1ull : h;
+}
+
 void WidescreenPresenter::show_wide_with_hud(
     const enhance::EnhancedHudLayout& hud_layout, bool draw_hud_overlay) {
+    WsPresentTimer sc(scene_ms, perf_ms, stats_on);
     SDL_RenderClear(ren());
     SDL_RenderCopy(ren(), wtex_, nullptr, nullptr);
     if (draw_hud_overlay && hd_text().ok()) {
         int ow = 0, oh = 0;
-        if (overlay().begin(ren(), hd_text(), ow, oh)) {
+        // Output size is needed for the key but is only known inside begin();
+        // it is stable between resizes, so the cached pair is right for the
+        // key and rebuild_if_resized/ensure() catch any change.
+        const std::uint64_t key = overlay_key(hud_layout, ow0_, oh0_);
+        if (overlay().begin(ren(), hd_text(), ow, oh, key)) {
             draw_wide_hud_text(overlay().buffer(), ow, oh, hud_layout);
-            overlay().flush(ren(), lsz().w(), lsz().h());
         }
+        overlay().flush(ren(), lsz().w(), lsz().h());
     }
 }
 
 void WidescreenPresenter::draw_wide_hud_text(
     std::vector<std::uint8_t>& b, int ow, int oh,
     const enhance::EnhancedHudLayout& L) {
+    WsPresentTimer gt(glyph_ms, perf_ms, stats_on);
     const int cap = 8 * ow / native_w_;
     hd_text().set_cap_px(cap > 0 ? cap : 1);
     const double sx = static_cast<double>(ow) / native_w_;
@@ -191,6 +253,32 @@ void WidescreenPresenter::set_float_pos(bool use, float fx, float fy) {
 // upload_and_show pillarbox = black bars until the next transition) and a
 // NULL backdrop (no-neighbour margins self-tile = corrupted screen-0 left
 // edge).
+void WidescreenPresenter::aspect_changed() {
+    // A live Aspect edit (Tier-1, pause/title Video row) changes the ASPECT
+    // without changing the output size, and rebuild_if_resized answers only
+    // the size question — it returns early on an unchanged size, and earlier
+    // still when the aspect is not "widescreen".  So before this existed,
+    // choosing widescreen in the menu set the string and the SDL logical size
+    // and left active_ alone: the presenter kept composing whatever it was
+    // composing until the next Alt+Enter, and the menu was laid out for a
+    // logical size the live canvas did not share.
+    //
+    // Leaving widescreen is the half a forced size-recompute cannot do at
+    // all, because of that first early return — handle it here.
+    if (*ctx_.aspect != "widescreen" || !hd()) {
+        if (!active_) return;
+        active_ = false;
+        if (wtex_ != nullptr) { SDL_DestroyTexture(wtex_); wtex_ = nullptr; }
+        margin_ = 0;
+        native_w_ = 320;
+        lsz().set(ctx_.fallback_ld.w, ctx_.fallback_ld.h);
+        return;
+    }
+    ow0_ = -1;              // force the size check below to recompute
+    oh0_ = -1;
+    rebuild_if_resized();
+}
+
 void WidescreenPresenter::rebuild_if_resized() {
     if (*ctx_.aspect != "widescreen" || !hd()) return;
     int ow = 0, oh = 0;
@@ -310,12 +398,20 @@ void WidescreenPresenter::update_cache() {
 // foreground.  Built once per level (background is level-stable).  Surface
 // (visual) levels only; secret rooms (no visual_background → colour fill) get
 // a NULL backdrop so compose_widescreen keeps the legacy self-tile fill
-// unchanged.  Also callable from the Alt+Enter mid-level activation path
-// (refresh_level_state) — at inactive level entry the gate below is false and
-// it would otherwise never exist for that level.
+// unchanged — ws_backdrop() applies that per screen, at use.  Also callable
+// from the Alt+Enter mid-level activation path (refresh_level_state) — at
+// inactive level entry the gate below is false and it would otherwise never
+// exist for that level.
+//
+// The gate is the LEVEL's flag, not the current screen's.  A level entered in
+// a cave or secret room (a Classic<->Enhanced reinit, a loaded save, a
+// mid-level activation there) used to build no backdrop at all, and every
+// no-neighbour margin for the rest of the level then torus-wrapped the
+// screen's far edge — the L1 cliff's boulders floating over the lake to the
+// right of the last screen (owner, A12, 2026-09-13).
 void WidescreenPresenter::build_backdrop() {
     backdrop_ok_ = false;
-    if (active_ && ctx_.render->visual_background &&
+    if (active_ && ctx_.level_visual_background &&
         ctx_.render->background.width == 320 &&
         ctx_.render->background.pixels.size() >= 320u * 200u) {
         const auto& bg = ctx_.render->background;
@@ -464,9 +560,22 @@ void WidescreenPresenter::draw_margin_monsters(RenderTarget& wrt) {
 // rather than the per-asset-HD compose path (per-asset-HD center is a
 // follow-up).  Used only when active_ AND not mid-transition AND
 // at least one neighbor is present; otherwise the caller uses upload_and_show.
+
 void WidescreenPresenter::present(
     const std::function<void(RenderTarget&)>& bubble_hook_w,
     bool do_present) {
+    WsPresentTimer pt(present_ms, perf_ms, stats_on);
+    if (stats_on && present_calls != nullptr) {
+        ++*present_calls;
+        if (present_iv != nullptr && last_present_pc != nullptr) {
+            const Uint64 now_pc = SDL_GetPerformanceCounter();
+            if (*last_present_pc != 0 && present_iv->size() < 200000) {
+                present_iv->push_back(static_cast<float>(
+                    static_cast<double>(now_pc - *last_present_pc) * perf_ms));
+            }
+            *last_present_pc = now_pc;
+        }
+    }
     rebuild_if_resized();   // Alt+Enter / resize: recompute wide state
     // ── FAST PATH (task #61): cached HD static wide bg + HD sprites ──
     // The wide static background (centre bg+tiles + peek margins) is
@@ -503,8 +612,11 @@ void WidescreenPresenter::present(
         const std::size_t n =
             static_cast<std::size_t>(uw) * uh * 4;
         if (frame_hd_.size() != n) frame_hd_.resize(n);
-        std::memcpy(frame_hd_.data(), bg_hd.data(),
-                    std::min(n, bg_hd.size()));
+        {
+            WsPresentTimer bgc(bg_copy_ms, perf_ms, stats_on);
+            std::memcpy(frame_hd_.data(), bg_hd.data(),
+                        std::min(n, bg_hd.size()));
+        }
         // Dynamic foreground at HD (per-asset cache), origin_x = margin
         // so edge-crossing sprites overflow into the margins; advance_
         // state=false (visual only — the authoritative advance already
@@ -568,9 +680,14 @@ void WidescreenPresenter::present(
                                             hud_layout, margin_);
         }
         dump_steady_wide(frame_hd_.data(), uw, uh);
-        SDL_UpdateTexture(wtex_, nullptr, frame_hd_.data(), uw * 4);
+        { WsPresentTimer ut(upload_ms, perf_ms, stats_on);
+          SDL_UpdateTexture(wtex_, nullptr, frame_hd_.data(), uw * 4); }
         show_wide_with_hud(hud_layout, draw_hud_overlay);
-        if (do_present) SDL_RenderPresent(ren());
+        if (do_present) {
+            maybe_dump_output(ren());   // OLDUVAI_DUMP_OUTPUT (image_out.hpp)
+            WsPresentTimer sw(swap_ms, perf_ms, stats_on);   // the vsync block
+            SDL_RenderPresent(ren());
+        }
         return;
     }
     // ── SLOW PATH (whole-frame upscale): secret rooms w/ bubbles, etc. ──
@@ -656,12 +773,17 @@ void WidescreenPresenter::present(
     std::vector<std::uint8_t> up =
         enhance::upscale_rgba(wide, native_w_, 200, hd_scale(),
                               *hd_profile());
+    WsPresentTimer ut(upload_ms, perf_ms, stats_on);
     SDL_UpdateTexture(wtex_, nullptr, up.data(),
                       native_w_ * hd_scale() * 4);
     show_wide_with_hud(hud_layout, draw_hud_overlay);
     // do_present=false leaves the wide frame in the backbuffer for a
     // caller-side RenderReadPixels (Metal reads black AFTER present).
-    if (do_present) SDL_RenderPresent(ren());
+    if (do_present) {
+        maybe_dump_output(ren());   // OLDUVAI_DUMP_OUTPUT (image_out.hpp)
+        WsPresentTimer sw(swap_ms, perf_ms, stats_on);       // the vsync block
+        SDL_RenderPresent(ren());
+    }
 }
 
 // ── Widescreen transition present (§8.7 wide transitions) ───────────────
@@ -678,6 +800,19 @@ void WidescreenPresenter::present(
 void WidescreenPresenter::present_transition(std::vector<std::uint8_t>& wide,
                                              bool with_hud,
                                              bool pre_upscaled) {
+    WsPresentTimer pt(present_ms, perf_ms, stats_on);
+    if (stats_on && present_calls != nullptr) {
+        ++*present_calls;
+        if (present_iv != nullptr && last_present_pc != nullptr) {
+            const Uint64 now_pc = SDL_GetPerformanceCounter();
+            if (*last_present_pc != 0 && present_iv->size() < 200000) {
+                present_iv->push_back(static_cast<float>(
+                    static_cast<double>(now_pc - *last_present_pc) * perf_ms));
+            }
+            *last_present_pc = now_pc;
+        }
+    }
+    if (stats_on && tick_paused != nullptr) *tick_paused = true;
     // NB: do NOT rebuild_if_resized() here.  `wide` is a pre-built buffer
     // sized at the caller's native_w() (transitions build oldw/neww/work ONCE
     // and reuse them across the animation loop); changing native_w() mid-call
@@ -747,10 +882,25 @@ void WidescreenPresenter::present_transition(std::vector<std::uint8_t>& wide,
             native_w_ * hd_scale() * 4, SDL_PIXELFORMAT_RGBA32);
         if (s) { save_surface_image(s, wtpath); SDL_FreeSurface(s); }
     }
+    { WsPresentTimer ut(upload_ms, perf_ms, stats_on);
     SDL_UpdateTexture(wtex_, nullptr, hdbuf.data(),
-                      native_w_ * hd_scale() * 4);
+                      native_w_ * hd_scale() * 4); }
     show_wide_with_hud(hud_layout, draw_hud_overlay);
-    SDL_RenderPresent(ren());
+    {
+        // The vsync block, split out exactly as the two steady-state presents
+        // above do.  It was missed there, and the omission is worse HERE than
+        // anywhere else: a transition runs its whole animation loop inside ONE
+        // iteration of the main frame loop, between the present_ms reset and
+        // the accumulation, so an entire transition's vsync waits — dozens of
+        // presents — landed in a single frame's present_ms with nothing in
+        // swap_ms to subtract.  That frame then set present_peak and inflated
+        // present_work, which is the figure that answers "is the SDL present
+        // path worth optimising".  Reading it would have been the FOURTH wrong
+        // reading of this column (TRIMUI_TUNING.md, finding 7).
+        maybe_dump_output(ren());   // OLDUVAI_DUMP_OUTPUT (image_out.hpp)
+        WsPresentTimer sw(swap_ms, perf_ms, stats_on);
+        SDL_RenderPresent(ren());
+    }
 }
 
 // Wrap a native 320x200 center (bg+tiles+player, NO baked HUD) into a WIDE

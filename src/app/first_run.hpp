@@ -37,11 +37,13 @@ bool launched_from_gui();
 // it.  Returns "hd" or "dos".  OLDUVAI_FIRSTRUN_PRESET overrides (tests).
 std::string ask_preset_choice();
 
-// On a validated Locate, `chosen_preset` (when non-null) receives the
-// presentation choice ("hd" / "dos") so the CALLING session can adopt it
-// too — the dialog itself only persists it to play.json for future runs.
+// On a validated Locate, `chosen_preset` (when non-null) receives the chosen
+// PROFILE NAME — the answer ("hd" / "dos" is a role) resolved in `family`
+// (presentation/menu/profile_table.hpp) — so the CALLING session can adopt
+// it too; the dialog itself persists it to play.json for future runs.
 std::optional<std::filesystem::path> first_run_dialog(
     const std::filesystem::path& game_dir, const std::string& problems,
-    std::string* chosen_preset = nullptr);
+    std::string* chosen_preset = nullptr,
+    const std::string& family = "desktop");
 
 }  // namespace olduvai::app

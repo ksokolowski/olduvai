@@ -59,13 +59,13 @@ ApplyTier classify_change_in_set(
 
 
 
-// One-click presentation preset (the GUI equivalent of --profile): fans a
-// named bundle out through MenuBindings::set so every key rides the normal
-// staging/preview/confirm/apply machinery of the calling menu environment.
-//   dos    — classic: master flag off, every cave-painting flag off, aspect keep
-//   hd     — full enhanced: omniscale x4, widescreen, all flags on
-// "enhanced" is set FIRST: sessions drain in stage order and the rebuild
-// triggered by the hd keys must read the new master flag.
+// One-click presentation preset (the GUI equivalent of --profile): fans the
+// session family's member for `preset` ("dos" = classic role, "hd" =
+// enhanced role; presentation/menu/profile_table.hpp) out through
+// MenuBindings::set so every key rides the normal staging/preview/confirm/
+// apply machinery.  Classic stages only `enhanced` and `aspect`.  "enhanced"
+// is set FIRST: sessions drain in stage order and the rebuild triggered by
+// the display keys must read the new master flag.
 void apply_preset(MenuBindings& bind, const std::string& preset);
 
 

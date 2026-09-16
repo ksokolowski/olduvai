@@ -36,6 +36,30 @@ FS_VER="2.5.7"
 # assuming the worst — but never skip the check.
 FS_SHA256="ce27840221ab00dd59bf27e85ecbba480c6c2a7c9fbec4243658f68f59c07f4a"
 
+# gcem — FluidSynth's own submodule, fetched HERE so its configure does not.
+#
+# WHY THIS BLOCK EXISTS (BACKLOG §3.6d).  fluidsynth's cmake_admin/FindGCEM.cmake
+# looks for gcem/include/gcem.hpp under its source root; the release tarball
+# ships that directory EMPTY, so when it is missing CMake downloads the zip
+# ITSELF, mid-configure.  Measured 2026-07-28: it fires on every build, printing
+# "The 'gcem' submodule directory seems to be empty or incomplete."  A release
+# build therefore reached GitHub TWICE — once here, visibly, and once from
+# inside a nested configure where nothing of ours could see or cache it.
+#
+# This does not remove a network dependency; it MOVES it.  Both downloads now
+# happen in this fetch phase, checksummed by us, so the configure and build
+# steps need no network at all.  That is what makes the gate testable:
+#   http_proxy=http://127.0.0.1:1 https_proxy=http://127.0.0.1:1 <configure>
+# must still succeed.
+#
+# The revision and hash are FluidSynth's own, read from its FindGCEM.cmake —
+# NOT chosen by us.  When FS_VER moves, re-read them from the new tarball:
+#   grep -E 'GCEM_(REVISION|HASH)' <src>/cmake_admin/FindGCEM.cmake
+# A mismatch means upstream moved the pin, and this block must follow it or the
+# populated tree will not be what FluidSynth expects.
+GCEM_REV="012ae73c6d0a2cb09ffe86475f5c6fba3926e200"
+GCEM_SHA256="28159274c54e9640354852e172d10d88eb159f4e7f2fea42edbcd20105ed3526"
+
 case "$(uname -s)" in
     Darwin) libname="libfluidsynth.dylib" ;;
     *)      libname="libfluidsynth.so" ;;
@@ -58,6 +82,35 @@ else
     echo "${FS_SHA256}  ${work}/fluidsynth.tar.gz" | shasum -a 256 -c -
 fi
 tar xzf "${work}/fluidsynth.tar.gz" -C "${work}"
+
+# Pre-populate gcem so FindGCEM.cmake finds it and never reaches the network.
+# Same shape as the FluidSynth fetch above: pinned URL, verified hash, fail
+# loudly on mismatch.
+src="${work}/fluidsynth-${FS_VER}"
+curl -fsSL "https://github.com/kthohr/gcem/archive/${GCEM_REV}.zip" \
+  -o "${work}/gcem.zip"
+if command -v sha256sum >/dev/null 2>&1; then
+    echo "${GCEM_SHA256}  ${work}/gcem.zip" | sha256sum -c -
+else
+    echo "${GCEM_SHA256}  ${work}/gcem.zip" | shasum -a 256 -c -
+fi
+# `cmake -E tar` reads zip too, and CMake is already required here — the
+# release's bare ubuntu:22.04 container has no `unzip` (0.9.7 dry run: exit
+# 127 at this line), and this keeps the script's tool list unchanged.
+mkdir -p "${work}/gcem-unpacked"
+(cd "${work}/gcem-unpacked" && cmake -E tar xf "${work}/gcem.zip")
+# The archive unpacks to gcem-<rev>/; FindGCEM wants its CONTENTS in gcem/.
+mkdir -p "${src}/gcem"
+cp -R "${work}/gcem-unpacked/gcem-${GCEM_REV}/." "${src}/gcem/"
+# Assert the artifact, not the download.  The manifest lesson from §3.6d's own
+# write-up: a step that checks its inputs and not its output can pass while
+# producing nothing usable.  This is the exact path FindGCEM probes.
+if [ ! -f "${src}/gcem/include/gcem.hpp" ]; then
+    echo "build_fluidsynth: gcem pre-populate FAILED —" \
+         "${src}/gcem/include/gcem.hpp missing after unpack." >&2
+    echo "  FluidSynth would silently fall back to downloading it mid-configure." >&2
+    exit 1
+fi
 
 # Everything optional OFF.  Each of these is a third-party dependency we would
 # otherwise have to bundle, sign and license; none is reachable through the

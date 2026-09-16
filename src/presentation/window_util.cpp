@@ -2,6 +2,9 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "presentation/window_util.hpp"
 
+#include <cstdio>
+#include <cstdlib>
+
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG   // the embedded icon is the only image this decodes
 // Vendored single-header: silence its own warnings under -Werror.
@@ -160,6 +163,34 @@ ScaledWindow create_scaled_window(const char* title, int logical_w,
             sw.win, -1, software ? SDL_RENDERER_SOFTWARE : 0);
     }
     if (sw.ren == nullptr) sw.ren = SDL_CreateRenderer(sw.win, -1, 0);
+    // OLDUVAI_FRAME_STATS: name the backend and say whether our upload format
+    // is one it takes natively.
+    //
+    // WHY THIS IS WORTH THREE LINES.  Every frame uploads one full-screen
+    // buffer through SDL_UpdateTexture, and if RGBA32 is NOT in the renderer's
+    // format list SDL converts the whole thing on the CPU on the way in —
+    // megabytes per frame of pure waste, with nothing visibly wrong to notice
+    // it by.  It was about to be argued from memory of what SDL's GLES2
+    // backend maps ABGR8888 to.  Printing it costs one line at startup and
+    // settles it on whatever device is in front of us, which is the only place
+    // the answer actually matters.
+    if (sw.ren != nullptr && std::getenv("OLDUVAI_FRAME_STATS") != nullptr) {
+        SDL_RendererInfo ri;
+        if (SDL_GetRendererInfo(sw.ren, &ri) == 0) {
+            bool native = false;
+            for (Uint32 i = 0; i < ri.num_texture_formats; ++i)
+                if (ri.texture_formats[i] == SDL_PIXELFORMAT_RGBA32)
+                    native = true;
+            std::fprintf(stderr,
+                         "renderer: %s accel=%d vsync=%d max_tex=%dx%d "
+                         "rgba32_native=%s\n",
+                         ri.name != nullptr ? ri.name : "?",
+                         (ri.flags & SDL_RENDERER_ACCELERATED) ? 1 : 0,
+                         (ri.flags & SDL_RENDERER_PRESENTVSYNC) ? 1 : 0,
+                         ri.max_texture_width, ri.max_texture_height,
+                         native ? "yes" : "NO (SDL converts every upload)");
+        }
+    }
     if (sw.ren != nullptr) {
         const LogicalDims ld = aspect_logical(logical_w / 320, aspect);
         SDL_RenderSetLogicalSize(sw.ren, ld.w, ld.h);

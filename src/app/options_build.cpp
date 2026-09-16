@@ -10,6 +10,7 @@
 #include "enhance/upscale.hpp"         // is_supported_hd_profile, supported_hd_profiles
 #include "presentation/enhance_flags.hpp"
 #include "presentation/env_num.hpp"    // env_int — OLDUVAI_FORCE_SMOOTH gate escape
+#include "presentation/render/smooth_config.hpp"  // smooth_* keys + persist refresh
 
 namespace olduvai::app {
 
@@ -192,6 +193,23 @@ BuildOutcome build_game_options(const CliArgs& args, PlaySettings& ps,
             "--hd-profile) — falling back to a plain pillarbox\n");
     }
 
+    // Smooth-present tuning: config-only keys, so a bad value is a warning
+    // that keeps auto — a broken config must never block playing.
+    int smooth_subframes = 0;
+    if (!olduvai::presentation::parse_smooth_subframes(ps.smooth_subframes,
+                                                       smooth_subframes)) {
+        oc.warnings.push_back(
+            "olduvai: smooth_subframes must be 0-12 (got '" +
+            ps.smooth_subframes + "') — using auto\n");
+    }
+    bool smooth_vsync_off = false;
+    if (!olduvai::presentation::parse_smooth_vsync(ps.smooth_vsync,
+                                                   smooth_vsync_off)) {
+        oc.warnings.push_back(
+            "olduvai: smooth_vsync must be 'auto' or 'off' (got '" +
+            ps.smooth_vsync + "') — using auto\n");
+    }
+
     olduvai::presentation::GameOptions& go = out;
     go.game_dir = args.game_dir;
     // Sequencer mapping (EXE FUN_2bd7_04be slots): no --level → position 0
@@ -244,9 +262,16 @@ BuildOutcome build_game_options(const CliArgs& args, PlaySettings& ps,
     go.aspect = ps.aspect;
     go.vga_scan = ps.vga_scan;
     go.hd_font = hd_font_file;
+    go.smooth_subframes = smooth_subframes;
+    go.smooth_vsync_off = smooth_vsync_off;
+    go.profile_family = ps.profile_family;
     // In-game Options menu → play.json.  Load-modify-save keeps any keys
     // the menu doesn't touch; the app layer owns config I/O.
     go.persist = [](const std::string& key, const std::string& value) {
+        // A smooth-present key applied from the Options menu must pace the
+        // rebuild it rides with, not wait for the next launch.
+        olduvai::presentation::apply_smooth_key(
+            olduvai::presentation::smooth_present_config(), key, value);
         olduvai::app::Config c = olduvai::app::load_config_file();
         c[key] = value;
         olduvai::app::save_config_file(c);

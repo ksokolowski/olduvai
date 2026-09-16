@@ -6,6 +6,7 @@
 #include "presentation/audio/resample.hpp"
 #include "presentation/audio/rom_dirs.hpp"
 #include "presentation/audio/soundfont_pick.hpp"
+#include "presentation/audio/wav_io.hpp"   // write_wav16 (OLDUVAI_AUDIO_CAPTURE)
 
 #include <SDL.h>
 
@@ -654,6 +655,8 @@ SdlAudio::SdlAudio(const std::string& music_device,
         while (static_cast<int>(p) * 2 <= audio_buffer) p = p * 2;
         want_samples = p;
     }
+    if (const char* cap = std::getenv("OLDUVAI_AUDIO_CAPTURE"))
+        capture_path_ = cap;   // before the device starts calling mix()
     SDL_AudioSpec want{};
     want.freq = device_rate_;
     want.format = AUDIO_S16SYS;
@@ -1018,6 +1021,7 @@ SdlAudio::~SdlAudio() {
         SDL_PauseAudioDevice(device_, 1);
         SDL_CloseAudioDevice(device_);
     }
+    if (!capture_path_.empty()) write_capture();   // callback is stopped now
     // OLDUVAI_AUDIO_STATS: real-time health summary (collected every run; only
     // printed on request).  overruns > 0 or a worst_lock_wait anywhere near
     // the budget = the RB1 dropout hazard is real on this host.
@@ -1039,6 +1043,24 @@ SdlAudio::~SdlAudio() {
     }
     // The melodic synth (its context/handles + dlopen'd lib) tears itself
     // down when synth_ destructs, after the SDL device is closed above.
+}
+
+void SdlAudio::write_capture() {
+    if (!write_wav16(capture_path_, capture_, device_rate_, 2)) {
+        std::fprintf(stderr, "audio-capture: could not write %s\n",
+                     capture_path_.c_str());
+        return;
+    }
+    const std::string sync = capture_path_ + ".sync";
+    if (std::FILE* f = std::fopen(sync.c_str(), "w")) {
+        std::fprintf(f, "rate %d\nperf_freq %llu\nt0 %llu\n", device_rate_,
+                     static_cast<unsigned long long>(SDL_GetPerformanceFrequency()),
+                     static_cast<unsigned long long>(capture_t0_));
+        std::fclose(f);
+    }
+    std::fprintf(stderr, "audio-capture: %.1f s at %d Hz -> %s\n",
+                 static_cast<double>(capture_.size() / 2) / device_rate_,
+                 device_rate_, capture_path_.c_str());
 }
 
 void SdlAudio::load_sfx(const std::string& id,
@@ -1239,6 +1261,10 @@ void SdlAudio::mix(std::int16_t* out, int frames) {
         }
         if (it->pos >= buf.size()) it = sfx_voices_.erase(it);
         else ++it;
+    }
+    if (!capture_path_.empty()) {   // OLDUVAI_AUDIO_CAPTURE (audio.hpp)
+        if (capture_.empty()) capture_t0_ = t0;
+        capture_.insert(capture_.end(), out, out + frames * 2);
     }
     // Close the health counters: worst lock-wait, worst callback time, and
     // budget overruns (callback longer than frames/rate = audible dropout).

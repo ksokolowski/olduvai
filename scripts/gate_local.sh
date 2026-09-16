@@ -11,9 +11,10 @@
 # asset-load path and every pure upload site on a present path, and no
 # always-green test touches either (docs/internal/BACKLOG.md §1).
 #
-# So on a machine WITH assets, a SKIP is a FAILURE.  That is the whole idea:
-# the owner's machine is the only place the other 18 can run, so a silent skip
-# there means the gate ran nowhere at all.
+# So on a machine WITH assets, a SKIP of an asset-gated test is a FAILURE.  That
+# is the whole idea: the owner's machine is the only place those can run, so a
+# silent skip there means the gate ran nowhere at all.  (A test that needs no
+# game files and skips for a platform reason is printed, not counted.)
 #
 #   scripts/gate_local.sh              release + asan, full suite, strict
 #   scripts/gate_local.sh --release    release lane only (faster iteration)
@@ -34,7 +35,7 @@ LANES="release asan"
 
 case "${1:-}" in
     --release) LANES="release" ;;
-    --help|-h) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --help|-h) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     "") ;;
     *) echo "gate_local: unknown argument '$1' (try --help)" >&2; exit 2 ;;
 esac
@@ -52,6 +53,7 @@ fi
 
 STATUS=0
 SUMMARY=""
+PLATFORM_SKIPS=""
 
 # run_ctest <summary-name> <preset> [extra ctest args...]
 #
@@ -77,18 +79,43 @@ run_ctest() {
     fi
     cat "${LOG}"
 
-    # ctest marks skips as "***Skipped"; SKIP_RETURN_CODE 77 lands there.
+    # ctest marks skips as "***Skipped", whatever SKIP_RETURN_CODE produced it.
     SKIPPED="$(grep -oE '[A-Za-z_0-9]+ \.+ *\*\*\*Skipped' "${LOG}" \
                | awk '{print $1}' | sort -u | tr '\n' ' ')"
     rm -f "${LOG}"
 
+    # WHICH skips count.  A skip of an `assets`-labelled test — the label
+    # CMakeLists.txt DERIVES from SKIP_RETURN_CODE 77, "needs the owner's game
+    # files" — means it ran nowhere, since this machine is the only one that
+    # has them: a failure.  Any other skip is the test's own verdict that THIS
+    # platform cannot express its scenario, and the always-green CI lane is
+    # where it runs.  port_bundle is the case: it exits 78 on a case-insensitive
+    # disk that cannot hold the two-case ROM names it models, and counting that
+    # made every Mac run FAIL while the comment beside the test promised
+    # otherwise.  Printed and summarised, never counted.
+    #
+    # Fails CLOSED: if the label query breaks or lists nothing, every skip
+    # counts, as it always did — a broken lookup must not make the gate lenient.
+    ASSET_TESTS="$(ctest --preset "${_preset}" -N -L assets 2>/dev/null \
+                   | sed -n 's/^ *Test *#[0-9]*: *//p' | tr '\n' ' ')"
+
     UNEXPECTED=""
+    PLATFORM=""
     for t in ${SKIPPED}; do
         case " ${ALLOW} " in
-            *" ${t} "*) echo "gate_local: acknowledged skip — ${t}" ;;
-            *) UNEXPECTED="${UNEXPECTED}${t} " ;;
+            *" ${t} "*) echo "gate_local: acknowledged skip — ${t}"; continue ;;
+        esac
+        case " ${ASSET_TESTS:-} " in
+            "  ") UNEXPECTED="${UNEXPECTED}${t} " ;;
+            *" ${t} "*) UNEXPECTED="${UNEXPECTED}${t} " ;;
+            *) echo "gate_local: platform skip — ${t} (needs no game files; not counted)"
+               PLATFORM="${PLATFORM}${t} " ;;
         esac
     done
+    if [ -n "${SKIPPED}" ] && [ -z "${ASSET_TESTS}" ]; then
+        echo "gate_local: WARNING — could not list the assets-labelled tests;" \
+             "counting every skip (fail closed)"
+    fi
 
     if [ ${CTEST_RC} -ne 0 ]; then
         SUMMARY="${SUMMARY}\n  ${_name}: FAIL — ctest exited ${CTEST_RC}"
@@ -96,6 +123,9 @@ run_ctest() {
     elif [ -n "${UNEXPECTED}" ]; then
         SUMMARY="${SUMMARY}\n  ${_name}: FAIL — skipped on an asset machine: ${UNEXPECTED}"
         STATUS=1
+    elif [ -n "${PLATFORM}" ]; then
+        SUMMARY="${SUMMARY}\n  ${_name}: OK — platform skip, not asset-gated: ${PLATFORM}"
+        PLATFORM_SKIPS="${PLATFORM_SKIPS}${PLATFORM}"
     else
         SUMMARY="${SUMMARY}\n  ${_name}: OK"
     fi
@@ -155,4 +185,9 @@ if [ ${STATUS} -ne 0 ]; then
 fi
 
 echo ""
-echo "gate_local: OK — the full suite ran, nothing silently skipped."
+if [ -n "${PLATFORM_SKIPS}" ]; then
+    echo "gate_local: OK — every asset-gated test ran; platform skips listed" \
+         "above run in CI, not here."
+else
+    echo "gate_local: OK — the full suite ran, nothing silently skipped."
+fi

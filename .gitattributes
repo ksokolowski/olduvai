@@ -19,5 +19,25 @@ scripts/hooks/* text eol=lf
 docs/internal/ export-ignore
 docs/internal/** export-ignore
 CLAUDE.md export-ignore
+# The pre-push CI-status hook is private-origin only: it reports gitea
+# Actions verdicts for workflows that are themselves export-ignored, and
+# its default token path is the owner's.  commit-msg DOES ship — that one
+# enforces a policy any contributor is held to.
+scripts/hooks/pre-push export-ignore
+# Owner-device debug tools (arm/disarm a KNULLI TrimUI for a debug session):
+# they default to the owner's LAN address, embed the firmware's default root
+# password for sshpass, edit /boot on the device, and point at the internal
+# runbooks.  Internal tooling, like docs/internal — caught by the 0.9.7 cut's
+# gate b (private-refs grep).
+scripts/trimui_arm_debug.sh export-ignore
+scripts/trimui_disarm_debug.sh export-ignore
+# Owner rulings, 2026-09-15 (the 0.9.7 cut): the winget manifests were
+# prepared for 0.9.6 and never submitted — stale public URLs if shipped; and
+# the preview-clip script makes clips WITH the game's audio, for the owner's
+# own devices only (no clip with audio goes to GitHub, and neither does the
+# tool whose purpose that is).
+packaging/winget/ export-ignore
+packaging/winget/** export-ignore
+scripts/make_preview_clip.sh export-ignore
 .gitea/ export-ignore
 .gitea/** export-ignore

@@ -67,6 +67,8 @@ struct BossEnhanceOptions {
     // applies after the fight).
     std::string music_device = "auto";
     std::string sfx_backend = "auto";
+    // The session's profile family, for the boss pause menu's Style preset.
+    std::string profile_family = "desktop";
     // Persist a (config-key, value) pair to play.json — INJECTED from the app
     // layer (which owns config I/O; presentation must not include app/), same
     // contract as GameOptions::persist.  No-op if unset.

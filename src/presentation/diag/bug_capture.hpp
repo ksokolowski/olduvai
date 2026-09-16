@@ -55,13 +55,45 @@ struct BugAnnotations {
     }
 };
 
+// Live PRESENT-PATH state, written into the report's Display section.
+//
+// WHY IT EXISTS.  A 2026-09-07 report read "widescreen mode gone after
+// alt+enter" and the report could not say whether widescreen was ACTIVE, what
+// margin was derived, or what logical size was set — none of it was recorded,
+// so the only evidence was a screenshot, and the screenshot was itself taken
+// through a viewport bug.  A display defect whose report carries no display
+// state costs a reproduction round every time.
+//
+// Default-constructed = "not supplied"; the section is then omitted.
+struct DisplayInfo {
+    bool supplied = false;
+    int out_w = 0, out_h = 0;        // SDL_GetRendererOutputSize
+    int logical_w = 0, logical_h = 0;  // 0,0 = no logical size set
+    bool fullscreen = false;
+    bool hd = false;
+    int hd_scale = 1;
+    // The Aspect SETTING, verbatim (keep / widescreen / 4:3 / stretch).
+    // Carried separately from ws_active because the two answer different
+    // questions and only the pair is diagnostic: margin is computed ONLY when
+    // aspect == "widescreen", so a report of "widescreen gone" with margin 0
+    // is ambiguous without it — the peeks are off because the display is not
+    // wide enough, or because widescreen was never selected.  The report this
+    // field was added for was the second, and cost a day to reach without it.
+    std::string aspect;
+    bool ws_active = false;          // widescreen actually composing
+    int ws_margin = 0;               // derived peek margin, 0 = inactive
+    int ws_native_w = 320;           // 320 + 2*margin
+    int upscale_threads = 1;
+};
+
 std::string write_bug_report(const systems::SystemsState& state,
                              const FrameBuffer& base_frame,
                              const std::vector<formats::Sprite>& entity_sprites,
                              int display_level, int internal_level,
                              int overlay_scale,
                              const BugAnnotations& ann = {},
-                             bool has_presented = false);
+                             bool has_presented = false,
+                             const DisplayInfo& display = {});
 
 // User-chosen bug-report root (play.json `bug_report_dir`, set by the app
 // after config merge).  "~"-prefixed values expand to the home directory.

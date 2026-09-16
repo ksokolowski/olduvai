@@ -3,6 +3,19 @@
 # Copyright (C) 2026 Krzysztof Sokołowski
 # L1 cave-with-a-BAT trace gate — the last function nothing executed.
 #
+# ✅ ORACLE-VERIFIED 2026-09-06 (§3.15 item 1, second pass) — this fixture is
+# cross-engine truth and may be cited as parity.  It was recorded from THIS
+# engine and pinned behaviour CHANGE only; it could not be promoted at first
+# because the diff harness had no way to enter a level mid-way, so every gate
+# starting at a non-zero screen was excluded.  The reference gained
+# `--start-screen` (mirroring this engine's flag field for field) and the diff
+# tool learned the lNsM_ filename convention, so `l1s6_cavebat.jsonl`
+# now runs `--level 1 --start-screen 6` on BOTH engines.
+#
+# 170 aligned frames IDENTICAL on 17 fields — the exact length of this gate's
+# own fixture, so the promotion covers the whole run and not a prefix.  Re-run
+# the diff after regenerating, or the promotion goes stale in silence.
+#
 # WHY THIS EXISTS.  §3.15's never-executed list ended with update_cave_bat, and
 # the note against it said "needs a cave that HAS a bat".  golden_trace_cavebat
 # enters the caves off screen 2, and those hold a SPIDER: update_cave_spider

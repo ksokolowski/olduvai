@@ -14,6 +14,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <vector>
 
 #include <SDL.h>
 
@@ -46,6 +47,43 @@ struct StagingBindings : MenuBindings {
     std::map<std::string, std::string> mem;
     SettingsSession* session = nullptr;    // batched staging (set post-ctor)
     DisplaySettings cur;                   // rt snapshot at menu entry
+    // The aspect this menu opened with.  DisplaySettings does not carry
+    // aspect, and allowed_values needs it: the widescreen gate is re-read on
+    // every keypress, so without a memory of what the user ARRIVED with, one
+    // step off "widescreen" in classic mode hides the value again and strands
+    // it — the very trap this gate exists to avoid.
+    std::string aspect_at_entry;
+
+    // Aspect's "widescreen" is offered only when HD is on, because that is
+    // literally what the presenter requires: WidescreenPresenter activates on
+    // `aspect == "widescreen" && hd() && margin > 0`, so in classic mode the
+    // row would offer a choice that does nothing.  Read from the STAGED
+    // values, not the entry snapshot, so flipping Style to Enhanced in this
+    // same visit makes the value appear.
+    //
+    // Withholding is safe by construction: Menu::adjust splices a current
+    // value the list does not offer back in, so a widescreen user who drops
+    // to classic still sees and keeps their setting.
+    std::vector<std::string> allowed_values(const MenuItem& it) override {
+        if (it.key != "aspect") return it.values;
+        const auto e = mem.find("enhanced");
+        const auto p = mem.find("hd_profile");
+        const bool on = hd_active(
+            e == mem.end() ? cur.enhanced : e->second == "true",
+            p == mem.end() ? cur.hd_profile : p->second);
+        // ...OR when it is what the user currently HOLDS.  Withholding a
+        // value someone already has would make it unreachable the moment they
+        // cycled off it — the same trap in a new place — so the gate hides
+        // widescreen only from people who do not have it.
+        const auto a = mem.find("aspect");
+        if (on || aspect_at_entry == "widescreen" ||
+            (a != mem.end() && a->second == "widescreen"))
+            return it.values;
+        std::vector<std::string> out;
+        for (const auto& v : it.values)
+            if (v != "widescreen") out.push_back(v);
+        return out;
+    }
 
     std::string get(const std::string& k) override final {
         std::string special;

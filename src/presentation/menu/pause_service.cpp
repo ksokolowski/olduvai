@@ -14,7 +14,7 @@ int PauseService::wire_bind_(const External& x) {
     const PauseBindWireDeps wire{x.god_active, x.audio, x.sw, x.opts,
                                  &session_, x.want_reinit, x.reinit_req,
                                  x.lsz, x.hd_scale,
-                                 x.display_level};
+                                 x.display_level, x.on_aspect_changed};
     configure_pause_bind(bind_, wire);
     return 0;
 }

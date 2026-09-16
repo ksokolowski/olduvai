@@ -10,6 +10,7 @@
 
 #include "presentation/render/logical_size.hpp"
 
+#include <functional>
 #include <optional>
 
 #include "presentation/menu/confirm_dialog.hpp"   // ConfirmDialog
@@ -86,6 +87,10 @@ struct PauseBindWireDeps {
     LogicalSize* lsz;
     int hd_scale;
     int display_level;
+    // Notified after a live Aspect edit so the widescreen presenter can
+    // recompute; the logical size alone does not tell it anything.  Optional
+    // — the boss/title sites have no platform presenter.
+    std::function<void()> on_aspect_changed;
 };
 
 void configure_pause_bind(PauseBindings& bind, const PauseBindWireDeps& d);

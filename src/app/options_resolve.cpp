@@ -5,6 +5,7 @@
 #include <string>
 
 #include "parse_num.hpp"
+#include "presentation/menu/profile_table.hpp"
 
 namespace olduvai::app {
 
@@ -52,6 +53,13 @@ constexpr Unguarded kFillIfEmpty[] = {
     {"mt32_model", &PlaySettings::mt32_model},
     {"rom_dir",    &PlaySettings::rom_dir},
     {"soundfont",  &PlaySettings::soundfont},
+};
+
+// Config-only tuning: no CLI flag exists, so nothing guards them.  The raw
+// text is validated in build_game_options (warn + auto, never fatal).
+constexpr Unguarded kConfigOnly[] = {
+    {"smooth_subframes", &PlaySettings::smooth_subframes},
+    {"smooth_vsync",     &PlaySettings::smooth_vsync},
 };
 
 }  // namespace
@@ -119,6 +127,10 @@ void merge_config(PlaySettings& s, const Config& merged) {
             s.*e.field = it->second;
         }
     }
+    for (const auto& e : kConfigOnly) {
+        if (auto it = merged.find(e.key); it != merged.end())
+            s.*e.field = it->second;
+    }
     // F5 bug-report destination (config-only; $OLDUVAI_BUG_DIR still
     // overrides).  The caller applies the presentation-side effect.
     if (auto it = merged.find("bug_report_dir");
@@ -127,23 +139,87 @@ void merge_config(PlaySettings& s, const Config& merged) {
     }
 }
 
+bool adopt_profile_key(PlaySettings& s, const std::string& key,
+                       const std::string& value) {
+    if (key == "enhanced") {
+        if (!s.cli.enhanced) s.enhanced = value == "true";
+        return true;
+    }
+    if (key == "enhance") {
+        if (!s.cli.enhanced) {
+            s.enhance_list = value;
+            s.enhance_list_from_config = true;
+        }
+        return true;
+    }
+    if (key == "hd_profile") {
+        if (!s.cli.hd) s.hd_profile = value;
+        return true;
+    }
+    if (key == "render_scale") {
+        if (!s.cli.scale) parse_int(value, s.render_scale);
+        return true;
+    }
+    if (key == "aspect") {
+        if (!s.cli.aspect) s.aspect = value;
+        return true;
+    }
+    if (key == "smooth_subframes") {
+        s.smooth_subframes = value;
+        return true;
+    }
+    if (key == "smooth_vsync") {
+        s.smooth_vsync = value;
+        return true;
+    }
+    return false;
+}
+
 void adopt_preset(PlaySettings& s, const std::string& cli_profile,
                   const std::string& preset) {
     if (preset.empty() || !cli_profile.empty()) return;
     Config pc;
     apply_profile(pc, preset);
-    if (auto it = pc.find("enhanced"); it != pc.end() && !s.cli.enhanced)
-        s.enhanced = it->second == "true";
-    if (auto it = pc.find("enhance"); it != pc.end() && !s.cli.enhanced) {
-        s.enhance_list = it->second;
-        s.enhance_list_from_config = true;
+    for (const auto& [k, v] : pc) adopt_profile_key(s, k, v);
+}
+
+LayeredConfig layer_config(const Config& file_cfg,
+                           const std::string& cli_profile,
+                           const std::string& default_profile) {
+    LayeredConfig out;
+    out.family = presentation::kDefaultFamily;
+    if (!default_profile.empty()) {
+        if (const auto* p = presentation::find_profile(default_profile)) {
+            apply_profile(out.merged, default_profile);
+            out.family = p->family;
+        } else {
+            out.warnings.push_back(
+                "olduvai: unknown --default-profile '" + default_profile +
+                "' — using the desktop defaults (known: " +
+                presentation::profile_names() + ")\n");
+        }
     }
-    if (auto it = pc.find("hd_profile"); it != pc.end() && !s.cli.hd)
-        s.hd_profile = it->second;
-    if (auto it = pc.find("render_scale"); it != pc.end() && !s.cli.scale)
-        parse_int(it->second, s.render_scale);
-    if (auto it = pc.find("aspect"); it != pc.end() && !s.cli.aspect)
-        s.aspect = it->second;
+    for (const auto& [k, v] : file_cfg) out.merged[k] = v;
+    if (!cli_profile.empty()) {
+        apply_profile(out.merged, cli_profile);
+        if (const auto* p = presentation::find_profile(cli_profile))
+            out.family = p->family;
+    }
+    return out;
+}
+
+Config config_to_save(const Config& file_cfg, const std::string& cli_profile,
+                      const PlaySettings& ps, const std::string& game_dir) {
+    Config out = file_cfg;
+    if (!cli_profile.empty()) apply_profile(out, cli_profile);
+    if (ps.cli.enhanced) out["enhanced"] = ps.enhanced ? "true" : "false";
+    if (ps.cli.enhanced && !ps.enhance_list.empty())
+        out["enhance"] = ps.enhance_list;
+    if (ps.cli.hd) out["hd_profile"] = ps.hd_profile;
+    if (ps.cli.scale) out["render_scale"] = std::to_string(ps.render_scale);
+    if (ps.cli.aspect) out["aspect"] = ps.aspect;
+    if (ps.cli.game_dir) out["game_dir"] = game_dir;
+    return out;
 }
 
 }  // namespace olduvai::app

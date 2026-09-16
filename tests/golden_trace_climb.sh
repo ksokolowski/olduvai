@@ -16,10 +16,17 @@
 # scenarios differ by exactly one key and the pair reads as a controlled
 # comparison.
 #
-# WHAT KIND OF GOLDEN THIS IS.  Recorded from THIS engine — it pins behaviour
-# CHANGE, not correctness, exactly like golden_trace_walk/_secret/_cave.
-# Promoting it means running walk_jump_in.jsonl through the reference and
-# diffing (BACKLOG §3.15).
+# WHAT KIND OF GOLDEN THIS IS.  ✅ ORACLE-VERIFIED 2026-09-06 (§3.15 item 1).
+# Recorded from THIS engine originally, so it pinned behaviour CHANGE only;
+# walk_jump_in.jsonl has since been replayed through both engines and diffed —
+# 170 aligned frames IDENTICAL on 17 fields — and now lives in the reference
+# corpus as scenarios/l1_walk_jump.jsonl.
+#
+# The promotion covers this gate EXACTLY, not approximately: this script passes
+# `--start-screen 0`, and play_start_screen defaults to 0 (cli_args.hpp:36), so
+# the flag is a no-op and the diffed invocation is the same run.  The seven
+# gates that pass a NON-zero --start-screen cannot go through the tool: the
+# reference has no such flag (_setup_level hard-sets current_screen = 0).
 #
 # Determinism: verified over two consecutive runs, byte-identical.
 #

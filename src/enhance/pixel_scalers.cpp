@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
+#include "enhance/parallel_rows.hpp"
+
+#include <cstring>   // memcpy — see pack()/copy_px()
 #include "enhance/pixel_scalers.hpp"
 
 #include <cstddef>
@@ -19,26 +22,39 @@ namespace {
 // Pack one RGBA pixel into a u32 for cheap whole-pixel equality.  Byte order
 // is irrelevant (used only for == comparisons), as long as pack is consistent.
 inline std::uint32_t pack(const std::vector<std::uint8_t>& px, std::size_t i) {
-    return static_cast<std::uint32_t>(px[i * 4]) |
-           (static_cast<std::uint32_t>(px[i * 4 + 1]) << 8) |
-           (static_cast<std::uint32_t>(px[i * 4 + 2]) << 16) |
-           (static_cast<std::uint32_t>(px[i * 4 + 3]) << 24);
+    // ONE 32-bit load, not four byte loads plus shifts and ORs.  The old form
+    // compiled to exactly that on aarch64 — scale3x calls this NINE times per
+    // source pixel, so it was ~36 ldrb where 9 ldr would do, and four A53s
+    // contend for the same memory bandwidth.
+    //
+    // memcpy is the portable spelling of an unaligned load; every compiler
+    // lowers it to a single instruction and it cannot trap on strict-alignment
+    // targets the way a reinterpret_cast would.
+    //
+    // Byte ORDER changes from explicitly little-endian to host order.  That is
+    // safe for the reason the original comment gives: this value is used ONLY
+    // for whole-pixel equality, never decomposed, and both operands always come
+    // from the same pack().  Consistency is the whole contract.
+    std::uint32_t v;
+    std::memcpy(&v, px.data() + i * 4, 4);
+    return v;
 }
 
 // Copy the source pixel at (sx, sy) — clamped to edges — into dst[di].
 inline void copy_px(const std::vector<std::uint8_t>& src, int w, int h,
                     int sx, int sy, std::vector<std::uint8_t>& dst,
                     std::size_t di) {
-    if (sx < 0) sx = 0;
-    else if (sx >= w) sx = w - 1;
-    if (sy < 0) sy = 0;
-    else if (sy >= h) sy = h - 1;
+    // Branchless clamps: the compiler emits csel rather than two branches each.
+    // These are called nine times per source pixel and are taken only at the
+    // border, so the branch predictor was being asked to do nothing useful
+    // millions of times per frame.
+    sx = sx < 0 ? 0 : (sx >= w ? w - 1 : sx);
+    sy = sy < 0 ? 0 : (sy >= h ? h - 1 : sy);
     const std::size_t si =
         (static_cast<std::size_t>(sy) * w + sx) * 4;
-    dst[di] = src[si];
-    dst[di + 1] = src[si + 1];
-    dst[di + 2] = src[si + 2];
-    dst[di + 3] = src[si + 3];
+    // ONE 32-bit move, not four byte moves.  Same reasoning as pack() above:
+    // this is a pure copy, so byte order never enters into it.
+    std::memcpy(dst.data() + di, src.data() + si, 4);
 }
 
 }  // namespace
@@ -79,7 +95,11 @@ std::vector<std::uint8_t> scale2x(const std::vector<std::uint8_t>& rgba,
         if (y < 0) y = 0; else if (y >= h) y = h - 1;
         return pack(rgba, static_cast<std::size_t>(y) * w + x);
     };
-    for (int y = 0; y < h; ++y)
+    // §3.22: row-band split.  Writes are y-derived (base/di from y), reads go to the
+    // read-only input via the clamping accessor, so bands never share an
+    // output byte — bit-identical, and test_upscale_threading proves it.
+    parallel_rows(h, [&](int y_begin, int y_end) {
+    for (int y = y_begin; y < y_end; ++y)
         for (int x = 0; x < w; ++x) {
             const std::uint32_t A = at(x, y - 1), B = at(x + 1, y),
                                 C = at(x - 1, y), D = at(x, y + 1);
@@ -104,6 +124,7 @@ std::vector<std::uint8_t> scale2x(const std::vector<std::uint8_t>& rgba,
             copy_px(rgba, w, h, x, e3d ? y + 1 : y, out,
                     base + static_cast<std::size_t>(ow) * 4 + 4);
         }
+    });
     return out;
 }
 
@@ -120,7 +141,11 @@ std::vector<std::uint8_t> scale3x(const std::vector<std::uint8_t>& rgba,
         if (y < 0) y = 0; else if (y >= h) y = h - 1;
         return pack(rgba, static_cast<std::size_t>(y) * w + x);
     };
-    for (int y = 0; y < h; ++y)
+    // §3.22: row-band split.  Writes are y-derived (base/di from y), reads go to the
+    // read-only input via the clamping accessor, so bands never share an
+    // output byte — bit-identical, and test_upscale_threading proves it.
+    parallel_rows(h, [&](int y_begin, int y_end) {
+    for (int y = y_begin; y < y_end; ++y)
         for (int x = 0; x < w; ++x) {
             const std::uint32_t A = at(x - 1, y - 1), B = at(x, y - 1),
                                 C = at(x + 1, y - 1), D = at(x - 1, y),
@@ -160,6 +185,7 @@ std::vector<std::uint8_t> scale3x(const std::vector<std::uint8_t>& rgba,
                     copy_px(rgba, w, h, x + s.dx, y + s.dy, out, di);
                 }
         }
+    });
     return out;
 }
 
@@ -180,7 +206,11 @@ std::vector<std::uint8_t> eagle_2x(const std::vector<std::uint8_t>& rgba,
         if (y < 0) y = 0; else if (y >= h) y = h - 1;
         return pack(rgba, static_cast<std::size_t>(y) * w + x);
     };
-    for (int y = 0; y < h; ++y)
+    // §3.22: row-band split.  Writes are y-derived (base/di from y), reads go to the
+    // read-only input via the clamping accessor, so bands never share an
+    // output byte — bit-identical, and test_upscale_threading proves it.
+    parallel_rows(h, [&](int y_begin, int y_end) {
+    for (int y = y_begin; y < y_end; ++y)
         for (int x = 0; x < w; ++x) {
             const std::uint32_t S = at(x - 1, y - 1), T = at(x, y - 1),
                                 U = at(x + 1, y - 1), V = at(x - 1, y),
@@ -199,6 +229,7 @@ std::vector<std::uint8_t> eagle_2x(const std::vector<std::uint8_t>& rgba,
             copy_px(rgba, w, h, dr ? x + 1 : x, dr ? y + 1 : y, out,
                     base + static_cast<std::size_t>(ow) * 4 + 4);
         }
+    });
     return out;
 }
 

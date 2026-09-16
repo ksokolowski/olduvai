@@ -48,4 +48,34 @@ std::vector<std::uint8_t> upscale_rgba(const std::vector<std::uint8_t>& px,
                                        int w, int h, int scale,
                                        const std::string& profile);
 
+// ── Cost accounting ────────────────────────────────────────────────────────
+// Wall time spent INSIDE upscale_rgba, accumulated since the last reset.
+//
+// WHY IT LIVES HERE AND NOT AT THE CALL SITES.  There are 19 of them across 10
+// files (four in boss_app, four in boss_arena, three in transition_players,
+// two each in frame_presenter / widescreen_presenter / bg_compose, plus
+// window_util, l3_end_level, text_screen_present and the HD asset cache).  A
+// hand-kept list of 19 timing wrappers is the shape that rots the moment
+// someone adds the twentieth — the same failure oracle_reach.sh had when three
+// gates landed without joining its corpus list.  A counter inside the function
+// cannot miss a caller.
+//
+// WHY IT MATTERS.  The presentation layer's present timer brackets
+// FramePresenter::present, and upscale_rgba runs BEFORE that — so until
+// 2026-09-06 the most expensive per-frame work in HD was invisible to
+// `OLDUVAI_FRAME_STATS`, which reported `present=0.91ms` on a 17 ms frame.
+// Measured after wiring this: omniscale x4 in widescreen spends ~48 ms of a
+// 66 ms frame here, against a 54.9 ms budget.
+//
+// Cost of always-on: two steady_clock::now() calls per invocation, ~1 us per
+// frame across all 19 sites against a 54.9 ms budget.  Deliberately not gated
+// behind a flag — a measurement you have to remember to enable is one nobody
+// takes.
+struct UpscaleStats {
+    double ms = 0.0;              // accumulated wall time
+    unsigned long calls = 0;      // invocations (scale==1 no-ops included)
+};
+UpscaleStats upscale_stats();
+void reset_upscale_stats();
+
 }  // namespace olduvai::enhance

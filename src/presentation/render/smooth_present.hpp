@@ -26,14 +26,18 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
+
+#include "presentation/render/smooth_config.hpp"
 
 namespace olduvai::presentation {
 
 // Refresh-adaptive sub-frame count for the discrete (no-vsync) fallback, and the
 // nominal density hint.  Clamped [4,5]: 4 is already finer than the legacy 3 on
 // a 60 Hz panel; 5 is the perf ceiling (worst-case HD compose ~9.6 ms x5 = 48 ms
-// fits the 55 ms tick).  OLDUVAI_SMOOTH_SUBFRAMES overrides for tuning.
+// fits the 55 ms tick).  The smooth_subframes key or OLDUVAI_SMOOTH_SUBFRAMES
+// overrides (smooth_config.hpp: env > config > derived).
 inline int smooth_subframe_count(SDL_Window* win) {
     int refresh_hz = 60;
     SDL_DisplayMode dm;
@@ -42,25 +46,51 @@ inline int smooth_subframe_count(SDL_Window* win) {
         dm.refresh_rate > 0) {
         refresh_hz = dm.refresh_rate;
     }
-    int n = std::clamp(static_cast<int>(std::lround(refresh_hz / 18.0)), 4, 5);
-    if (const char* ov = std::getenv("OLDUVAI_SMOOTH_SUBFRAMES")) {
-        // atoi is safe HERE because the range check below is the validation:
-        // garbage parses to 0, 0 is outside [1,12], so a typo keeps the
-        // computed default instead of becoming one. Same policy parse_num
-        // gives config keys, arrived at by a guard the check cannot see.
-        // NOLINTNEXTLINE(bugprone-unchecked-string-to-number-conversion)
-        const int v = std::atoi(ov);
-        if (v >= 1 && v <= 12) n = v;
-    }
-    return n;
+    const int derived =
+        std::clamp(static_cast<int>(std::lround(refresh_hz / 18.0)), 4, 5);
+    return resolve_subframe_count(std::getenv("OLDUVAI_SMOOTH_SUBFRAMES"),
+                                  smooth_present_config().subframes, derived);
+}
+
+// Was the sub-frame count ASKED FOR, or derived from the refresh rate?
+//
+// It decides whether the count is a CEILING or merely a hint, and the two fill
+// loops must agree.  Capping the refresh-derived default is a regression:
+// measured on a 144 Hz desktop, capping at smooth_N=5 gave five presents at
+// vblank rate then a ~20 ms timer wait -- fps 126->87, 1%low 56->29, jitter
+// 1.45->6.00 ms, for 2.6% of game speed.  So only an explicit request caps.
+//
+// ONE definition rather than one per loop: run_platform_level keeps an inline
+// twin of smooth_fill_tick, and the first version of this fix reached only the
+// inline one -- leaving the boss driver, which uses the helper, still ignoring
+// the knob.  That is BACKLOG.md §1's failure mode (one concept, several bodies,
+// one of them fixed) committed by the change that was cleaning up another
+// instance of it.
+inline bool smooth_subframes_explicit() {
+    return resolve_subframes_explicit(std::getenv("OLDUVAI_SMOOTH_SUBFRAMES"),
+                                      smooth_present_config().subframes);
 }
 
 // Request runtime vsync for the enhanced smooth-motion render-fill.  Returns
-// true if the driver accepted it (SDL >= 2.0.18).  OLDUVAI_NO_VSYNC=1 forces
-// the discrete fallback (for A/B testing).
+// true if the driver accepted it (SDL >= 2.0.18).  smooth_vsync=off (config)
+// or OLDUVAI_NO_VSYNC (env, any value) forces the discrete fallback — except
+// that the config knob does not apply under kmsdrm (resolve_vsync_off says
+// why), and says so once in the log rather than silently.
 inline bool smooth_try_enable_vsync(SDL_Renderer* ren, bool smooth) {
-    if (!smooth || ren == nullptr || std::getenv("OLDUVAI_NO_VSYNC") != nullptr)
-        return false;
+    if (!smooth || ren == nullptr) return false;
+    const char* env = std::getenv("OLDUVAI_NO_VSYNC");
+    const char* driver = SDL_GetCurrentVideoDriver();
+    const bool config_off = smooth_present_config().vsync_off;
+    if (resolve_vsync_off(env, config_off, driver)) return false;
+    if (config_off && env == nullptr) {
+        static bool told = false;
+        if (!told) {
+            std::fprintf(stderr, "smooth: smooth_vsync=off ignored under "
+                                 "kmsdrm (it would mean async page flips, "
+                                 "which this driver rejects); vsync on\n");
+            told = true;
+        }
+    }
     return SDL_RenderSetVSync(ren, 1) == 0;
 }
 
@@ -94,7 +124,9 @@ inline bool smooth_fill_tick(SmoothPacer& p, RenderAt&& render_at) {
                                           static_cast<float>(p.frame_ms);
             render_at(alpha, sub);
             const Uint32 e2 = SDL_GetTicks() - t0;
-            if (e2 >= budget || sub >= 64) {
+            if (e2 >= budget ||
+                (smooth_subframes_explicit() && sub >= p.discrete_n) ||
+                sub >= 64) {
                 p.carryover =
                     e2 > p.frame_ms
                         ? std::min(e2 - p.frame_ms, p.frame_ms)

@@ -67,6 +67,26 @@ struct FramePresenter {
     // picker, the HD vector cheat rows, and the non-widescreen banner text.
     std::function<void(FrameBuffer&)> draw_cheat_rows_native;
     std::function<void(std::vector<std::uint8_t>&, int, int)> draw_cheat_rows;
+
+    // Present-time accounting.  Moved here 2026-09-06 with the retirement of
+    // game_app's `upload_and_show` alias (§3.7 cluster 3): that lambda's ENTIRE
+    // body was an RAII timer plus this call, and its signature and defaults
+    // were already identical to present()'s — so it was a wrapper whose only
+    // content was the thing that belongs to the presenter.  Timing the present
+    // is the presenter's job; it was in the driver only because the timer
+    // predates the presenter.
+    //
+    // All three are inert when `stats_on` is false, which is every run without
+    // OLDUVAI_FRAME_STATS — the counter is not even read.
+    double* present_ms = nullptr;   // &diag.stats.present_ms
+    double* swap_ms = nullptr;      // &diag.stats.swap_ms (RenderPresent only)
+    double* upload_ms = nullptr;    // &diag.stats.upload_ms (SDL_UpdateTexture)
+    unsigned long* present_calls = nullptr;   // &diag.stats.present_calls
+    // Per-present interval sampling (see LevelDiag::FrameStats).
+    std::vector<float>* present_iv = nullptr;
+    Uint64* last_present_pc = nullptr;
+    double perf_ms = 0.0;           // ms per SDL performance-counter tick
+    bool stats_on = false;          // OLDUVAI_FRAME_STATS
     std::function<void(std::vector<std::uint8_t>&, int, int)> draw_enhanced_banners;
 
     void present(FrameBuffer& f, bool with_hud = true, bool do_present = true);

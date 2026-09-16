@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
+#include "enhance/parallel_rows.hpp"
 #include "presentation/sequence/screens.hpp"
 
 #include <SDL.h>
@@ -101,14 +102,55 @@ void step_tally_lives(int& lives_remaining, long& score) {
 
 // ── apply_fade ───────────────────────────────────────────────────────────────
 
+// Scale a buffer toward black.  Measured as the dominant per-frame cost of every
+// transition on a Cortex-A53 handheld, and it was slow for three separate
+// reasons at once — all three fixed here, none of them changing a single output
+// byte.
+//
+//   1. NO SIMD, and not because the loop resists it.  Indexing dst.px/src.px
+//      through references left the compiler unable to prove they do not alias,
+//      so it RELOADED both std::vector data pointers on every iteration and
+//      emitted ldrb/strb — one byte per instruction.  Hoisting the pointers with
+//      __restrict is enough on its own: aarch64 codegen goes from 0 NEON
+//      instructions to 45, i.e. 16 bytes per instruction instead of 1.
+//
+//   2. NO THREADING, on a machine with four cores that were idle.  §3.22
+//      threaded the upscalers in enhance/ and stopped at the layer boundary;
+//      that was right when omniscale cost 57 ms a frame, and wrong once the
+//      scaler became cheap and this became the bottleneck.
+//
+//   3. It runs on the HD buffer.  At widescreen scale 3 that is 1068x600x4 =
+//      2.4 MB read and 2.4 MB written PER TRANSITION FRAME.
+//
+// parallel_rows splits [0, n) into contiguous bands; each band owns a disjoint
+// byte range of dst, so the result is bit-identical however the split falls —
+// the same argument parallel_rows.hpp makes for the scalers, and it holds here
+// for the simpler reason that output index == input index.
 void apply_fade(FrameBuffer& dst, const FrameBuffer& src, double t) {
     const int mul = static_cast<int>((1.0 - t) * 256.0);
-    for (std::size_t i = 0; i < src.px.size(); i += 4) {
-        dst.px[i] = static_cast<std::uint8_t>(src.px[i] * mul >> 8);
-        dst.px[i + 1] = static_cast<std::uint8_t>(src.px[i + 1] * mul >> 8);
-        dst.px[i + 2] = static_cast<std::uint8_t>(src.px[i + 2] * mul >> 8);
-        dst.px[i + 3] = 255;
-    }
+    const std::size_t n = src.px.size();
+    if (n == 0) return;
+    std::uint8_t* const d0 = dst.px.data();
+    const std::uint8_t* const s0 = src.px.data();
+    // Bands are counted in PIXELS so a band boundary can never fall inside one.
+    const int pixels = static_cast<int>(n / 4);
+    // CAPTURE BY VALUE, then re-qualify inside.  Capturing by reference put the
+    // pointers in the closure, so the __restrict died at the std::function
+    // boundary and the body compiled back to ldrb/strb — verified in the
+    // aarch64 disassembly, which is the only way this is checkable.  Copies
+    // plus locally-restricted pointers give the loop what it needs.
+    enhance::parallel_rows(pixels, [d0, s0, mul](int p0, int p1) {
+        std::uint8_t* __restrict d = d0;
+        const std::uint8_t* __restrict s = s0;
+        for (std::size_t i = static_cast<std::size_t>(p0) * 4,
+                         e = static_cast<std::size_t>(p1) * 4;
+             i < e; i += 4) {
+            d[i] = static_cast<std::uint8_t>(s[i] * mul >> 8);
+            d[i + 1] = static_cast<std::uint8_t>(s[i + 1] * mul >> 8);
+            d[i + 2] = static_cast<std::uint8_t>(s[i + 2] * mul >> 8);
+            d[i + 3] = 255;
+        }
+    });
 }
 
 // ── show_loading_screen ──────────────────────────────────────────────────────

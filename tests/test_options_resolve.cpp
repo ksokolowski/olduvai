@@ -9,11 +9,17 @@
 
 #include "app/config.hpp"
 #include "app/options_resolve.hpp"
+#include "presentation/menu/profile_table.hpp"
 
 using olduvai::app::Config;
 using olduvai::app::PlaySettings;
 using olduvai::app::adopt_preset;
+using olduvai::app::adopt_profile_key;
 using olduvai::app::apply_profile;
+using olduvai::app::builtin_profile;
+using olduvai::app::config_to_save;
+using olduvai::app::layer_config;
+using olduvai::app::LayeredConfig;
 using olduvai::app::merge_config;
 
 TEST_CASE("options: empty config leaves every default in place") {
@@ -296,4 +302,142 @@ TEST_CASE("options: profile overlay flows through merge (dos beats saved hd)") {
     CHECK(s.hd_profile == "native");
     CHECK(s.aspect == "keep");
     CHECK(s.style_answered == true);
+}
+
+TEST_CASE("profiles: dos pins its enhanced-side resets (they were apply_profile clears)") {
+    const Config dos = builtin_profile("dos");
+    REQUIRE(dos.size() == 4);
+    CHECK(dos.at("enhanced") == "false");
+    CHECK(dos.at("enhance").empty());
+    CHECK(dos.at("hd_profile") == "native");
+    CHECK(dos.at("aspect") == "keep");
+}
+
+TEST_CASE("profiles: every pin of every profile is adoptable by the first-run path") {
+    // The single-source guard.  A key a profile pins but adopt_profile_key
+    // does not know is dropped SILENTLY on the first-run path — exactly the
+    // failure the table exists to prevent.
+    for (const auto& p : olduvai::presentation::kProfiles) {
+        for (std::size_t i = 0; i < p.pin_count; ++i) {
+            INFO("profile " << p.name << " key " << p.pins[i].key);
+            PlaySettings s;
+            CHECK(adopt_profile_key(s, p.pins[i].key, p.pins[i].value));
+        }
+    }
+}
+
+TEST_CASE("profiles: the CLI path and the first-run path agree on every profile") {
+    for (const auto& p : olduvai::presentation::kProfiles) {
+        INFO("profile " << p.name);
+        Config c;
+        apply_profile(c, p.name);
+        PlaySettings cli_path;
+        merge_config(cli_path, c);
+        PlaySettings first_run;
+        adopt_preset(first_run, /*cli_profile=*/"", p.name);
+        CHECK(cli_path.enhanced == first_run.enhanced);
+        CHECK(cli_path.hd_profile == first_run.hd_profile);
+        CHECK(cli_path.render_scale == first_run.render_scale);
+        CHECK(cli_path.aspect == first_run.aspect);
+        CHECK(cli_path.enhance_list == first_run.enhance_list);
+    }
+}
+
+TEST_CASE("profiles: a preset role resolves within its family, unknown -> desktop") {
+    using olduvai::presentation::resolve_preset;
+    CHECK(std::string(resolve_preset("desktop", "hd").name) == "hd");
+    CHECK(std::string(resolve_preset("desktop", "dos").name) == "dos");
+    CHECK(std::string(resolve_preset("no-such-family", "hd").name) == "hd");
+    CHECK(std::string(resolve_preset("", "dos").name) == "dos");
+}
+
+TEST_CASE("options: smooth keys are config-only and fill from the config") {
+    PlaySettings s;
+    CHECK(s.smooth_subframes == "0");
+    CHECK(s.smooth_vsync == "auto");
+    merge_config(s, {{"smooth_subframes", "2"}, {"smooth_vsync", "off"}});
+    CHECK(s.smooth_subframes == "2");
+    CHECK(s.smooth_vsync == "off");
+}
+
+TEST_CASE("options: adopt_profile_key takes the smooth keys") {
+    PlaySettings s;
+    CHECK(adopt_profile_key(s, "smooth_subframes", "2"));
+    CHECK(adopt_profile_key(s, "smooth_vsync", "off"));
+    CHECK(s.smooth_subframes == "2");
+    CHECK(s.smooth_vsync == "off");
+}
+
+TEST_CASE("layers: --default-profile seeds below play.json") {
+    const LayeredConfig lc = layer_config({{"render_scale", "2"}}, "", "hd-handheld");
+    CHECK(lc.family == "handheld");
+    CHECK(lc.merged.at("render_scale") == "2");       // play.json wins
+    CHECK(lc.merged.at("hd_profile") == "smooth");    // the default fills the rest
+    CHECK(lc.merged.at("smooth_subframes") == "2");
+    CHECK(lc.warnings.empty());
+}
+
+TEST_CASE("layers: a player's Classic survives the device default (the launcher bug)") {
+    // Launchers passed --profile hd, which beats play.json, so Classic chosen
+    // in the menu (it writes enhanced=false, aspect=keep) came back Enhanced
+    // at the next start.  The default layer sits below it instead.
+    const LayeredConfig lc =
+        layer_config({{"enhanced", "false"}, {"aspect", "keep"}}, "", "hd-handheld");
+    PlaySettings s;
+    merge_config(s, lc.merged);
+    CHECK(s.enhanced == false);
+    CHECK(s.aspect == "keep");
+}
+
+TEST_CASE("layers: --profile beats play.json and sets the family") {
+    const LayeredConfig lc = layer_config({{"enhanced", "false"}}, "hd", "hd-handheld");
+    CHECK(lc.family == "desktop");
+    CHECK(lc.merged.at("enhanced") == "true");
+    CHECK(lc.merged.at("hd_profile") == "omniscale");
+}
+
+TEST_CASE("layers: CLI flags still beat every layer") {
+    PlaySettings s;
+    s.render_scale = 2;
+    s.cli.scale = true;
+    merge_config(s, layer_config({}, "", "hd-handheld").merged);
+    CHECK(s.render_scale == 2);
+    CHECK(s.hd_profile == "smooth");
+}
+
+TEST_CASE("layers: an unknown --default-profile warns and plays desktop defaults") {
+    const LayeredConfig lc = layer_config({}, "", "hd-toaster");
+    CHECK(lc.family == "desktop");
+    CHECK(lc.merged.empty());
+    REQUIRE(lc.warnings.size() == 1);
+    CHECK(lc.warnings[0].find("hd-toaster") != std::string::npos);
+}
+
+TEST_CASE("layers: no profile at all is the desktop family") {
+    const LayeredConfig lc = layer_config({{"enhanced", "true"}}, "", "");
+    CHECK(lc.family == "desktop");
+    CHECK(lc.merged.at("enhanced") == "true");
+}
+
+TEST_CASE("layers: the default layer answers Classic/Enhanced (no native box)") {
+    PlaySettings s;
+    merge_config(s, layer_config({}, "", "hd-handheld").merged);
+    CHECK(s.style_answered == true);
+}
+
+TEST_CASE("save-config: the file, --profile and CLI keys — never the default layer") {
+    PlaySettings s;
+    s.render_scale = 2;
+    s.cli.scale = true;
+    const Config out = config_to_save({{"autofire", "fast"}}, "", s, "/games");
+    CHECK(out.at("autofire") == "fast");
+    CHECK(out.at("render_scale") == "2");
+    CHECK(out.count("hd_profile") == 0);
+    CHECK(out.count("smooth_subframes") == 0);
+    const Config with_profile = config_to_save({}, "hd", PlaySettings{}, "");
+    CHECK(with_profile.at("hd_profile") == "omniscale");
+}
+
+TEST_CASE("profiles: dos-handheld pins exactly what dos pins") {
+    CHECK(builtin_profile("dos-handheld") == builtin_profile("dos"));
 }

@@ -8,6 +8,8 @@
 #include <fstream>
 #include <sstream>
 
+#include "presentation/menu/profile_table.hpp"
+
 namespace olduvai::app {
 
 namespace {
@@ -108,34 +110,21 @@ std::string config_path() {
 }
 
 Config builtin_profile(const std::string& name) {
-    // TWO profiles, because there are two ways to play: faithful or
-    // enhanced.  hd-43 used to be a third, but it differed from hd in
-    // exactly one key (aspect) — a display setting that has its own Video
-    // row, so offering it as a peer implied a mode that does not exist and
-    // gave one setting two homes.  `--profile hd-43` still works as an
-    // alias (see cli_args.cpp).  Audio deliberately NOT
-    // pinned in any profile: the auto-pick chain (MT-32 ROMs → soundfont →
-    // OPL) chooses the best available backend per machine.
-    if (name == "dos") return {};   // byte-faithful defaults (+vga-scan default)
-    if (name == "hd") {             // full enhanced + widescreen peeks
-        return {{"enhanced", "true"},
-                {"hd_profile", "omniscale"},
-                {"render_scale", "4"},
-                {"aspect", "widescreen"}};
+    // The pins live in presentation/menu/profile_table.hpp — the one
+    // definition the CLI, the first-run path and the menu all read.  hd-43
+    // used to be a third profile differing from hd only by aspect, a display
+    // setting with its own Video row; `--profile hd-43` stays an alias
+    // (cli_args.cpp).
+    Config c;
+    if (const auto* p = presentation::find_profile(name)) {
+        for (std::size_t i = 0; i < p->pin_count; ++i)
+            c[p->pins[i].key] = p->pins[i].value;
     }
-    return {};
+    return c;
 }
 
 void apply_profile(Config& cfg, const std::string& name) {
     for (const auto& [k, v] : builtin_profile(name)) cfg[k] = v;
-    if (name == "dos") {
-        // dos = byte-faithful: the empty profile map can't clear enhanced-
-        // side keys a saved config may carry — do it explicitly.
-        cfg["enhanced"] = "false";
-        cfg["enhance"] = "";
-        cfg["hd_profile"] = "native";
-        cfg["aspect"] = "keep";
-    }
 }
 
 Config load_config_file() {

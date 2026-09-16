@@ -219,14 +219,20 @@ void configure_pause_bind(PauseBindings& bind, const PauseBindWireDeps& d) {
     seed.fullscreen = (SDL_GetWindowFlags(d.sw->win) &
                        SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
     seed.flags = d.opts->enhance;
+    seed.profile_family = d.opts->profile_family;
     seed_settings_mem(bind, seed);
     // Tier-1 live Aspect: SDL_RenderSetLogicalSize + update run-loop logical_w/h
     // + rt.aspect. No window/audio rebuild, no reload.
-    bind.apply_aspect = [opts = d.opts, lsz = d.lsz,
-                         hd_scale = d.hd_scale](const std::string& v) {
+    bind.apply_aspect = [opts = d.opts, lsz = d.lsz, hd_scale = d.hd_scale,
+                         notify = d.on_aspect_changed](const std::string& v) {
         opts->aspect = v;
         const LogicalDims ld = aspect_logical(hd_scale, v);
         lsz->set(ld.w, ld.h);   // SDL + mirror together (§3.13)
+        // aspect_logical maps "widescreen" to the KEEP fallback (it has no
+        // margin to work from), so the presenter must recompute and set the
+        // wide logical size itself — otherwise choosing widescreen shows a
+        // pillarbox until something resizes the window.
+        if (notify) notify();
     };
     bind.mem["cheat.start_level"] = std::to_string(d.display_level);
 }

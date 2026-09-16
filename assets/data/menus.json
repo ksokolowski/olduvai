@@ -43,7 +43,7 @@
       "header": "VIDEO",
       "items": [
         { "id": "hd_profile", "type": "choice", "label": "HD profile", "key": "hd_profile", "values": ["native", "retro", "smooth", "eagle", "xbr", "mmpx", "omniscale"], "value_labels": ["Native", "Retro", "Smooth", "Eagle", "xBR", "MMPX", "OmniScale"], "hint": "live" },
-        { "id": "aspect", "type": "choice", "label": "Aspect", "key": "aspect", "values": ["keep","4:3","stretch"], "value_labels": ["Keep","4:3","Stretch"], "hint": "live" },
+        { "id": "aspect", "type": "choice", "label": "Aspect", "key": "aspect", "values": ["keep","widescreen","4:3","stretch"], "value_labels": ["Keep","Widescreen","4:3","Stretch"], "hint": "live" },
         { "id": "render_scale", "type": "choice", "label": "Render scale", "key": "render_scale", "values": [2, 4], "restart": true, "hint": "applies now" },
         { "id": "fullscreen", "type": "toggle", "label": "Fullscreen", "key": "fullscreen" },
         { "id": "back", "type": "back", "label": "Back" }

@@ -41,6 +41,19 @@ void paced(TransitionShellCtx& ctx, Uint32 step_ms) {
     ctx.pace_last = SDL_GetTicks();
 }
 
+// Wall-clock progress for SMOOTH transitions (reference a6e8a55, PARITY T8):
+// the fraction of `dur` elapsed since `t0`, exactly 1.0 once it has passed,
+// floored at `lo` so a pan's first frame always moves.  A present slower
+// than the step then DROPS frames instead of STRETCHING the transition —
+// frame-counted, the A12's ~25 ms present held the cave fade pair at ~2.6 s
+// against its ~1.2 s.  Classic never calls this: it keeps the exact integer
+// frame counts (EXE timing, oracle-replay determinism).
+double wall_progress(Uint32 t0, Uint32 dur, double lo = 0.0) {
+    const Uint32 elapsed = SDL_GetTicks() - t0;
+    if (elapsed >= dur) return 1.0;
+    return std::max(lo, static_cast<double>(elapsed) / dur);
+}
+
 }  // namespace
 
 void play_transition(TransitionShellCtx& ctx, const FrameBuffer& oldf,
@@ -70,6 +83,32 @@ void play_transition(TransitionShellCtx& ctx, const FrameBuffer& oldf,
     FrameBuffer work{oldf.w, oldf.h};
     if (kind == 2) {   // fade out the old, fade in the new
         const int n = smooth_t ? 36 : kFadeFrames;
+        if (smooth_t) {
+            // Wall-clock fade: each half spans the (n+1) steps the
+            // frame-counted form presents, on the clock (wall_progress).
+            const Uint32 dur = static_cast<Uint32>(n + 1) * step_ms;
+            const Uint32 t0 = SDL_GetTicks();
+            for (;;) {
+                const double p = wall_progress(t0, dur);
+                apply_fade(work, oldf, p);
+                ctx.upload_and_show(work);
+                dump(work);
+                paced(ctx, step_ms);
+                if (!pump()) return;
+                if (p >= 1.0) break;
+            }
+            const Uint32 t1 = SDL_GetTicks();
+            for (;;) {
+                const double p = wall_progress(t1, dur);
+                apply_fade(work, newf, 1.0 - p);
+                ctx.upload_and_show(work);
+                dump(work);
+                paced(ctx, step_ms);
+                if (!pump()) return;
+                if (p >= 1.0) break;
+            }
+            return;
+        }
         for (int f2 = 0; f2 <= n; ++f2) {
             apply_fade(work, oldf,
                        static_cast<double>(f2) / n);
@@ -150,8 +189,19 @@ void play_transition(TransitionShellCtx& ctx, const FrameBuffer& oldf,
                                               // where the player is baked
                                               // in and rides the roll-in
     constexpr double kArcPeak = 30.0;         // arc-landing apex height
-    for (int f2 = 1; f2 <= n + n_arc; ++f2) {
-        const double t = std::min(1.0, static_cast<double>(f2) / n);
+    // `pos` is the frame position on the classic [1, total] scale.  Classic
+    // uses the integer f2 itself, so t / arc / ta are the frame-counted
+    // expressions bit for bit — NOT progress*total, which rounds (measured:
+    // it moves t and the arc's ta by an ulp).  Smooth reads pos off the wall
+    // clock (wall_progress): the pan ends at pos == n, kind 4's arc after it.
+    const int total = n + n_arc;
+    const Uint32 t0 = SDL_GetTicks();
+    const Uint32 dur = static_cast<Uint32>(total) * step_ms;
+    for (int f2 = 1;; ++f2) {
+        const double p = smooth_t ? wall_progress(t0, dur, 1.0 / total) : 0.0;
+        const double pos = smooth_t ? p * total : static_cast<double>(f2);
+        const bool arc_phase = pos > n;
+        const double t = std::min(1.0, pos / n);
         int odx = 0, ody = 0, ndx = 0, ndy = 0;
         if (is_slide) {
             // Secret entry ('D'): old UP, new from bottom.
@@ -201,7 +251,7 @@ void play_transition(TransitionShellCtx& ctx, const FrameBuffer& oldf,
         if (kind == 4) {
             constexpr int spr2 = systems::kSprPlayerJump;
             int px2, py2;
-            if (f2 <= n) {
+            if (!arc_phase) {
                 // PAN — baked into the surface at its bottom: ride in with
                 // the surface roll ('U' pan native ndy = (t-1)*200).  The
                 // sprite stays glued to the surface so it never pops to a
@@ -212,8 +262,7 @@ void play_transition(TransitionShellCtx& ctx, const FrameBuffer& oldf,
             } else {
                 // ARC — surface static: land from the bake point to the
                 // surface resume (arc_ex, arc_ey), no end snap.
-                const double ta =
-                    static_cast<double>(f2 - n) / static_cast<double>(n_arc);
+                const double ta = std::min(1.0, (pos - n) / n_arc);
                 px2 = static_cast<int>(std::lround(
                     arc_sx + (arc_ex - arc_sx) * ta));
                 const double lin = bake_y + (arc_ey - bake_y) * ta;
@@ -246,13 +295,14 @@ void play_transition(TransitionShellCtx& ctx, const FrameBuffer& oldf,
         dump(work);
         paced(ctx, step_ms);
         if (!pump()) return;
+        if (smooth_t ? p >= 1.0 : f2 >= total) return;
     }
 }
 
 // ── Widescreen transition playback (§8.7 wide transitions) ──────────
 // Mirror play_transition's kind-1 pan and kind-2 fade, but over WIDE
-// native buffers (ws_native_w x 200) presented through the wide texture
-// via present_wide_transition — so width AND HUD position are continuous
+// native buffers (wsp->native_w() x 200) presented through the wide texture
+// via wsp->present_transition — so width AND HUD position are continuous
 // with the steady widescreen frame (no 320 pillarbox pop, no HUD jump).
 // The pan slides the WHOLE wide view; the fade blends the wide buffers.
 // oldw / neww are pre-wrapped wide buffers (peek or bezel per side).
@@ -261,7 +311,7 @@ void play_transition_wide(TransitionShellCtx& ctx,
                           std::vector<std::uint8_t>& neww, int kind, char dir) {
     const bool smooth_t = ctx.smooth_motion;
     const Uint32 step_ms = smooth_t ? (1000 / 60) : ctx.frame_ms;
-    const int W = ctx.ws_native_w, H = 200;
+    const int W = ctx.wsp->native_w(), H = 200;
     const int Wh = W * ctx.hd_scale, Hh = H * ctx.hd_scale;
     // Upscale the two STATIC wide buffers ONCE; every kind below shifts/
     // fades the HD buffers and presents pre_upscaled — no per-frame
@@ -315,9 +365,36 @@ void play_transition_wide(TransitionShellCtx& ctx,
         // FrameBuffers so it operates on the wide pixels directly.
         FrameBuffer wf{Wh, Hh}, of{Wh, Hh}, nf{Wh, Hh};
         of.px = hd_old; nf.px = hd_new;
+        if (smooth_t) {
+            // Wall-clock fade — the non-wide kind-2's, over wide buffers.
+            const Uint32 dur = static_cast<Uint32>(n + 1) * step_ms;
+            const Uint32 t0 = SDL_GetTicks();
+            for (;;) {
+                const double p = wall_progress(t0, dur);
+                apply_fade(wf, of, p);
+                ctx.wsp->present_transition(wf.px, /*with_hud=*/true,
+                                            /*pre_upscaled=*/true);
+                dump(wf.px);
+                paced(ctx, step_ms);
+                if (!pump()) return;
+                if (p >= 1.0) break;
+            }
+            const Uint32 t1 = SDL_GetTicks();
+            for (;;) {
+                const double p = wall_progress(t1, dur);
+                apply_fade(wf, nf, 1.0 - p);
+                ctx.wsp->present_transition(wf.px, /*with_hud=*/true,
+                                            /*pre_upscaled=*/true);
+                dump(wf.px);
+                paced(ctx, step_ms);
+                if (!pump()) return;
+                if (p >= 1.0) break;
+            }
+            return;
+        }
         for (int f2 = 0; f2 <= n; ++f2) {
             apply_fade(wf, of, static_cast<double>(f2) / n);
-            ctx.present_wide_transition(wf.px, /*with_hud=*/true,
+            ctx.wsp->present_transition(wf.px, /*with_hud=*/true,
                                         /*pre_upscaled=*/true);
             dump(wf.px);
             paced(ctx, step_ms);
@@ -325,7 +402,7 @@ void play_transition_wide(TransitionShellCtx& ctx,
         }
         for (int f2 = n; f2 >= 0; --f2) {
             apply_fade(wf, nf, static_cast<double>(f2) / n);
-            ctx.present_wide_transition(wf.px, /*with_hud=*/true,
+            ctx.wsp->present_transition(wf.px, /*with_hud=*/true,
                                         /*pre_upscaled=*/true);
             dump(wf.px);
             paced(ctx, step_ms);
@@ -336,9 +413,9 @@ void play_transition_wide(TransitionShellCtx& ctx,
     if (kind == 3 || kind == 4) {
         // Enhanced secret slides over the WIDE view — same geometry + arc
         // as play_transition's kind 3/4 (vertical pan, fixed frame counts,
-        // kind-4 player jump arc), but the buffers are ws_native_w wide and
-        // presented via present_wide_transition; the arc sprite blits at
-        // +ws_margin so it lands at the centre-320 position.  No 320 bars.
+        // kind-4 player jump arc), but the buffers are wsp->native_w() wide and
+        // presented via wsp->present_transition; the arc sprite blits at
+        // +wsp->margin() so it lands at the centre-320 position.  No 320 bars.
         const int ns = (kind == 3) ? 12 : 30;
         const int n_arc = (kind == 4) ? 26 : 0;
         const int bake_y = 185;
@@ -351,8 +428,17 @@ void play_transition_wide(TransitionShellCtx& ctx,
             (arc_ex == arc_sx && ctx.state->player.facing_left);
         const auto& arc_spr_mat = ctx.render->entity_sprites;
         const auto& arc_pal = ctx.render->palette;
-        for (int f2 = 1; f2 <= ns + n_arc; ++f2) {
-            const double t = std::min(1.0, static_cast<double>(f2) / ns);
+        // Frame position exactly as play_transition's slide: classic is
+        // the integer f2 (bit-identical), smooth is on the wall clock.
+        const int total = ns + n_arc;
+        const Uint32 t0 = SDL_GetTicks();
+        const Uint32 dur = static_cast<Uint32>(total) * step_ms;
+        for (int f2 = 1;; ++f2) {
+            const double p =
+                smooth_t ? wall_progress(t0, dur, 1.0 / total) : 0.0;
+            const double pos = smooth_t ? p * total : static_cast<double>(f2);
+            const bool arc_phase = pos > ns;
+            const double t = std::min(1.0, pos / ns);
             int ody = 0, ndy = 0;
             if (kind == 3) { ody = -static_cast<int>(t * H); ndy = H + ody; }
             else           { ody =  static_cast<int>(t * H); ndy = ody - H; }
@@ -363,13 +449,12 @@ void play_transition_wide(TransitionShellCtx& ctx,
             if (kind == 4) {
                 constexpr int spr2 = systems::kSprPlayerJump;
                 int px2, py2;
-                if (f2 <= ns) {
+                if (!arc_phase) {
                     px2 = arc_sx;
                     py2 = bake_y +
                           static_cast<int>(std::lround((t - 1.0) * 200.0));
                 } else {
-                    const double ta = static_cast<double>(f2 - ns) /
-                                      static_cast<double>(n_arc);
+                    const double ta = std::min(1.0, (pos - ns) / n_arc);
                     px2 = static_cast<int>(std::lround(
                         arc_sx + (arc_ex - arc_sx) * ta));
                     const double lin = bake_y + (arc_ey - bake_y) * ta;
@@ -379,23 +464,28 @@ void play_transition_wide(TransitionShellCtx& ctx,
                 if (spr2 < static_cast<int>(arc_spr_mat.size())) {
                     RenderTarget wrt{work.data(), Wh, Hh, ctx.hd_scale,
                                      ctx.hd_cache, ctx.hd_profile};
-                    wrt.origin_x = ctx.ws_margin;
+                    wrt.origin_x = ctx.wsp->margin();
                     blit_sprite(wrt, arc_spr_mat[spr2], arc_pal,
                                 px2, py2, arc_flip);
                 }
             }
-            ctx.present_wide_transition(work, /*with_hud=*/true,
+            ctx.wsp->present_transition(work, /*with_hud=*/true,
                                         /*pre_upscaled=*/true);
             dump(work);
             paced(ctx, step_ms);
             if (!pump()) return;
+            if (smooth_t ? p >= 1.0 : f2 >= total) return;
         }
         return;
     }
     // kind 1: surface pan-scroll over the WHOLE wide view.
     const int n = smooth_t ? 36 : 12;   // SCROLL_FRAMES
-    for (int f2 = 1; f2 <= n; ++f2) {
-        const double t = std::min(1.0, static_cast<double>(f2) / n);
+    const Uint32 t0 = SDL_GetTicks();
+    const Uint32 dur = static_cast<Uint32>(n) * step_ms;
+    for (int f2 = 1;; ++f2) {
+        const double p = smooth_t ? wall_progress(t0, dur, 1.0 / n)
+                                  : static_cast<double>(f2) / n;
+        const double t = std::min(1.0, p);
         int odx = 0, ody = 0, ndx = 0, ndy = 0;
         switch (dir) {
             case 'R': odx = -static_cast<int>(t * W); ndx = W + odx; break;
@@ -407,11 +497,12 @@ void play_transition_wide(TransitionShellCtx& ctx,
         for (std::size_t i = 3; i < work.size(); i += 4) work[i] = 255;
         blit_shifted_w(work, hd_old, odx, ody);
         blit_shifted_w(work, hd_new, ndx, ndy);
-        ctx.present_wide_transition(work, /*with_hud=*/true,
+        ctx.wsp->present_transition(work, /*with_hud=*/true,
                                     /*pre_upscaled=*/true);
         dump(work);
         paced(ctx, step_ms);
         if (!pump()) return;
+        if (smooth_t ? p >= 1.0 : f2 >= n) return;
     }
 }
 
@@ -588,7 +679,7 @@ void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
                         const FrameBuffer& new_center) {
     const bool smooth_t = ctx.smooth_motion;
     const Uint32 step_ms = smooth_t ? (1000 / 60) : ctx.frame_ms;
-    const int M = ctx.ws_margin, WN = ctx.ws_native_w;
+    const int M = ctx.wsp->margin(), WN = ctx.wsp->native_w();
     const int H = kStripH;
     const int count = ctx.screen_count;
     const int lo = std::min(old_s, new_s) - 1;   // strip slot0 = lo
@@ -644,12 +735,12 @@ void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
             }
     };
     auto fond_sky_band = [&](int slot) {
-        if (!ctx.ws_backdrop_ok) return;
+        if (!ctx.wsp->backdrop_ok()) return;
         const int gb = H - presentation::kWideGroundBandRows;
         for (int y = 0; y < gb; ++y)
             std::memcpy(&strip[(static_cast<std::size_t>(y) * kStripW +
                                 static_cast<std::size_t>(slot) * 320) * 4],
-                        &ctx.ws_backdrop->px[static_cast<std::size_t>(y) * 320 * 4],
+                        &ctx.wsp->backdrop().px[static_cast<std::size_t>(y) * 320 * 4],
                         320 * 4);
     };
     // Off-level edge fill that is PIXEL-IDENTICAL to the steady margin:
@@ -665,8 +756,8 @@ void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
     // and lacked the forest-backdrop / floor row extension).
     auto steady_margin_slot = [&](int slot, int adj_s, int side) {
         const presentation::FrameBuffer* bd =
-            (ctx.ws_backdrop_ok && ctx.render->visual_background)
-                ? ctx.ws_backdrop
+            (ctx.wsp->backdrop_ok() && ctx.render->visual_background)
+                ? &ctx.wsp->backdrop()
                 : nullptr;
         std::vector<std::uint8_t> wide;
         ctx.compose_wide_native(adj_s, M, bd, wide);
@@ -716,11 +807,11 @@ void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
     // the FOND + lake; else mirror (FOND/dark-woods) or smear (L7).
     const bool l1_end_off_right = ctx.state->current_level == 1 &&
                                   lo + 2 == core::kLastScreen &&
-                                  ctx.ws_backdrop_ok;
+                                  ctx.wsp->backdrop_ok();
     if (slot3_real) {
         fill_real(3, lo + 3);
     } else if (l1_end_off_right) {
-        put_slot(3, *ctx.ws_backdrop);             // full FOND; water added below
+        put_slot(3, ctx.wsp->backdrop());             // full FOND; water added below
     } else if (fond_level) {
         offlevel_slot(3, lo + 2);
         fond_sky_band(3);
@@ -762,8 +853,15 @@ void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
     // panorama saves the NATIVE strip window per frame as
     // ptrans_NNNN.bmp so pan seams can be verified headlessly.
     const char* pan_dump = std::getenv("OLDUVAI_DUMP_TRANSITION");
-    for (int f2 = 1; f2 <= n && *ctx.running; ++f2) {
-        const double t = std::min(1.0, static_cast<double>(f2) / n);
+    // Smooth pans on the wall clock (wall_progress); classic keeps its
+    // exact frame count.  A quit mid-pan clears *running and ends the pan
+    // on the next check, in both modes.
+    const Uint32 t0 = SDL_GetTicks();
+    const Uint32 dur = static_cast<Uint32>(n) * step_ms;
+    for (int f2 = 1; *ctx.running; ++f2) {
+        const double p = smooth_t ? wall_progress(t0, dur, 1.0 / n)
+                                  : static_cast<double>(f2) / n;
+        const double t = std::min(1.0, p);
         int x0 = static_cast<int>(
             std::lround(x0_start + (x0_end - x0_start) * t));
         if (x0 < 0) x0 = 0;
@@ -791,10 +889,11 @@ void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
                                     static_cast<std::size_t>(x0h)) * 4,
                 static_cast<std::size_t>(wWh) * 4,
                 work.begin() + static_cast<std::size_t>(y) * wWh * 4);
-        ctx.present_wide_transition(work, /*with_hud=*/true,
+        ctx.wsp->present_transition(work, /*with_hud=*/true,
                                     /*pre_upscaled=*/true);
         paced(ctx, step_ms);
         if (!poll_screen_events(ctx.win)) *ctx.running = false;
+        if (smooth_t ? p >= 1.0 : f2 >= n) return;
     }
 }
 

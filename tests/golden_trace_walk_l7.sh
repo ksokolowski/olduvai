@@ -2,6 +2,19 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Krzysztof Sokołowski
 # Display-level 7 walk-and-jump — the corpus scenario that reaches
+#
+# ✅ ORACLE-VERIFIED 2026-09-06 (§3.15 item 1, second pass) — this fixture is
+# cross-engine truth and may be cited as parity.  It was recorded from THIS
+# engine and pinned behaviour CHANGE only; it could not be promoted at first
+# because the diff harness had no way to enter a level mid-way, so every gate
+# starting at a non-zero screen was excluded.  The reference gained
+# `--start-screen` (mirroring this engine's flag field for field) and the diff
+# tool learned the lNsM_ filename convention, so `l7s10_walk_jump.jsonl`
+# now runs `--level 7 --start-screen 10` on BOTH engines.
+#
+# 170 aligned frames IDENTICAL on 17 fields — the exact length of this gate's
+# own fixture, so the promotion covers the whole run and not a prefix.  Re-run
+# the diff after regenerating, or the promotion goes stale in silence.
 # check_l7_transition.
 #
 # WHY THIS EXISTS.  §3.15 left check_l5_transition and check_l7_transition among

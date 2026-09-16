@@ -93,11 +93,21 @@ void Menu::adjust(int dx) {
         bind_.set(it.key, bind_.get(it.key) == "1" ? "0" : "1");
     } else if (it.type == "choice" ||
                (it.type == "action" && !it.key.empty() && !it.values.empty())) {
-        const auto& vals = it.values;
+        std::vector<std::string> vals = bind_.allowed_values(it);
         if (vals.empty()) return;
         const std::string cur = bind_.get(it.key);
+        // A value the row cannot offer is still a value the user HOLDS, and
+        // cycling must never silently throw it away.  This used to read
+        // `pos == vals.end() ? 0`, so one keypress on a row whose current
+        // token was not in its list jumped to values[1] with no way back:
+        // Aspect held "widescreen" (absent from the authored list until
+        // 2026-09-07) and a single Right press destroyed it, persisted.
+        // Splicing the current value in at the front keeps every state
+        // reachable in both directions.
+        if (std::find(vals.begin(), vals.end(), cur) == vals.end())
+            vals.insert(vals.begin(), cur);
         auto pos = std::find(vals.begin(), vals.end(), cur);
-        int i = pos == vals.end() ? 0 : static_cast<int>(pos - vals.begin());
+        int i = static_cast<int>(pos - vals.begin());
         const int n = static_cast<int>(vals.size());
         i = (i + (dx > 0 ? 1 : -1) + n) % n;
         bind_.set(it.key, vals[i]);

@@ -23,6 +23,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+
+#include "presentation/render/widescreen_presenter.hpp"
 #include <string>
 #include <vector>
 
@@ -50,10 +52,16 @@ struct TransitionShellCtx {
     bool hd = false;
     int hd_scale = 1;
     const std::string* hd_profile = nullptr;   // opts.hd_profile
-    int ws_margin = 0;
-    int ws_native_w = 320;
-    bool ws_backdrop_ok = false;
-    const FrameBuffer* ws_backdrop = nullptr;  // level FOND (valid w/ _ok)
+    // The widescreen geometry is READ FROM ITS OWNER, not copied.  Until
+    // 2026-09-06 this struct carried ws_margin / ws_native_w /
+    // ws_backdrop_ok / ws_backdrop, each assigned from the identical
+    // WidescreenPresenter accessor at the one call site — four copies of one
+    // object's state, taken once and then held for the length of a
+    // transition.  That is exactly the shape BACKLOG §3.7 forbids ("members,
+    // never by-value copies"), and it is the frozen-`hd_profile` defect's
+    // shape: `rebuild_if_resized()` can move the margin mid-transition while
+    // the copy does not.  One borrowed pointer cannot go stale.
+    WidescreenPresenter* wsp = nullptr;
     enhance::HdAssetCache* hd_cache = nullptr; // g.hd_cache (RenderTarget)
 
     // Live game state/render — read-only in the players.
@@ -69,9 +77,8 @@ struct TransitionShellCtx {
     // Callbacks into the shell (own the SDL textures, the widescreen cache
     // and the TU-private Loaded&).
     std::function<void(FrameBuffer&)> upload_and_show;
-    std::function<void(std::vector<std::uint8_t>& wide, bool with_hud,
-                       bool pre_upscaled)>
-        present_wide_transition;
+    // (present_wide_transition was a std::function whose whole body was
+    //  `wsp.present_transition(...)`; the players call it through `wsp` now.)
     std::function<RenderTarget(FrameBuffer&)> make_rt;
     // compose_surface_screen_static(g, screen, out, nullptr, nullptr,
     //                               frozen_full) — panorama slot fills.

@@ -39,6 +39,17 @@ void BannerPresenter::arm_tick() {
     gr_prev_counter_ = state_.get_ready_counter;
 }
 
+std::uint64_t BannerPresenter::key() const {
+    if (gr_anim_active_) return 0;   // animating: changes every frame
+    const int gate_screen = (state_.current_level == 3) ? 17 : 18;
+    if ((state_.current_level == 1 || state_.current_level == 3 ||
+         state_.current_level == 5 || state_.current_level == 7) &&
+        state_.current_screen == gate_screen && state_.food_count < 45) {
+        return 0;                    // bobbing: changes every frame
+    }
+    return 0x9E3779B97F4A7C15ull;     // draws nothing
+}
+
 void BannerPresenter::draw(std::vector<std::uint8_t>& b, int ow, int oh) {
     // draw_centered_overlay_row centres at the output midpoint, which maps
     // to native x≈160 in BOTH the plain and widescreen canvases (the center

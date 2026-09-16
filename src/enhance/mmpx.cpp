@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
+#include "enhance/parallel_rows.hpp"
 #include "enhance/mmpx.hpp"
 
 #include <algorithm>
@@ -59,7 +60,11 @@ std::vector<std::uint8_t> mmpx_2x(const std::vector<std::uint8_t>& rgba,
 
     std::vector<std::uint32_t> dst(static_cast<std::size_t>(w) * h * 4);
     const int W2 = w * 2;
-    for (int y = 0; y < h; ++y) {
+    // §3.22: row-band split.  Writes are y-derived (o = (y*2)*W2 + x*2), reads go to the
+    // read-only input via the clamping accessor, so bands never share an
+    // output byte — bit-identical, and test_upscale_threading proves it.
+    parallel_rows(h, [&](int y_begin, int y_end) {
+    for (int y = y_begin; y < y_end; ++y) {
         for (int x = 0; x < w; ++x) {
             const std::uint32_t A = at(x - 1, y - 1), B = at(x, y - 1),
                                 C = at(x + 1, y - 1), D = at(x - 1, y),
@@ -194,7 +199,9 @@ std::vector<std::uint8_t> mmpx_2x(const std::vector<std::uint8_t>& rgba,
             dst[o + W2 + 1] = M;
         }
     }
-    // Unpack.
+    });
+    // Unpack (serial: it is O(w*h), not O(w*h*s*s), and it reads the whole
+    // packed buffer the bands just finished writing).
     std::vector<std::uint8_t> out(dst.size() * 4);
     for (std::size_t i = 0; i < dst.size(); ++i) {
         out[i * 4] = dst[i] & 0xFF;

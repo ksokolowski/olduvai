@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "enhance/omniscale.hpp"
 
+#include "enhance/parallel_rows.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -64,7 +66,13 @@ std::vector<std::uint8_t> omniscale(const std::vector<std::uint8_t>& rgba,
                                   4);
     const int W = w * s;
 
-    for (int y = 0; y < h; ++y) {
+    // §3.22: the y-loop splits across a persistent pool.  Bit-identical, not
+    // merely equivalent — input row y writes output rows [y*s, y*s+s) via the
+    // `o` index below, so bands never share an output byte, and `src`/`hq` are
+    // finished before this loop and only read inside it.  The body is
+    // UNCHANGED; only who runs which y differs.
+    parallel_rows(h, [&](int y_begin, int y_end) {
+    for (int y = y_begin; y < y_end; ++y) {
         for (int x = 0; x < w; ++x) {
             for (int sy = 0; sy < s; ++sy) {
                 for (int sx = 0; sx < s; ++sx) {
@@ -303,6 +311,7 @@ std::vector<std::uint8_t> omniscale(const std::vector<std::uint8_t>& rgba,
             }
         }
     }
+    });
     return out;
 }
 

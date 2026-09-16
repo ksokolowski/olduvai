@@ -12,16 +12,17 @@ to be left behind.
 
 Olduvai exists to preserve it and keep it playable: a native C++/SDL2
 recreation of the Prehistorik engine for modern platforms — macOS
-(Apple Silicon), desktop Linux, and Windows, with retro handhelds planned.
+(Apple Silicon), desktop Linux, Windows, and Linux handhelds running KNULLI
+(the TrimUI Smart Pro and the Powkiddy A12), with PortMaster support next.
 Faithful to the DOS original down to its quirks for the players who
 remember feeding that caveman the first time around — and, when you want
 it, widescreen, HD and gamepad-ready for a generation meeting him for the
 first time.
 
-(No gameplay screenshots here, deliberately: this repository and its
-releases contain **zero game-derived content**, imagery included —
-CI-enforced; see [LEGAL.md](LEGAL.md). Bring your own copy and it looks
-just like 1991.)
+(This repository and its releases contain **no game files and no game
+data** — CI-enforced. A few curated, silent screenshots and clips of the
+engine itself are the one documented exception; see [LEGAL.md](LEGAL.md).
+Bring your own copy and it looks just like 1991.)
 
 Olduvai is an engine only — it ships no game content. You bring your own
 copy of the game: see [Getting the game](#getting-the-game) and
@@ -29,12 +30,12 @@ copy of the game: see [Getting the game](#getting-the-game) and
 
 ## Status
 
-**Beta — 0.9.6.** The full game is playable natively: all seven levels,
-the three boss fights, caves, secret rooms, flight sequences and the
-ending. Behaviour is validated frame-by-frame against an independent
-reference implementation — a 13-scenario cross-engine corpus plus
-per-level golden traces run in CI, with both engines in shared-RNG
-lockstep, zero tolerance.
+**Beta — 0.9.7.** The full game is playable natively — on the desktop
+and, new in this release, on two Linux handhelds: all seven levels, the
+three boss fights, caves, secret rooms, flight sequences and the ending.
+Behaviour is validated frame-by-frame against an independent reference
+implementation — a 26-scenario cross-engine corpus, with per-level golden
+traces run in CI, both engines in shared-RNG lockstep, zero tolerance.
 
 Under the hood, some parts are still convoluted — I know, and I'm not
 pretending otherwise. During beta the priority is simple: **keep what
@@ -107,6 +108,14 @@ Prebuilt engine binaries for each release are on the
 | Linux x86_64 (any distro) | `olduvai-<version>-linux-x86_64.AppImage` |
 | Windows x86_64 (portable) | `olduvai-<version>-windows-x86_64.zip` |
 | macOS (universal: Apple Silicon + Intel) | `olduvai-<version>-macos-universal.dmg` |
+| TrimUI Smart Pro (KNULLI) | `olduvai-<version>-knulli-trimui.zip` |
+| Powkiddy A12 (KNULLI) | `olduvai-<version>-knulli-a12.zip` |
+
+**Handhelds:** Enhanced HD — smooth motion, widescreen, HD graphics — runs on
+the TrimUI Smart Pro close to full speed; the A12 starts in Classic. Install
+steps, controls and music: [docs/HANDHELD.md](docs/HANDHELD.md). Support for
+many more handhelds through [PortMaster](https://portmaster.games/) is the next
+goal.
 
 Binaries are **not code-signed** (a hobby project without paid developer
 accounts):
@@ -213,7 +222,9 @@ on personal time and money; this is the first thing sponsorship would buy.
 The short version — the complete position is in [LEGAL.md](LEGAL.md):
 
 - Olduvai is an **independent, from-scratch reimplementation**. It contains
-  no code or data from the original game, and never will (CI-enforced).
+  no code or data files from the original game, and never will
+  (CI-enforced); a few curated, silent screenshots and clips of the engine
+  are the one documented exception.
 - **You need your own copy of the game**; the engine reads it locally and
   never redistributes it.
 - Prehistorik © 1991 Titus Interactive; all marks belong to their respective

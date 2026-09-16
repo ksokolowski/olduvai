@@ -6,6 +6,8 @@
 #include "parse_num.hpp"
 #include <string>
 
+#include "presentation/menu/profile_table.hpp"
+
 namespace olduvai::app {
 
 
@@ -172,12 +174,18 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
                 ps.aspect = "4:3";
                 ps.cli.aspect = true;   // explicit: must beat a saved config
             }
-            if (profile != "dos" && profile != "hd") {
+            if (olduvai::presentation::find_profile(profile) == nullptr) {
                 std::fprintf(stderr,
-                    "olduvai: --profile must be 'dos' or 'hd' "
-                    "(got '%s')\n", profile.c_str());
+                    "olduvai: --profile must be one of %s (got '%s')\n",
+                    olduvai::presentation::profile_names().c_str(),
+                    profile.c_str());
                 return {true, 2, false, false};
             }
+        } else if (arg == "--default-profile" && i + 1 < argc) {
+            // Validated when layered, as a warning: a launcher from one
+            // release paired with a binary from another must never block
+            // playing.
+            args.default_profile = argv[++i];
         } else if (arg == "--level" && i + 1 < argc) {
             if (!num("--level", argv[++i], play_level))
                 return {true, 2, false, false};

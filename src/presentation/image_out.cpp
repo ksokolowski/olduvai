@@ -56,6 +56,23 @@ bool save_rgba_image(const void* pixels, int w, int h, const std::string& path) 
 bool capture_renderer_output(SDL_Renderer* ren, const std::string& path) {
     int ow = 0, oh = 0;
     SDL_GetRendererOutputSize(ren, &ow, &oh);
+
+    // CLEAR THE LOGICAL SIZE FOR THE READ, RESTORE IT AFTER.
+    // SDL_RenderReadPixels(rect = nullptr) reads the current VIEWPORT, not the
+    // target.  With a logical size set, the viewport is a centred sub-rect, so
+    // the read starts at its offset and lands at (0,0) of a full-size surface:
+    // the image comes out CROPPED ON THE LEFT with black filling the right,
+    // and a reader concludes the game drew it that way.
+    //
+    // §3.14b found and fixed exactly this in capture_gate_frame (which carries
+    // the same comment) and did NOT fix it here — so every F5 bug report taken
+    // in a pillarboxed mode has been showing a shifted, cropped frame rather
+    // than what the player saw.  Found 2026-09-07 from a widescreen report
+    // whose screenshot was itself the misleading evidence.
+    int lw = 0, lh = 0;
+    SDL_RenderGetLogicalSize(ren, &lw, &lh);
+    if (lw != 0 || lh != 0) SDL_RenderSetLogicalSize(ren, 0, 0);
+
     SDL_Surface* s = SDL_CreateRGBSurfaceWithFormat(
         0, ow, oh, 32, SDL_PIXELFORMAT_RGBA32);
     bool ok = false;
@@ -65,6 +82,8 @@ bool capture_renderer_output(SDL_Renderer* ren, const std::string& path) {
         ok = save_surface_image(s, path);
     }
     if (s != nullptr) SDL_FreeSurface(s);
+
+    if (lw != 0 || lh != 0) SDL_RenderSetLogicalSize(ren, lw, lh);
     return ok;
 }
 
@@ -73,8 +92,36 @@ void maybe_dump_steady(const void* pixels, int w, int h) {
     if (dir == nullptr) return;
     static int seq = 0;
     char path[512];
-    std::snprintf(path, sizeof path, "%s/steady_fb_%04d.bmp", dir, seq++);
+    char name[32];
+    std::snprintf(name, sizeof name, "steady_fb_%04d.bmp", seq++);
+    std::snprintf(path, sizeof path, "%s/%s", dir, name);
     save_rgba_image(pixels, w, h, path);
+    note_dump_time(dir, name);
+}
+
+void maybe_dump_output(SDL_Renderer* ren) {
+    const char* dir = std::getenv("OLDUVAI_DUMP_OUTPUT");
+    if (dir == nullptr || ren == nullptr) return;
+    static int seq = 0;
+    static Uint64 last = 0;
+    const Uint64 now = SDL_GetPerformanceCounter();
+    if (last != 0 && (now - last) * 60 < SDL_GetPerformanceFrequency()) return;
+    last = now;
+    char name[32];
+    char path[512];
+    std::snprintf(name, sizeof name, "out_%05d.bmp", seq++);
+    std::snprintf(path, sizeof path, "%s/%s", dir, name);
+    if (capture_renderer_output(ren, path)) note_dump_time(dir, name);
+}
+
+void note_dump_time(const char* dir, const char* file) {
+    const Uint64 t = SDL_GetPerformanceCounter();
+    char path[512];
+    std::snprintf(path, sizeof path, "%s/frames.txt", dir);
+    std::FILE* f = std::fopen(path, "a");
+    if (f == nullptr) return;
+    std::fprintf(f, "%s %llu\n", file, static_cast<unsigned long long>(t));
+    std::fclose(f);
 }
 
 }  // namespace olduvai::presentation

@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.21)
 project(olduvai
-    VERSION 0.9.6
+    VERSION 0.9.7
     DESCRIPTION "Native recreation of the Prehistorik (1991) engine"
     LANGUAGES CXX C)
 
@@ -200,6 +200,7 @@ add_library(olduvai_formats
     src/formats/pc1.cpp
     src/formats/voc.cpp
     src/formats/mdi.cpp
+    src/enhance/parallel_rows.cpp
     src/enhance/mmpx.cpp
     src/enhance/omniscale.cpp
     src/enhance/pixel_scalers.cpp
@@ -227,7 +228,27 @@ add_library(olduvai_formats
     src/systems/boss_l4.cpp
     src/systems/boss_l6.cpp
     src/systems/fluid_bubbles.cpp
+    ${CMAKE_BINARY_DIR}/generated/build_id.cpp
 )
+# The build ID (src/core/build_id.hpp): hash + commit time, or -dirty + build
+# time.  Regenerated on EVERY build by cmake/build_id.cmake — rewritten only
+# when the text changes, so an unchanged ID costs no relink — and run once at
+# configure time so the file exists before the first build.  Linked into
+# olduvai_formats because every binary links it.
+find_package(Git QUIET)
+set(OLDUVAI_BUILD_ID_ARGS
+    -DSRC_DIR=${CMAKE_SOURCE_DIR}
+    -DOUT=${CMAKE_BINARY_DIR}/generated/build_id.cpp
+    -DGIT=${GIT_EXECUTABLE})
+execute_process(COMMAND ${CMAKE_COMMAND} ${OLDUVAI_BUILD_ID_ARGS}
+                        -P ${CMAKE_SOURCE_DIR}/cmake/build_id.cmake)
+add_custom_target(olduvai_build_id
+    COMMAND ${CMAKE_COMMAND} ${OLDUVAI_BUILD_ID_ARGS}
+            -P ${CMAKE_SOURCE_DIR}/cmake/build_id.cmake
+    BYPRODUCTS ${CMAKE_BINARY_DIR}/generated/build_id.cpp
+    COMMENT "Stamping the build ID"
+    VERBATIM)
+add_dependencies(olduvai_formats olduvai_build_id)
 # -Wconversion on the SDL-free engine library only (§4b item 10).  The
 # presentation layer is full of deliberate int<->float pixel math and SDL's own
 # integer types, where the warning is noise; the byte-decoder and gameplay
@@ -328,6 +349,7 @@ if(SDL2_FOUND)
         src/presentation/input/gamepad.cpp
         src/presentation/render/game_render.cpp
         src/presentation/render/sprite_blit.cpp
+    src/presentation/render/hd_warm.cpp
         src/presentation/render/bg_compose.cpp
         src/presentation/level/level_save.cpp
         src/presentation/level/level_setup.cpp
@@ -356,6 +378,7 @@ if(SDL2_FOUND)
         src/presentation/input/replay.cpp
         src/presentation/image_out.cpp
         src/presentation/diag/draw_log.cpp
+        src/presentation/diag/frame_stats.cpp
         src/presentation/sequence/end_sequence.cpp
         src/presentation/input/frame_input.cpp
         src/presentation/render/frame_presenter.cpp
@@ -384,6 +407,12 @@ if(SDL2_FOUND)
     # even in the RtMidi-disabled stub build (the thread member is compiled
     # regardless).  Link it unconditionally so the stub case still links.
     find_package(Threads QUIET)
+    # olduvai_formats carries enhance/, whose upscalers split their row loops
+    # across a persistent std::thread pool (§3.22).  NOT OpenMP: this tree
+    # already has a libgomp casualty in the dlopen'd FluidSynth.
+    if(TARGET Threads::Threads)
+        target_link_libraries(olduvai_formats PUBLIC Threads::Threads)
+    endif()
     target_link_libraries(olduvai_presentation
         PUBLIC olduvai_formats
         PRIVATE ${OLDUVAI_SDL2} ${CMAKE_DL_LIBS})
@@ -699,7 +728,10 @@ add_executable(olduvai_tests EXCLUDE_FROM_ALL
     tests/test_post_frame_steps.cpp
     tests/test_screen_topology.cpp
     tests/test_upscale.cpp
+    tests/test_upscale_threading.cpp
+    tests/test_upscale_sizes.cpp
     tests/test_hd_asset_cache.cpp
+    tests/test_hd_warm.cpp
     tests/test_hd_asset_cache_disk.cpp
     tests/test_fluid_bubbles.cpp
     tests/test_game_files.cpp
@@ -715,6 +747,7 @@ add_executable(olduvai_tests EXCLUDE_FROM_ALL
     tests/test_options_build.cpp
     tests/test_cli_args.cpp
     tests/test_env_num.cpp
+    tests/test_smooth_config.cpp
     src/app/config.cpp src/app/legacy_cache.cpp
     src/app/cli_args.cpp
     src/app/options_resolve.cpp
@@ -722,6 +755,11 @@ add_executable(olduvai_tests EXCLUDE_FROM_ALL
     src/presentation/audio/opl_music.cpp
     third_party/nuked_opl3/opl3.c
     src/presentation/menu/menu.cpp
+    src/presentation/render/hd_warm.cpp
+    # test_hd_warm drives the REAL blit_sprite, so the warm is pinned against
+    # the renderer rather than against a second copy of it.  SDL-free (it only
+    # writes pixels into a caller-owned buffer), so it costs this tier nothing.
+    src/presentation/render/sprite_blit.cpp
     src/presentation/level/save_state.cpp
 )
 target_compile_definitions(olduvai_tests PRIVATE
@@ -946,6 +984,47 @@ endif()
 # condition, plus an interpreter) so a host without sh drops it as a unit
 # instead of registering 18 unlaunchable tests.
 if(SDL2_FOUND AND _olduvai_shell_tests)
+    # The TrimUI port bundle.  Needs NEITHER SDL2 NOR game files — it builds its
+    # own fixtures.  It sits inside this block only to inherit the interpreter
+    # guard above, which is what keeps .sh tests launchable on Windows.
+    #
+    # IT DOES SKIP, and the claim here that it "must never skip" is what kept
+    # the gitea `windows` job red for 13 commits.  The fixture models a
+    # case-SENSITIVE directory holding SYMLINKS — the properties the exFAT
+    # hazard is about — and Windows can express neither, so `ln -s` fails and
+    # `set -e` fails the job.  The scenario is unreachable there, not broken:
+    # the packaging script is a Linux/macOS developer tool that never runs on
+    # Windows.  The script probes for both properties and exits 77.
+    #
+    # What it pins is the packaging script's handling of an exFAT destination:
+    # symlinks cannot be stored there and names collide case-insensitively, and
+    # the owner's ROM directory trips both.  Either failure ships an MT-32
+    # backend that reports itself unavailable with nothing visibly wrong.  It
+    # also pins the content-policy refusal (no bundle inside the repo) and two
+    # things a reader depends on: the README naming both executable forms, and
+    # the launcher setting SDL_VIDEODRIVER=mali.
+    add_test(NAME port_bundle
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/port_bundle.sh"
+                "${CMAKE_SOURCE_DIR}/packaging/build_port_knulli.sh"
+                "${CMAKE_SOURCE_DIR}")
+    # 78, NOT 77, and the difference carries meaning.  The `assets` label a few
+    # hundred lines below is DERIVED from `SKIP_RETURN_CODE STREQUAL 77`, and
+    # that label means "needs the owner's game files" — it is what `ctest -LE
+    # assets` subtracts to say what CI really runs, and what gate_local.sh
+    # treats as a failure when it skips on an asset machine.  This test needs no
+    # game files; it needs a filesystem that can hold a symlink and tell two
+    # names apart by case.  Reusing 77 would file it under the wrong reason,
+    # inflate the data-gated ratchet, and drop it from the always-green set on
+    # machines where it runs perfectly well.
+    set_tests_properties(port_bundle PROPERTIES SKIP_RETURN_CODE 78)
+    # --version names the exact build (src/core/build_id.hpp).  No game files
+    # needed; in a git checkout it also proves the ID is HEAD's, i.e. that the
+    # binary is not stale — the trap the build ID exists to expose.
+    add_test(NAME version_string
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/version_string.sh"
+                "$<TARGET_FILE:olduvai>" "${CMAKE_SOURCE_DIR}"
+                "${PROJECT_VERSION}")
+
     add_test(NAME audio_render
         COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/audio_render.sh"
                 "$<TARGET_FILE:olduvai>")
@@ -965,6 +1044,16 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
                 "$<TARGET_FILE:olduvai>")
     set_tests_properties(first_run PROPERTIES
         SKIP_RETURN_CODE 77)
+    # No game data needed (the point of it): a frontend launch with no game
+    # files must put the message ON SCREEN when no message box can be shown —
+    # the handheld case, where it used to exit silently back to the menu.
+    add_test(NAME nofiles_screen
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/nofiles_screen.sh"
+                "$<TARGET_FILE:olduvai>")
+    # 78 = platform skip (Windows: always a native message box, and ctest's
+    # shared console makes the run a terminal launch) — see the script.  Not
+    # 77, which means "needs the owner's game files" (the `assets` label).
+    set_tests_properties(nofiles_screen PROPERTIES SKIP_RETURN_CODE 78)
     add_test(NAME reinit_smoke
         COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/reinit_smoke.sh"
                 "${CMAKE_SOURCE_DIR}/game_data"
@@ -1324,6 +1413,139 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
         LABELS slow
         DEPENDS olduvai)
 
+
+    # ── The ten ADOPTED ORACLE SCENARIOS (§3.15 item 2, 2026-09-06) ──────────
+    # These are the reference repo's own scenarios/*.jsonl, byte for byte.  They
+    # were parity-verified BEFORE becoming gates here — olduvai_scenario_diff.py
+    # reports all 26 corpus scenarios frame-identical on 17 fields — so unlike
+    # the §3.15 gates around them they are cross-engine truth from the moment
+    # they land, with no promotion step needed afterwards.
+    #
+    # Worth +10.6 points of corpus line reach and +12.6 of branches
+    # (72.44 -> 83.04, 59.42 -> 72.01), and they also move corpus+unit
+    # (89.05 -> 92.26) — i.e. they run code NOTHING else in the tree executes.
+    #
+    # ALL LABELLED `slow`, deliberately: ~496 s together, and the engine paces
+    # to 18.2 Hz even headless so frame count IS wall clock (l1_full_clear alone
+    # is 210 s).  The everyday `release` preset filters the label out and stays
+    # ~550 s; `release-full` and gate_local.sh run them.  Anything too slow for
+    # the default suite belongs HERE with the label, never outside the registry
+    # (§3.20).
+    # the L1 balloon/glider ride, all 13 surface screens
+    add_test(NAME golden_trace_l1_balloon_flight
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l1_balloon_flight.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l1_balloon_flight PROPERTIES
+        SKIP_RETURN_CODE 77
+        LABELS slow
+        DEPENDS olduvai)
+    # food pickups, score and the food gate
+    add_test(NAME golden_trace_l1_food_route
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l1_food_route.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l1_food_route PROPERTIES
+        SKIP_RETURN_CODE 77
+        LABELS slow
+        DEPENDS olduvai)
+    # 2,740 frames, 412 attacks, 11 caves; ends in a GAME OVER
+    add_test(NAME golden_trace_l1_full_clear
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l1_full_clear.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l1_full_clear PROPERTIES
+        SKIP_RETURN_CODE 77
+        LABELS slow
+        DEPENDS olduvai)
+    # the secret room reached by PLAY, not --start-screen
+    add_test(NAME golden_trace_l1_secret_dive
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l1_secret_dive.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l1_secret_dive PROPERTIES
+        SKIP_RETURN_CODE 77
+        LABELS slow
+        DEPENDS olduvai)
+    # the L2 arena WITH input — boss_golden_trace presses nothing
+    add_test(NAME golden_trace_l2_boss_fight
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l2_boss_fight.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l2_boss_fight PROPERTIES
+        SKIP_RETURN_CODE 77
+        LABELS slow
+        DEPENDS olduvai)
+    # display-L3 surface with attacks
+    add_test(NAME golden_trace_l3_icy_route
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l3_icy_route.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l3_icy_route PROPERTIES
+        SKIP_RETURN_CODE 77
+        LABELS slow
+        DEPENDS olduvai)
+    # display-L3 surface walk with attacks
+    add_test(NAME golden_trace_l3_icy_walk
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l3_icy_walk.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l3_icy_walk PROPERTIES
+        SKIP_RETURN_CODE 77
+        LABELS slow
+        DEPENDS olduvai)
+    # display-L5 deep route with attacks
+    add_test(NAME golden_trace_l5_darkwoods_deep
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l5_darkwoods_deep.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l5_darkwoods_deep PROPERTIES
+        SKIP_RETURN_CODE 77
+        LABELS slow
+        DEPENDS olduvai)
+    # display-L5 surface walk with attacks
+    add_test(NAME golden_trace_l5_darkwoods_walk
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l5_darkwoods_walk.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l5_darkwoods_walk PROPERTIES
+        SKIP_RETURN_CODE 77
+        LABELS slow
+        DEPENDS olduvai)
+    # display-L7 volcanic walk with attacks
+    add_test(NAME golden_trace_l7_volcanic_walk
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l7_volcanic_walk.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l7_volcanic_walk PROPERTIES
+        SKIP_RETURN_CODE 77
+        LABELS slow
+        DEPENDS olduvai)
+
+    # L2 T-Rex victory flash, wide compose — the L2 half of the victory gate
+    # §3.7's boss dispatch slice needed before it could fold the victory-sprite
+    # chain in.  The capture hook (REAL_SHOT && wsb.active && vf == 8) already
+    # existed and nothing called it, so this cost no engine change.
+    add_test(NAME boss_l2_victory
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/boss_l2_victory.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(boss_l2_victory PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # L6 Giant victory drop, wide compose — the L6 half of the victory gate.
+    # Unlike L2's, this one needed the capture hook BUILT: present_l6_victory_wide
+    # always presented, so there was nothing to read back.  It was the only boss
+    # ending in the tree no test could photograph.
+    add_test(NAME boss_l6_victory
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/boss_l6_victory.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(boss_l6_victory PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
     # In-game menu behaviour baseline: drives the pause menu via OLDUVAI_MENU_SCRIPT
     # (synthetic key events) through a nav/Options/Cheats/back walk and byte-
     # compares each frame to a committed golden. The interactive-menu regression
@@ -1451,7 +1673,7 @@ list(LENGTH _olduvai_tests _olduvai_total)
 # register only the two non-SDL gated tests (screen_tiles, sqz_parity) — as do
 # builds with no shell interpreter, since the other 18 are all .sh-driven.
 if(SDL2_FOUND AND _olduvai_shell_tests)
-    set(_olduvai_gated_expected 42)   # +1: hd_text_screens, +2: L4/L6 fights, +1: L6 slam-hd, +2: pause 4:3/stretch, +1: gameover_shot
+    set(_olduvai_gated_expected 54)   # +1: hd_text_screens, +2: L4/L6 fights, +1: L6 slam-hd, +2: pause 4:3/stretch, +1: gameover_shot, +10: the adopted oracle scenarios (§3.15 item 2), +2: boss_l2/l6_victory
 else()
     set(_olduvai_gated_expected 2)
 endif()

@@ -5,6 +5,7 @@
 #include <string>
 
 #include "presentation/env_num.hpp"
+#include "presentation/menu/profile_table.hpp"
 
 namespace olduvai::presentation {
 
@@ -13,13 +14,37 @@ bool hd_active(bool enhanced, const std::string& hd_profile) {
 }
 
 int hd_scale_for(bool enhanced, const std::string& hd_profile, int render_scale) {
-    return hd_active(enhanced, hd_profile) ? (render_scale >= 4 ? 4 : 2) : 1;
+    // Scale 3 is reachable as of the handheld spike.  It was clamped away by a
+    // `>= 4 ? 4 : 2`, which silently turned a request for 3 into 2.
+    //
+    // WHY IT MATTERS, measured on a TrimUI Smart Pro (1280x720 panel, 356x200
+    // logical widescreen): x2 renders 712x400 and the display stretches it 1.8x
+    // — non-integer and soft.  x4 renders 1424x800 and then throws pixels away
+    // shrinking to fit.  x3 renders 1068x600, a 1.2x stretch: the closest fit
+    // and the least wasted work.  `smooth` implements a genuine scale3x; eagle
+    // and xbr fall back to it with a warning.
+    //
+    // The general rule this serves is "the largest scale that does not exceed
+    // the output", which is a display-fit question rather than a handheld one:
+    // the old fixed 4 overshoots any output below 1424x800, a small desktop
+    // window included.
+    if (!hd_active(enhanced, hd_profile)) return 1;
+    if (render_scale < 2) return 2;
+    if (render_scale > 4) return 4;
+    return render_scale;
 }
 
 ApplyTier classify_change(const std::string& key, const std::string& new_value,
                           const DisplaySettings& cur) {
     if (key == "music_volume" || key == "sfx_volume" || key == "fullscreen" ||
         key == "aspect")
+        return ApplyTier::Live;
+
+    // Smooth-present keys: the persist hook folds them into the pacing config
+    // (smooth_config.hpp) that every frame loop reads at its start.  Only the
+    // handheld Enhanced preset stages them, beside the enhanced flip whose
+    // rebuild picks them up — live, not next-launch.
+    if (key == "smooth_subframes" || key == "smooth_vsync")
         return ApplyTier::Live;
 
     // The enhanced master flag gates the HD pipeline (hd_scale_for): crossing
@@ -97,25 +122,33 @@ ApplyTier classify_change_in_set(
 }
 
 void apply_preset(MenuBindings& bind, const std::string& preset) {
-    const bool hd = preset == "hd";
-    // Master flag first (see header note on stage order).  "true"/"false"
-    // matches the config-file convention for this key.
-    bind.set("enhanced", hd ? "true" : "false");
-    if (hd) {
-        bind.set("hd_profile", "omniscale");
-        bind.set("render_scale", "4");
-        // Widescreen is the good default coming FROM classic, but a user who
-        // deliberately chose 4:3 or stretch in Video picked a display setting,
-        // not a mode — changing the mode must not silently undo it.  (This is
-        // what the separate hd-43 preset used to express.)
-        //
-        // "" counts as not-deliberate alongside "keep": a binding that has not
-        // been seeded yet has no aspect, and treating that as a considered
-        // choice would leave the preset without its headline feature.
-        const std::string cur = bind.get("aspect");
-        if (cur.empty() || cur == "keep") bind.set("aspect", "widescreen");
-    } else {
-        bind.set("aspect", "keep");
+    // The bundle comes from the profile table, resolved within the session's
+    // family — seeded into the bindings as "profile_family" (empty or
+    // unknown = desktop) — so a handheld's Enhanced is its own member, not
+    // omniscale x4.
+    const ProfileDef p = resolve_preset(bind.get("profile_family"), preset);
+    const bool enhanced = p.role == ProfileRole::Enhanced;
+    for (std::size_t i = 0; i < p.pin_count; ++i) {
+        const std::string key = p.pins[i].key;
+        const std::string value = p.pins[i].value;
+        if (key == "aspect") {
+            // Style sets the MODE.  A deliberate 4:3 or stretch chosen in
+            // Video is a display setting and survives a switch to Enhanced
+            // (what the separate hd-43 preset used to express).  "" counts as
+            // not-deliberate alongside "keep": an unseeded binding has no
+            // aspect, and treating that as a choice would drop the headline
+            // feature.  Classic always returns to keep.
+            const std::string cur = bind.get("aspect");
+            if (!enhanced || cur.empty() || cur == "keep")
+                bind.set("aspect", value);
+            continue;
+        }
+        // Classic stages only the master flag (and aspect, above).  Its other
+        // pins — hd_profile, enhance — are inert while enhanced=false
+        // (hd_scale_for forces compose scale 1), and staging them would put
+        // spurious Reinit rows in the confirm dialog.
+        if (!enhanced && key != "enhanced") continue;
+        bind.set(key, value);
     }
 }
 

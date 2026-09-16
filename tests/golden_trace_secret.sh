@@ -3,6 +3,19 @@
 # Copyright (C) 2026 Krzysztof Sokołowski
 # L1 secret-room trace gate — the corpus scenario that goes UNDERWATER.
 #
+# ✅ ORACLE-VERIFIED 2026-09-06 (§3.15 item 1, second pass) — this fixture is
+# cross-engine truth and may be cited as parity.  It was recorded from THIS
+# engine and pinned behaviour CHANGE only; it could not be promoted at first
+# because the diff harness had no way to enter a level mid-way, so every gate
+# starting at a non-zero screen was excluded.  The reference gained
+# `--start-screen` (mirroring this engine's flag field for field) and the diff
+# tool learned the lNsM_ filename convention, so `l1s5_secret.jsonl`
+# now runs `--level 1 --start-screen 5` on BOTH engines.
+#
+# 170 aligned frames IDENTICAL on 17 fields — the exact length of this gate's
+# own fixture, so the promotion covers the whole run and not a prefix.  Re-run
+# the diff after regenerating, or the promotion goes stale in silence.
+#
 # WHY THIS EXISTS.  §3.15 measured secret.cpp at 17.9% with three functions
 # nothing in the tree executed: check_secret_exit, update_secret_trampoline and
 # setup_secret_collision.  The corpus walked L1 left-to-right and fought a boss;

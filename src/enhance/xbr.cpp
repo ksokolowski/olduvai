@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
+#include "enhance/parallel_rows.hpp"
 #include "enhance/xbr.hpp"
 
 #include <cstdlib>
@@ -61,7 +62,11 @@ std::vector<std::uint8_t> xbr_2x(const std::vector<std::uint8_t>& rgba,
                                  int w, int h, int threshold) {
     const int ow = w * 2;
     std::vector<std::uint8_t> out(static_cast<std::size_t>(ow) * h * 2 * 4);
-    for (int y = 0; y < h; ++y)
+    // §3.22: row-band split.  Writes are y-derived (base/row2 from y), reads go to the
+    // read-only input via the clamping accessor, so bands never share an
+    // output byte — bit-identical, and test_upscale_threading proves it.
+    parallel_rows(h, [&](int y_begin, int y_end) {
+    for (int y = y_begin; y < y_end; ++y)
         for (int x = 0; x < w; ++x) {
             const Px B = get(rgba, w, h, x, y - 1);
             const Px D = get(rgba, w, h, x - 1, y);
@@ -91,6 +96,7 @@ std::vector<std::uint8_t> xbr_2x(const std::vector<std::uint8_t>& rgba,
             if (se) put_blend(F, H, out, row2 + 4);
             else put(E, out, row2 + 4);
         }
+    });
     return out;
 }
 

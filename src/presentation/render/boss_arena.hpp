@@ -32,6 +32,7 @@ namespace olduvai::enhance { class HdAssetCache; }
 namespace olduvai::presentation {
 
 class BossHud;
+struct FrameStats;
 
 // ── Boss-arena widescreen owner (§3.5a) ─────────────────────────────────────
 // One type for what were eight locals used 178 times across run_boss_level —
@@ -170,6 +171,18 @@ public:
     // Route a FIGHT present: wide when active, the L4 ride-off through the
     // overflow compose, else the 320 path.
     void present_any(bool draw_lives = true, bool do_present = true);
+
+    // OLDUVAI_FRAME_STATS sink, or null.  ONE pointer rather than the nine
+    // loose sinks FramePresenter and WidescreenPresenter carry — see the
+    // "what a presenter calls" block in diag/frame_stats.hpp for why the boss
+    // side got the typed version and the platform side has not been converted.
+    //
+    // Until this existed the boss driver was UNMEASURABLE, and that is not a
+    // hypothetical cost: the whole September 2026 handheld optimisation pass
+    // ran on levels 1/3/5/7 only, and the one boss-side pacing defect found in
+    // it (`c886259`) was found by reading the source, because there was no
+    // number to look at.
+    FrameStats* stats = nullptr;
 
     // The smooth-motion triple the live fight feeds the wide compose, bound as
     // live cells rather than pushed in by a setter — same rule as the HUD's

@@ -211,6 +211,18 @@ private:
     std::atomic<std::uint64_t> cb_overruns_{0};
     std::atomic<std::uint64_t> cb_worst_ns_{0};
     std::atomic<std::uint64_t> cb_worst_wait_ns_{0};
+    // OLDUVAI_AUDIO_CAPTURE=<wav>: every mixed callback buffer (music + SFX,
+    // exactly what the device is handed), written as a WAV at teardown with a
+    // <wav>.sync sidecar holding the performance counter at the first
+    // captured callback — the clock the frame-dump hooks stamp their frames
+    // with (image_out.hpp note_dump_time), so a clip can line the two up
+    // (the owner's device-preview script, kept out of the public tree).  Appended under mu_, which mix() already holds.  The
+    // output is the GAME's music and effects: for the owner's own devices,
+    // never for the repo (check_tree rejects any clip with audio).
+    void write_capture();
+    std::string capture_path_;
+    std::vector<std::int16_t> capture_;   // interleaved stereo s16
+    std::uint64_t capture_t0_ = 0;
 };
 
 }  // namespace olduvai::presentation

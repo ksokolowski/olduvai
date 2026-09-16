@@ -72,6 +72,10 @@ struct WidescreenShellCtx {
     enhance::HdAssetCache* hd_cache = nullptr;     // g.hd_cache
     int internal_level_id = 0;                     // g.config.internal_id
     int surface_screen_count = 0;                  // g.tiles.screens.size()
+    // The LEVEL has a FOND backdrop (g.config.visual_background).  Not
+    // render->visual_background: that is the CURRENT screen's, false in a
+    // cave or secret room, and the backdrop is built once per level.
+    bool level_visual_background = false;
 
     // Shell logical-size mirrors: the text-overlay flush restores SDL's
     // logical size from these, so the resize recompute must keep them in
@@ -102,6 +106,11 @@ struct WidescreenShellCtx {
     std::function<void(RenderTarget&)> draw_overlay_tail;
     std::function<void(std::vector<std::uint8_t>& b, int ow, int oh)>
         draw_banners;
+    // Companion to draw_banners: 0 means "the banner is drawing something
+    // wall-clock animated, never skip the overlay".  ABSENT IS TREATED AS 0,
+    // so a caller that wires draw_banners without this can never trigger a
+    // skip.  Fail-safe by default; opting in is explicit.
+    std::function<std::uint64_t()> banners_key;
 };
 
 class WidescreenPresenter {
@@ -118,6 +127,7 @@ public:
 
     // Late hook wiring (the shell lambdas are defined after construction).
     void set_draw_overlay_tail(std::function<void(RenderTarget&)> fn);
+    void set_banners_key(std::function<std::uint64_t()> fn);
     void set_draw_banners(
         std::function<void(std::vector<std::uint8_t>&, int, int)> fn);
 
@@ -125,6 +135,8 @@ public:
     // output — the ONE mapping shared by present(), present_transition()
     // and upload_and_show's pillarboxed-WS branch (which calls it from the
     // shell).  Moved verbatim from run_platform_level (CC2d).
+    std::uint64_t overlay_key(const enhance::EnhancedHudLayout& L,
+                              int ow, int oh) const;
     void draw_wide_hud_text(std::vector<std::uint8_t>& b, int ow, int oh,
                             const enhance::EnhancedHudLayout& L);
 
@@ -167,6 +179,10 @@ public:
     bool active() const { return active_; }
     int margin() const { return margin_; }
     int native_w() const { return native_w_; }
+    // The live Aspect setting (Tier-1 edits write through this pointer).
+    // Exposed for the F5 report's Display section: active()/margin() alone
+    // cannot distinguish "too narrow a display" from "widescreen not chosen".
+    const std::string& aspect() const { return *ctx_.aspect; }
     SDL_Texture* wide_tex() const { return wtex_; }
     bool left_ok() const { return left_ok_; }
     bool right_ok() const { return right_ok_; }
@@ -185,6 +201,11 @@ public:
     // unchanged.  Rebuilds the level-derived state when widescreen turns ON
     // mid-level (the old ws_refresh_on_activate wiring, now internal).
     void rebuild_if_resized();
+
+    // Recompute after a LIVE Aspect change (the size is unchanged, so
+    // rebuild_if_resized alone is a no-op — and is a no-op in the leaving
+    // direction whatever the size does).  Safe to call when nothing changed.
+    void aspect_changed();
 
     // Rebuild the neighbour peek cache (+ seam lists + living-margin monster
     // clones) for the CURRENT screen.  Call after every screen bind.
@@ -237,6 +258,60 @@ public:
     // Compose the CURRENT screen's static wide background (no centre
     // overlay) from the presenter's cache — the descent margins builder.
     void compose_static_wide_bg(std::vector<std::uint8_t>& out);
+
+    // ── OLDUVAI_FRAME_STATS present accounting ─────────────────────────
+    // The SAME three fields FramePresenter carries, and they are here because
+    // their absence made the stat lie.  `--aspect widescreen` — which is what
+    // the handheld port ships — presents through wsp.present(), NOT
+    // fp.present(), so the only present timer in the engine sat on a path the
+    // device never took.  `present=0.00ms` was then read off a device log as
+    // evidence about SDL's cost; it was evidence of nothing at all.
+    // Inert when `stats_on` is false: the counter is not even read.
+    double* present_ms = nullptr;   // &diag.stats.present_ms
+    double* swap_ms = nullptr;                // SDL_RenderPresent only
+    double* upload_ms = nullptr;              // SDL_UpdateTexture only
+    unsigned long* present_calls = nullptr;   // present/present_transition
+    // draw_wide_foreground: entities, the Tier-1 margin monsters (neighbour
+    // screens' live monsters drawn into the peek margins), mirrored lava
+    // bubbles, and the overlay tail.
+    //
+    // WHY IT NEEDS ITS OWN NUMBER.  WsPresentTimer starts on the FIRST line of
+    // present(), so present_ms has never meant "presenting" -- it is
+    // compose + present, and every one of those passes is inside it.  Three
+    // readings of that column have now been wrong partly because its name
+    // promised something narrower than it measures.
+    double* fg_ms = nullptr;
+    // Per-present interval sampling (see LevelDiag::FrameStats).
+    std::vector<float>* present_iv = nullptr;
+    Uint64* last_present_pc = nullptr;
+    // The two FULL-FRAME COPIES the fast path makes of the same 2.56 MB frame
+    // (1068x600x4 at scale-3 widescreen): the cached HD background memcpy'd
+    // into frame_hd_, and then frame_hd_ copied again into the texture.  They
+    // are separated because eliminating one -- composing straight into a
+    // locked streaming texture -- is only worth attempting if they are as
+    // comparable as their identical size suggests.
+    double* bg_copy_ms = nullptr;
+    // show_wide_with_hud: RenderClear + RenderCopy of the scene, plus the
+    // glyph rasterisation that feeds the overlay.  The overlay's own three
+    // buckets are subtracted from this by their own timers.
+    double* scene_ms = nullptr;
+    // Vector glyph rasterisation into the overlay buffer, at OUTPUT
+    // resolution, every present.  Separated because `scene` WRAPS the
+    // overlay's own buckets -- an earlier description of these instruments
+    // wrongly claimed they subtracted out -- and the remainder after that
+    // subtraction is Clear + Copy + these glyphs.  ov_blit (a full-screen
+    // BLENDED RenderCopy) is 27.5 ms a session, so the GPU ops cannot be
+    // large, which puts the remainder here.  This measures it instead of
+    // inferring it.
+    double* glyph_ms = nullptr;
+    // Set true whenever present_transition runs, i.e. the sim was PAUSED for
+    // part of this tick.  A transition plays its whole animation inside one
+    // main-loop iteration, so that wall time is a deliberate animation and not
+    // the logic clock falling behind -- counting it as lateness made classic
+    // mode read 15.70 Hz when it was in fact running at 18.27.
+    bool* tick_paused = nullptr;
+    double perf_ms = 0.0;           // ms per SDL performance-counter tick
+    bool stats_on = false;          // OLDUVAI_FRAME_STATS
 
 private:
     int compute_margin(int ow, int oh) const;

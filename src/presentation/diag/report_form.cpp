@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "presentation/diag/report_form.hpp"
 
+#include "enhance/parallel_rows.hpp"  // parallel_row_threads
+
 #include <cstdio>
 #include <vector>
 
@@ -140,10 +142,29 @@ bool ReportFormService::service_freeze(const FreezeDeps& d) {
         const BugAnnotations ann{bind_.get("report.tag"),
                                  bind_.get("report.repro"),
                                  bind_.get("report.description")};
+        // Read the present path's live state at the moment of capture — the
+        // report is otherwise silent about exactly the thing a visual bug is
+        // about (§ bug_capture.hpp's DisplayInfo note).
+        DisplayInfo di;
+        di.supplied = true;
+        SDL_GetRendererOutputSize(d.ren, &di.out_w, &di.out_h);
+        SDL_RenderGetLogicalSize(d.ren, &di.logical_w, &di.logical_h);
+        if (SDL_Window* w = d.win; w != nullptr) {
+            di.fullscreen = (SDL_GetWindowFlags(w) &
+                             SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+        }
+        di.aspect = d.wsp.aspect();
+        di.hd = d.wsp.hd();
+        di.hd_scale = d.wsp.hd_scale();
+        di.ws_active = d.wsp.active();
+        di.ws_margin = d.wsp.margin();
+        di.ws_native_w = d.wsp.native_w();
+        di.upscale_threads = enhance::parallel_row_threads();
+
         const std::string dir = write_bug_report(
             d.g.state, frame_, d.g.render.entity_sprites,
             d.display_level, d.internal_level, d.overlay_scale, ann,
-            /*has_presented=*/d.want_presented);
+            /*has_presented=*/d.want_presented, di);
         // screenshot_presented.png — what the player actually saw: the
         // scene run through the live present (HD upscale + widescreen
         // margins), which the native frame_ skips.  Re-render the (frozen)

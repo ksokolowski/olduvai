@@ -2,10 +2,19 @@
 
 This directory holds everything the engine ships beside its binary — and the
 **only graphic assets in the repository and in release binaries**. Nothing
-here is taken from, derived from, or traced over the original game's artwork
-(`scripts/check_tree.sh` enforces in CI that no image or font files exist
-anywhere else in the tree; see the content policy in
-[CONTRIBUTING.md](../CONTRIBUTING.md)). Three kinds of content live here:
+the engine ships is taken from, derived from, or traced over the original
+game's artwork (`scripts/check_tree.sh` enforces in CI that no image, video
+or font files exist anywhere else in the tree; see the content policy in
+[CONTRIBUTING.md](../CONTRIBUTING.md)).
+
+The one exception is **`screenshots/`**: a small, curated set of stills and
+silent clips of the engine running a legitimately owned copy of the game,
+for this README and store listings. The game's artwork in those frames
+belongs to its rights holders; the files never ship in a release binary.
+Its rules and copyright notes are in [screenshots/README.md](screenshots/README.md)
+and the public position in [LEGAL.md](../LEGAL.md).
+
+Three kinds of shipped content live here:
 
 - **`icon/` + `logo/` — the project's own creative work.** The bone logo and
   the fire-styled "OLDUVAI" wordmark are the project's marks — see the "Project name and marks"

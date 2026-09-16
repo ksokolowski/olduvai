@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "presentation/menu/settings_apply.hpp"
 #include "presentation/menu/settings_seed.hpp"
+#include "presentation/menu/profile_table.hpp"
 
 #include <cstdio>
 #include <map>
@@ -61,6 +62,13 @@ int main() {
     // hd_scale_for spot checks.
     REQUIRE(hd_scale_for(true, "smooth", 2) == 2);
     REQUIRE(hd_scale_for(true, "smooth", 4) == 4);
+    // Scale 3 is reachable, not silently rounded to 2.  On a 1280x720 panel it
+    // is the closest fit (1068x600, a 1.2x stretch) where 2 is a soft 1.8x
+    // stretch and 4 renders 1424x800 only to shrink it.
+    REQUIRE(hd_scale_for(true, "smooth", 3) == 3);
+    // Out of range still clamps rather than propagating nonsense.
+    REQUIRE(hd_scale_for(true, "smooth", 1) == 2);
+    REQUIRE(hd_scale_for(true, "smooth", 9) == 4);
     REQUIRE(hd_scale_for(true, "native", 4) == 1);
     REQUIRE(hd_scale_for(false, "smooth", 4) == 1);
 
@@ -120,6 +128,51 @@ int main() {
     // avoids spurious Reinit noise in the confirm dialog.
     REQUIRE(!has("hd_profile", "omniscale"));
 
+    // Every value the hd preset stages is the table's, and an unknown family
+    // resolves in desktop rather than failing.
+    {
+        rec.calls.clear();
+        rec.mem.clear();
+        apply_preset(rec, "hd");
+        const ProfileDef* hd = find_profile("hd");
+        REQUIRE(hd != nullptr);
+        for (std::size_t i = 0; i < hd->pin_count; ++i)
+            REQUIRE(has(hd->pins[i].key, hd->pins[i].value));
+        rec.calls.clear();
+        rec.mem.clear();
+        rec.mem["profile_family"] = "no-such-family";
+        apply_preset(rec, "hd");
+        REQUIRE(has("hd_profile", "omniscale"));
+        // Classic stages exactly the master flag and aspect, nothing else.
+        rec.calls.clear();
+        apply_preset(rec, "dos");
+        REQUIRE(rec.calls.size() == 2);
+        REQUIRE(rec.calls.front().first == "enhanced");
+        REQUIRE(has("aspect", "keep"));
+    }
+
+    // Handheld family: Enhanced stages hd-handheld's pins, smooth keys
+    // included — never the desktop's omniscale x4.
+    {
+        rec.calls.clear();
+        rec.mem.clear();
+        rec.mem["profile_family"] = "handheld";
+        apply_preset(rec, "hd");
+        REQUIRE(has("hd_profile", "smooth"));
+        REQUIRE(has("render_scale", "3"));
+        REQUIRE(has("smooth_subframes", "2"));
+        REQUIRE(has("smooth_vsync", "off"));
+        REQUIRE(!has("hd_profile", "omniscale"));
+        // Classic in the handheld family is still just master flag + aspect.
+        rec.calls.clear();
+        apply_preset(rec, "dos");
+        REQUIRE(rec.calls.size() == 2);
+    }
+    // The smooth keys are live: the persist hook folds them into the pacing
+    // config, and the enhanced flip they ride with rebuilds the frame loop.
+    REQUIRE(classify_change("smooth_subframes", "2", cur) == ApplyTier::Live);
+    REQUIRE(classify_change("smooth_vsync", "off", cur) == ApplyTier::Live);
+
     // ── classify: enhanced master crossing = Reinit ──
     const DisplaySettings classic2{false, "omniscale", 4, "auto", "auto"};
     REQUIRE(classify_change("enhanced", "true", classic2) == ApplyTier::Reinit);
@@ -161,12 +214,20 @@ int main() {
             ApplyTier::Reinit);
 
     // seed_settings_mem: the shared Options-baseline seeding (CC3 phase 4,
-    // slice 2).  A minimal bind with the mem/cur field shape is enough —
-    // the template only touches those two members.
+    // slice 2).  A minimal bind carrying every field the template writes.
+    //
+    // This comment used to say "the mem/cur field shape is enough — the
+    // template only touches those two members", and that stopped being true
+    // on 2026-09-07 when the widescreen Aspect gate added aspect_at_entry.
+    // seed_settings_mem is a TEMPLATE with a duck-typed contract, so the
+    // requirement is invisible until something instantiates it with a type
+    // that does not satisfy it — which is this fake, and which is why the
+    // list below is worth keeping literal rather than "and so on".
     {
         struct FakeBind {
             std::map<std::string, std::string> mem;
             DisplaySettings cur;
+            std::string aspect_at_entry;
         };
 
         // Empty-string runtime values read as their display defaults.
@@ -182,6 +243,12 @@ int main() {
         REQUIRE(b.mem["fullscreen"] == "0");
         REQUIRE(b.mem["music_volume"] == "100");
         REQUIRE(b.mem["sfx_volume"] == "100");
+        REQUIRE(b.mem["profile_family"].empty());   // unset -> resolves desktop
+        FakeBind bh;
+        SettingsSeed sh;
+        sh.profile_family = "handheld";
+        seed_settings_mem(bh, sh);
+        REQUIRE(bh.mem["profile_family"] == "handheld");
 
         // Enhanced widescreen session: preset derives to "hd", flags map 1:1.
         FakeBind b2;

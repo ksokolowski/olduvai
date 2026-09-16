@@ -147,6 +147,24 @@ struct RenderTarget {
     float player_fx = 0.0f, player_fy = 0.0f;
 };
 
+// Decode a sprite to RGBA the way the HD path does: palette lookup, magenta
+// for an out-of-range index, flip applied BEFORE the bytes are laid down, and
+// transparent pixels left as the zero-filled background.
+//
+// THIS IS THE HASHED FORM.  HdAssetCache keys on exactly these bytes, so the
+// pre-warm (hd_warm.hpp) must produce them identically or it writes entries
+// under keys no blit ever asks for — 100% wasted work that also leaves the
+// hitch it exists to remove, with nothing visibly wrong to notice it by.  It
+// is one function rather than a copy in each caller for that reason: the two
+// bodies could only be kept in step by a comment, and this tree's most
+// expensive failures have all been one concept with several bodies that
+// drifted (BACKLOG.md §1).  tests/test_hd_warm.cpp keeps an INDEPENDENT
+// third implementation and drives a real blit_sprite against the warm, so a
+// change here that breaks the agreement fails a gate rather than going quiet.
+std::vector<std::uint8_t> sprite_to_rgba(const formats::Sprite& s,
+                                         const std::vector<formats::Rgb>& pal,
+                                         bool flip_h);
+
 // Scale-aware core: at scale 1 identical to the FrameBuffer path; at scale>1
 // resolves the sprite through the asset cache and blits the upscaled block
 // at (x*scale, y*scale).

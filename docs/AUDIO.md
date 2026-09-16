@@ -102,13 +102,23 @@ engine's own rendering and does need one.
 | 1991 setup | Music | SFX |
 |---|---|---|
 | `'A'` AdLib-only card | OPL FM | OPL FM (channel 3 voice swap) |
-| Sound Blaster | OPL FM | digital VOC via the SB DSP |
-| `'R'` Roland MT-32 | MT-32 | digital VOC via the SB DSP (not OPL) |
+| `'S'` Sound Blaster | OPL FM | digital VOC via the SB DSP |
+| `'R'` Roland MT-32 | MT-32 | MIDI to the MT-32 over the MPU-401 — **not** the SB samples (see below) |
 | `'I'` PC-speaker | buzzer variants (`*BUZ.MDI`) | — (buzzer mode is a follow-up) |
 
-FM sound effects only ever occurred on an AdLib-only setup — any machine with
-a Sound Blaster played digital samples. That is why `auto` never selects
-`opl` SFX: it is an explicit nostalgic opt-in.
+FM sound effects only ever occurred on an AdLib-only setup, and the digital
+samples only in Sound Blaster mode — they are preloaded only when the mode
+byte is `'S'` (`FUN_2bd7_0484`). That is why `auto` never selects `opl` SFX:
+it is an explicit nostalgic opt-in.
+
+In Roland mode each effect routine (e.g. the club hit, `FUN_2bd7_010b`) sends
+a 6-byte sequence from `DS:0x8142` through the MPU-401 byte writer
+(`FUN_20ad_0023`) — the effects play ON THE MT-32. So `auto`'s MT-32 pairing
+(`mt32-sfx`) is the faithful choice. Its sounds are still an approximation:
+those bytes use MIDI running status and depend on the channel setup the music
+driver leaves behind, which has not been recovered yet, so `mt32-sfx` plays
+plausible stand-ins (GM percussion and a bell pair, `kMidiSfx` in `audio.cpp`)
+rather than the original's exact notes.
 
 ## Recommended combinations
 

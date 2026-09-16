@@ -40,39 +40,68 @@ void blit_hd_block(RenderTarget& t, const enhance::HdAsset& hd, float fx,
                    float fy) {
     const int ox = static_cast<int>(std::lround((fx + t.origin_x) * t.scale));
     const int oy = static_cast<int>(std::lround(fy * t.scale));
+    // Column clipping is constant across the whole block (ox is fixed): fold
+    // the four per-pixel bounds tests into one [sx_lo, sx_hi) range so the
+    // inner loop carries no clipping branches.  Byte-identical outcome.
+    int sx_lo = 0;
+    int sx_hi = std::min(hd.w, std::min(t.w - ox, t.clip_x_hi - ox));
+    if (sx_lo >= sx_hi) return;
+    if (ox < 0) sx_lo = -ox;
+    if (t.clip_x_lo > 0) sx_lo = std::max(sx_lo, t.clip_x_lo - ox);
+    if (sx_lo >= sx_hi) return;
     for (int sy = 0; sy < hd.h; ++sy) {
         const int dy = oy + sy;
         if (dy < 0 || dy >= t.h || dy >= t.clip_y) continue;
-        for (int sx = 0; sx < hd.w; ++sx) {
-            const std::size_t so =
-                (static_cast<std::size_t>(sy) * hd.w + sx) * 4;
-            const std::uint8_t av = hd.px[so + 3];
+        const std::uint8_t* sp =
+            hd.px.data() + (static_cast<std::size_t>(sy) * hd.w + sx_lo) * 4;
+        std::uint8_t* dp =
+            t.px + (static_cast<std::size_t>(dy) * t.w + ox + sx_lo) * 4;
+        const std::uint8_t* const se =
+            hd.px.data() + (static_cast<std::size_t>(sy) * hd.w + sx_hi) * 4;
+        for (; sp < se; sp += 4, dp += 4) {
+            const std::uint8_t av = sp[3];
             if (av == 0) continue;
-            const int dx = ox + sx;
-            if (dx < 0 || dx >= t.w || dx < t.clip_x_lo || dx >= t.clip_x_hi) continue;
-            const std::size_t off =
-                (static_cast<std::size_t>(dy) * t.w + dx) * 4;
             if (av == 255) {
-                t.px[off] = hd.px[so];
-                t.px[off + 1] = hd.px[so + 1];
-                t.px[off + 2] = hd.px[so + 2];
+                dp[0] = sp[0];
+                dp[1] = sp[1];
+                dp[2] = sp[2];
             } else {
                 // Partial-alpha edge from the blending scaler — composite over
                 // the already-drawn opaque background for a smooth silhouette.
                 const int ia = 255 - av;
-                t.px[off] = static_cast<std::uint8_t>(
-                    (hd.px[so] * av + t.px[off] * ia) / 255);
-                t.px[off + 1] = static_cast<std::uint8_t>(
-                    (hd.px[so + 1] * av + t.px[off + 1] * ia) / 255);
-                t.px[off + 2] = static_cast<std::uint8_t>(
-                    (hd.px[so + 2] * av + t.px[off + 2] * ia) / 255);
+                dp[0] = static_cast<std::uint8_t>((sp[0] * av + dp[0] * ia) / 255);
+                dp[1] = static_cast<std::uint8_t>((sp[1] * av + dp[1] * ia) / 255);
+                dp[2] = static_cast<std::uint8_t>((sp[2] * av + dp[2] * ia) / 255);
             }
-            t.px[off + 3] = 255;
+            dp[3] = 255;
         }
     }
 }
 
 }  // namespace
+
+std::vector<std::uint8_t> sprite_to_rgba(const Sprite& s,
+                                         const std::vector<Rgb>& pal,
+                                         bool flip_h) {
+    const int w = s.width, h = s.height;
+    const auto pixels = s.decode_indexed();
+    std::vector<std::uint8_t> rgba(static_cast<std::size_t>(w) * h * 4, 0);
+    for (int sy = 0; sy < h; ++sy)
+        for (int sx = 0; sx < w; ++sx) {
+            const auto& p =
+                pixels[static_cast<std::size_t>(sy) * w +
+                       static_cast<std::size_t>(flip_h ? (w - 1 - sx) : sx)];
+            if (!p.opaque) continue;
+            const Rgb c = (p.color < pal.size())
+                              ? pal[p.color] : Rgb{255, 0, 255};
+            const std::size_t o = (static_cast<std::size_t>(sy) * w + sx) * 4;
+            rgba[o] = c.r;
+            rgba[o + 1] = c.g;
+            rgba[o + 2] = c.b;
+            rgba[o + 3] = 255;
+        }
+    return rgba;
+}
 
 void blit_sprite(RenderTarget& t, const Sprite& s,
                  const std::vector<Rgb>& pal, int x, int y, bool flip_h) {
@@ -84,9 +113,12 @@ void blit_sprite(RenderTarget& t, const Sprite& s,
 
 void blit_sprite(RenderTarget& t, const Sprite& s,
                  const std::vector<Rgb>& pal, float fx, float fy, bool flip_h) {
-    const auto pixels = s.decode_indexed();
     const int w = s.width, h = s.height;
     if (!t.hd_path()) {
+        // Decoded HERE rather than in the prologue: the HD path below decodes
+        // inside sprite_to_rgba(), and a shared prologue copy would make that
+        // path decode the sprite TWICE on every blit.
+        const auto pixels = s.decode_indexed();
         // Classic path — verbatim the legacy body, writing into a t.w-wide
         // buffer (t.w == 320) with t.w/t.h bounds.  Native can't show
         // sub-pixel — round to the nearest pixel.
@@ -116,22 +148,10 @@ void blit_sprite(RenderTarget& t, const Sprite& s,
         return;
     }
     // HD path: decode → RGBA (apply palette + flip) → cache upscale → blit
-    // the upscaled block at scaled coordinates.
-    std::vector<std::uint8_t> rgba(static_cast<std::size_t>(w) * h * 4, 0);
-    for (int sy = 0; sy < h; ++sy)
-        for (int sx = 0; sx < w; ++sx) {
-            const auto& p =
-                pixels[static_cast<std::size_t>(sy) * w +
-                       static_cast<std::size_t>(flip_h ? (w - 1 - sx) : sx)];
-            if (!p.opaque) continue;
-            const Rgb c = (p.color < pal.size())
-                              ? pal[p.color] : Rgb{255, 0, 255};
-            const std::size_t o = (static_cast<std::size_t>(sy) * w + sx) * 4;
-            rgba[o] = c.r;
-            rgba[o + 1] = c.g;
-            rgba[o + 2] = c.b;
-            rgba[o + 3] = 255;
-        }
+    // the upscaled block at scaled coordinates.  The conversion is
+    // sprite_to_rgba() and not an inline loop because hd_warm.cpp must hash
+    // the IDENTICAL bytes; see that function's contract in game_render.hpp.
+    const auto rgba = sprite_to_rgba(s, pal, flip_h);
     const auto& hd = t.cache->get(rgba, w, h, t.scale, *t.profile);
     blit_hd_block(t, hd, fx, fy);
 }

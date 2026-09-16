@@ -5,6 +5,51 @@ lands; 0.x releases are beta.
 
 ## Unreleased
 
+## 0.9.7 — 2026-09-15
+
+Olduvai leaves the desk: the first handheld builds, and the enhanced mode
+made fast enough to matter there.
+
+- **Added: handheld builds for KNULLI** — the TrimUI Smart Pro (64-bit ARM)
+  and the Powkiddy A12 (32-bit ARM), the two devices the game has been played
+  through on. On the TrimUI the full Enhanced HD mode — smooth motion,
+  widescreen, HD graphics — runs close to full speed; the A12 starts in
+  Classic, which runs there at full speed. Install steps, controls and music:
+  [docs/HANDHELD.md](docs/HANDHELD.md). PortMaster support, for many more
+  handhelds, is the next goal.
+- **Added: device profiles.** `dos-handheld` / `hd-handheld` beside `dos` /
+  `hd`, and `--default-profile` for launchers: a device's defaults sit BELOW
+  your own settings, so Classic/Enhanced chosen in the menu sticks across
+  launches. The Style menu picks the right member for the device.
+- **Added: `smooth_subframes` and `smooth_vsync` settings keys** for
+  smooth-motion pacing (the `OLDUVAI_*` env vars stay as debug overrides).
+- **Added: a build ID.** `--version` — and the first line of every log and bug
+  report — names the exact build: `olduvai 0.9.7 (<commit>, <time>)`, with
+  `-dirty` for a build from uncommitted changes.
+- **Added: missing game files are explained ON SCREEN** where no dialog can be
+  shown (handhelds): which files, and the exact folder searched. Before, the
+  game returned to the menu with the reason only in a log.
+- **Faster HD, everywhere:** the upscalers are threaded (omniscale's worst
+  frame 73.5 ms → 23.1 ms), the sprite cache warms up behind the loading
+  screen on all cores, and the HUD overlay is no longer rebuilt when nothing
+  in it changed. Render scale 3 is now selectable.
+- Changed: smooth-motion transitions follow the wall clock, so a slow device
+  plays a fade or pan in its real duration instead of stretching it.
+- Changed: the Linux AppImage now needs GCC 12's C++ runtime (libstdc++
+  with `GLIBCXX_3.4.30`) — the threaded upscaler requires it. Ubuntu 22.04 /
+  Mint 21 and every newer distro already have it, as does every distro that
+  meets the existing glibc 2.35 requirement.
+- Fixed: after switching Classic ↔ Enhanced (or loading a save) inside a cave
+  or secret room, the widescreen margins beside the first and last screens of
+  a level showed stray scenery — floating boulders at the end of level 1.
+- Fixed: on KMSDRM displays, `smooth_vsync = off` made every page flip fail;
+  it now keeps vsync there, and says so in the log.
+- Fixed: the Video → Aspect row could not select widescreen, and cycling it
+  lost the setting; F5 bug-report screenshots were cropped in pillarboxed
+  modes.
+- Fixed: a bare terminal run printed "Engine not yet implemented" instead of
+  the help text.
+
 ## 0.9.6 — 2026-09-05
 
 - Fixed: the L4 boss arena now spawns the fighter where the original does

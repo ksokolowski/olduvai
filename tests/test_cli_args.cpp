@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "app/cli_args.hpp"
+#include "presentation/menu/profile_table.hpp"
 
 using olduvai::app::CliArgs;
 using olduvai::app::ParseOutcome;
@@ -123,4 +124,32 @@ TEST_CASE("cli: --render-audio-secs accepts a fractional value") {
     const auto out = run({"olduvai", "--render-audio-secs", "1.5"}, a, ps);
     CHECK(out.should_exit == false);
     CHECK(a.render_audio_secs == doctest::Approx(1.5));
+}
+
+TEST_CASE("cli: --profile accepts every built-in profile, handheld included") {
+    for (const auto& p : olduvai::presentation::kProfiles) {
+        CliArgs a;
+        PlaySettings ps;
+        const auto out = run({"olduvai", "--profile", p.name}, a, ps);
+        CHECK(out.should_exit == false);
+        CHECK(a.profile == p.name);
+    }
+}
+
+TEST_CASE("cli: an unknown --profile is exit 2") {
+    CliArgs a;
+    PlaySettings ps;
+    const auto out = run({"olduvai", "--profile", "hd-toaster"}, a, ps);
+    CHECK(out.should_exit == true);
+    CHECK(out.exit_code == 2);
+}
+
+TEST_CASE("cli: --default-profile is stored for the config layer, unvalidated") {
+    // Validated later, as a warning: a launcher from one release paired with a
+    // binary from another must never block playing.
+    CliArgs a;
+    PlaySettings ps;
+    const auto out = run({"olduvai", "--default-profile", "hd-toaster"}, a, ps);
+    CHECK(out.should_exit == false);
+    CHECK(a.default_profile == "hd-toaster");
 }

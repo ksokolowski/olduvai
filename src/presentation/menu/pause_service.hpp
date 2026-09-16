@@ -54,6 +54,9 @@ public:
         LogicalSize* lsz;
         int hd_scale;
         int display_level;
+        // Called after a live Aspect edit so the widescreen presenter
+        // recomputes in the same keypress (see PauseBindWireDeps).
+        std::function<void()> on_aspect_changed;
     };
 
     PauseService(MenuModel& model, bool menu_ok, const External& x);

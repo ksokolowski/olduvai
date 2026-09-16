@@ -26,7 +26,7 @@
 #include "presentation/diag/bug_capture.hpp"       // bug_report_root
 #include "presentation/game_app.hpp"          // GameOptions
 #include "presentation/render/game_render.hpp"
-#include "presentation/image_out.hpp"         // save_rgba_image/save_surface_image
+#include "presentation/image_out.hpp"   // capture_renderer_output/save_rgba_image
 #include "presentation/level/level_setup.hpp"       // Loaded, bind_screen
 #include "presentation/render/tile_patterns.hpp"
 #include "presentation/render/text_overlay.hpp"      // TextOverlay
@@ -778,29 +778,25 @@ void run_l3_trunk_descent_sequence(const DescentCtx& c) {
         }
         if (descent_shot) {   // F5 pressed mid-descent — save full WS
             descent_shot = false;
-            int ow = 0, oh = 0;
-            SDL_GetRendererOutputSize(ren, &ow, &oh);
-            SDL_Surface* sh = SDL_CreateRGBSurfaceWithFormat(
-                0, ow, oh, 32, SDL_PIXELFORMAT_RGBA32);
-            if (sh != nullptr &&
-                SDL_RenderReadPixels(ren, nullptr,
-                    SDL_PIXELFORMAT_RGBA32, sh->pixels,
-                    sh->pitch) == 0) {
-                // Same root as the F5 report dirs (this IS the
-                // descent's F5 capture) — never the cwd.
-                const std::filesystem::path root =
-                    bug_report_root();
-                std::error_code ec;
-                std::filesystem::create_directories(root, ec);
-                char p[64];
-                std::snprintf(p, sizeof p, "descent_ws_%03d.png",
-                              descent_shot_seq++);
-                const std::string path = (root / p).string();
-                save_surface_image(sh, path);
+            // Same root as the F5 report dirs (this IS the descent's
+            // F5 capture) — never the cwd.
+            const std::filesystem::path root = bug_report_root();
+            std::error_code ec;
+            std::filesystem::create_directories(root, ec);
+            char p[64];
+            std::snprintf(p, sizeof p, "descent_ws_%03d.png",
+                          descent_shot_seq++);
+            const std::string path = (root / p).string();
+            // Was an open-coded CreateRGBSurface + RenderReadPixels —
+            // the THIRD copy of that sequence, and the second one
+            // missing the logical-size clear (§3.14b's viewport trap).
+            // Latent rather than observed here: the wide canvas fills
+            // the output exactly, so the viewport offset is 0 — until
+            // a mode letterboxes and it silently is not.  Routed
+            // through the shared capture, which carries the guard.
+            if (capture_renderer_output(ren, path))
                 std::fprintf(stderr, "[WS-SHOT] saved %s\n",
                              path.c_str());
-            }
-            if (sh != nullptr) SDL_FreeSurface(sh);
         }
         SDL_RenderPresent(ren);
         const Uint32 work = SDL_GetTicks() - t0;

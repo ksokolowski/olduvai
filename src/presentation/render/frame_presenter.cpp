@@ -64,7 +64,40 @@ void FramePresenter::draw_hud_for(FrameBuffer& target) {
     }
 }
 
+namespace {
+// Folds a present's wall time into the caller's accumulator.  Was
+// `FsPresentTimer`, a local struct in run_platform_level's prologue with
+// exactly one user — the `upload_and_show` lambda this replaced.
+struct PresentTimer {
+    double* accum;
+    double perf_ms;
+    bool on;
+    Uint64 t0;
+    PresentTimer(double* a, double pm, bool o)
+        : accum(a), perf_ms(pm), on(o && a != nullptr),
+          t0(on ? SDL_GetPerformanceCounter() : 0) {}
+    ~PresentTimer() {
+        if (on)
+            *accum += static_cast<double>(SDL_GetPerformanceCounter() - t0) *
+                      perf_ms;
+    }
+};
+}  // namespace
+
 void FramePresenter::present(FrameBuffer& f, bool with_hud, bool do_present) {
+    // Brackets the WHOLE present, exactly as the driver's wrapper did.
+    PresentTimer pt(present_ms, perf_ms, stats_on);
+    if (stats_on && present_calls != nullptr) {
+        ++*present_calls;
+        if (present_iv != nullptr && last_present_pc != nullptr) {
+            const Uint64 now_pc = SDL_GetPerformanceCounter();
+            if (*last_present_pc != 0 && present_iv->size() < 200000) {
+                present_iv->push_back(static_cast<float>(
+                    static_cast<double>(now_pc - *last_present_pc) * perf_ms));
+            }
+            *last_present_pc = now_pc;
+        }
+    }
     // Bind the live context (pointers → the run-loop locals) to the names the
     // pipeline body uses, so the body below is a verbatim move.
     LevelSurface* const surface = this->surface;
@@ -113,6 +146,7 @@ void FramePresenter::present(FrameBuffer& f, bool with_hud, bool do_present) {
         }
         const std::vector<std::uint8_t> up = enhance::upscale_rgba(
             wbuf, wsp.native_w(), 200, hd_scale, hd_profile);
+        PresentTimer ut(upload_ms, perf_ms, stats_on);
         SDL_UpdateTexture(wsp.wide_tex(), nullptr, up.data(),
                           wsp.native_w() * hd_scale * 4);
     } else if (hd) {
@@ -122,6 +156,7 @@ void FramePresenter::present(FrameBuffer& f, bool with_hud, bool do_present) {
                 enhance::draw_enhanced_hud_bars(f.px, f.w, f.h, hd_scale,
                                                 hud_layout);
             }
+            PresentTimer ut(upload_ms, perf_ms, stats_on);
             SDL_UpdateTexture(tex, nullptr, f.px.data(), f.w * 4);
         } else {
             // Native-320 buffer (loading/tally/PC1): upscale whole-frame.
@@ -132,12 +167,14 @@ void FramePresenter::present(FrameBuffer& f, bool with_hud, bool do_present) {
                                                 200 * hd_scale, hd_scale,
                                                 hud_layout);
             }
+            PresentTimer ut(upload_ms, perf_ms, stats_on);
             SDL_UpdateTexture(tex, nullptr, up.data(), 320 * hd_scale * 4);
         }
     } else {
         // Classic (320x200): draw the cheat picker with the bitmap font into
         // the native buffer (recomposed clean each frame).
         if (cheat_open) draw_cheat_rows_native(f);
+        PresentTimer ut(upload_ms, perf_ms, stats_on);
         SDL_UpdateTexture(tex, nullptr, f.px.data(), 320 * 4);
     }
     SDL_RenderClear(ren);
@@ -219,7 +256,11 @@ void FramePresenter::present(FrameBuffer& f, bool with_hud, bool do_present) {
     }
     // do_present=false leaves the composited frame in the backbuffer for a
     // caller-side RenderReadPixels (Metal reads black AFTER present).
-    if (do_present) SDL_RenderPresent(ren);
+    if (do_present) {
+        maybe_dump_output(ren);   // OLDUVAI_DUMP_OUTPUT (image_out.hpp)
+        PresentTimer sw(swap_ms, perf_ms, stats_on);   // the vsync block
+        SDL_RenderPresent(ren);
+    }
 }
 
 }  // namespace olduvai::presentation

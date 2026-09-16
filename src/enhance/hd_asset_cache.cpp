@@ -17,8 +17,15 @@ namespace olduvai::enhance {
 
 namespace {
 // FNV-1a 64-bit over the source bytes, then mix in w/h/scale/profile.
+// `bleed` IS part of the key, and must be: it changes the produced pixels.
+// It was omitted, which was harmless only by luck — nothing asked for the same
+// sprite both ways, so the collision never fired.  Pre-warming the cache makes
+// that luck run out: a warm pass using the default bleed=true would answer a
+// later bleed=false request (the fluid bubbles, which keep their water-blue
+// background instead of an edge-extended one) with the wrong bytes, and the
+// bubbles live in the very secret room the warm exists to speed up.
 std::uint64_t key_of(const std::vector<std::uint8_t>& src, int w, int h,
-                     int scale, const std::string& profile) {
+                     int scale, const std::string& profile, bool bleed) {
     std::uint64_t k = 1469598103934665603ull;
     for (std::uint8_t b : src) { k ^= b; k *= 1099511628211ull; }
     auto mix = [&](std::uint64_t v) {
@@ -28,6 +35,7 @@ std::uint64_t key_of(const std::vector<std::uint8_t>& src, int w, int h,
     mix(static_cast<std::uint64_t>(h));
     mix(static_cast<std::uint64_t>(scale));
     for (char c : profile) mix(static_cast<std::uint64_t>(c));
+    mix(bleed ? 1ull : 2ull);
     return k;
 }
 
@@ -196,13 +204,39 @@ bool store_block(const std::filesystem::path& file, const HdAsset& a) {
 }
 }  // namespace
 
+std::uint64_t HdAssetCache::key_for(const std::vector<std::uint8_t>& src,
+                                    int w, int h, int scale,
+                                    const std::string& profile, bool bleed) {
+    return key_of(src, w, h, scale, profile, bleed);
+}
+
+bool HdAssetCache::insert(std::uint64_t k, HdAsset a) {
+    return map_.emplace(k, std::move(a)).second;
+}
+
 const HdAsset& HdAssetCache::get(const std::vector<std::uint8_t>& src, int w,
                                  int h, int scale, const std::string& profile,
                                  bool bleed) {
-    const std::uint64_t k = key_of(src, w, h, scale, profile);
+    const std::uint64_t k = key_of(src, w, h, scale, profile, bleed);
     auto it = map_.find(k);
     if (it != map_.end()) return it->second;
+    return map_
+        .emplace(k, build_with_key(k, src, w, h, scale, profile, bleed))
+        .first->second;
+}
 
+HdAsset HdAssetCache::build(const std::vector<std::uint8_t>& src, int w, int h,
+                            int scale, const std::string& profile,
+                            bool bleed) const {
+    return build_with_key(key_of(src, w, h, scale, profile, bleed), src, w, h,
+                          scale, profile, bleed);
+}
+
+HdAsset HdAssetCache::build_with_key(std::uint64_t k,
+                                     const std::vector<std::uint8_t>& src,
+                                     int w, int h, int scale,
+                                     const std::string& profile,
+                                     bool bleed) const {
     // Disk layer: a baked block from a prior run reproduces the exact upscale
     // output, so load it instead of recomputing.  scale<=1 is identity (never
     // worth a disk round-trip) so it's excluded.
@@ -210,8 +244,8 @@ const HdAsset& HdAssetCache::get(const std::vector<std::uint8_t>& src, int w,
         HdAsset loaded;
         const std::filesystem::path file = disk_dir_ / (key_hex(k) + ".bin");
         if (load_block(file, loaded)) {
-            ++disk_loads_;
-            return map_.emplace(k, std::move(loaded)).first->second;
+            disk_loads_.fetch_add(1, std::memory_order_relaxed);
+            return loaded;
         }
     }
 
@@ -263,9 +297,10 @@ const HdAsset& HdAssetCache::get(const std::vector<std::uint8_t>& src, int w,
     // leaves the in-memory result untouched.
     if (disk_enabled_ && scale > 1) {
         const std::filesystem::path file = disk_dir_ / (key_hex(k) + ".bin");
-        if (store_block(file, a)) ++disk_stores_;
+        if (store_block(file, a))
+            disk_stores_.fetch_add(1, std::memory_order_relaxed);
     }
-    return map_.emplace(k, std::move(a)).first->second;
+    return a;
 }
 
 void HdAssetCache::enable_disk(const std::filesystem::path& dir) {

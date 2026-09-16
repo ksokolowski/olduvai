@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
 // Pure resolution of the config-influenced play settings across the
-// documented precedence: defaults < play.json < --profile < CLI flags
-// (CC3 phase 3 — extracted from main.cpp, where every one of the five
+// documented precedence: defaults < --default-profile < play.json <
+// --profile < CLI flags (CC3 phase 3 — extracted from main.cpp, where every one of the five
 // 0.9.2 field bugs lived untested: the aspect-guard, the dropped
 // first-run choice, the ask-once gating, style_answered, the config-path
 // fallout).  No I/O here: the caller loads/saves play.json and applies
@@ -11,6 +11,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "config.hpp"
 
@@ -49,6 +50,10 @@ struct PlaySettings {
     std::string aspect = "keep";         // keep | 4:3 | stretch | widescreen
     std::string hd_font = "freckle";     // freckle | noto
     std::string banner_fx = "caveman";   // caveman|fire|rainbow|gold|pulse
+    // Smooth-present tuning (config-only: no CLI flag, no menu row).  Kept as
+    // the raw config text; build_game_options validates, warns, falls back.
+    std::string smooth_subframes = "0";   // 0 = auto | 1..12
+    std::string smooth_vsync = "auto";    // auto | off
 
     // What the command line explicitly stated (guards: CLI beats config).
     struct Cli {
@@ -77,6 +82,7 @@ struct PlaySettings {
     // Outputs of merge_config().
     bool config_game_dir = false;   // game_dir came from the config file
     bool style_answered = false;    // config/profile/CLI ever chose Classic/HD
+    std::string profile_family = "desktop";   // set from layer_config()
     std::string bug_report_dir;     // config-only; caller applies the side
                                     // effect (set_bug_report_dir is SDL-side)
 };
@@ -87,11 +93,39 @@ struct PlaySettings {
 // for the audio/tuning keys, unconditional for the pad mapping.
 void merge_config(PlaySettings& s, const Config& merged);
 
+// Fold ONE profile pin into the settings through its CLI guard (the same
+// guard merge_config applies).  Returns false for a key it does not know —
+// the test "every pin of every profile is adoptable" turns that into a
+// failure, so a profile can never pin a key the first-run path drops.
+bool adopt_profile_key(PlaySettings& s, const std::string& key,
+                       const std::string& value);
+
 // Fold a first-run presentation choice ("hd"/"dos") into THIS session's
 // settings — the saved config only helps the NEXT launch.  cli_profile /
 // cli.* keep the documented precedence: an explicit flag or --profile
 // always wins; an empty preset (box unavailable) is a no-op.
 void adopt_preset(PlaySettings& s, const std::string& cli_profile,
                   const std::string& preset);
+
+// The config layers below the CLI, in precedence order:
+//   engine defaults < --default-profile < play.json < --profile
+// (explicit CLI flags then win through merge_config's guards).  `family` is
+// the family of --profile if given, else of --default-profile, else desktop.
+// An unknown default-profile name is a warning, never fatal.
+struct LayeredConfig {
+    Config merged;
+    std::string family;
+    std::vector<std::string> warnings;
+};
+LayeredConfig layer_config(const Config& file_cfg,
+                           const std::string& cli_profile,
+                           const std::string& default_profile);
+
+// What --save-config writes: the saved file, the explicit --profile, and the
+// CLI-stated keys — never the --default-profile layer, or device defaults
+// would freeze into play.json and a later release's values would never reach
+// that player.
+Config config_to_save(const Config& file_cfg, const std::string& cli_profile,
+                      const PlaySettings& ps, const std::string& game_dir);
 
 }  // namespace olduvai::app

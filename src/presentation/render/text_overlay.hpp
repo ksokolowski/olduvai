@@ -52,12 +52,44 @@ public:
     // ow/oh, (re)allocates the transparent (alpha 0) buffer on size change,
     // clears it, and sets `font` to the output-res cap height (8·ow/320).
     // Returns false if the output size could not be queried (overlay skipped).
-    bool begin(SDL_Renderer* ren, enhance::HdText& font, int& ow, int& oh);
+    // `key` summarises everything the caller is about to draw.  Returns false
+    // when the overlay already on the texture is still correct: the caller then
+    // skips drawing entirely and flush() re-composites what is there.
+    //
+    // key == kAlwaysRedraw (0) disables the optimisation for that call site,
+    // which is the DEFAULT and how every un-converted caller behaves.  A site
+    // opts in only once its key provably covers everything it draws.
+    //
+    // OLDUVAI_OVERLAY_VERIFY=1 forces a redraw every time and checks the key
+    // against a hash of the drawn bytes, reporting any key that claimed
+    // "unchanged" while the pixels moved.  Correctness is checkable without
+    // the shipping path paying for a hash.
+    static constexpr std::uint64_t kAlwaysRedraw = 0;
+    bool begin(SDL_Renderer* ren, enhance::HdText& font, int& ow, int& oh,
+               std::uint64_t key = kAlwaysRedraw);
 
     // The buffer to draw glyphs into (ow*oh*4 RGBA, owner-managed).
     std::vector<std::uint8_t>& buffer() { return buf_; }
     int width() const { return w_; }
     int height() const { return h_; }
+
+    // OLDUVAI_FRAME_STATS sinks.  Inert when stats_on is false.
+    //
+    // WHY THE OVERLAY GOT ITS OWN.  The device measurement on 2026-09-09 put
+    // 74.6% of present_total (23.96 ms of 32.1 ms PER PRESENT CALL) outside
+    // both swap and the presenters' texture uploads, and this class is what
+    // sits in the gap: at 1280x720 it std::fills 3.7 MB and SDL_UpdateTextures
+    // another 3.7 MB on EVERY present, to redraw a HUD whose digits change a
+    // few times a second.  Its cost is at OUTPUT resolution, so render_scale
+    // does not touch it -- which is why the scaler and threading work, real
+    // wins on their own terms, barely moved the transitions.
+    double* clear_ms = nullptr;    // std::fill / assign of the whole buffer
+    double* upload_ms = nullptr;   // SDL_UpdateTexture of the whole buffer
+    double* blit_ms = nullptr;     // RenderCopy + the two logical-size calls
+    double* hash_ms = nullptr;     // the skip check itself
+    unsigned long* uploads_skipped = nullptr;
+    double perf_ms = 0.0;
+    bool stats_on = false;
 
     // Output-res cap height for a given output width (8 px native cap scaled
     // to the physical window width).
@@ -71,6 +103,27 @@ public:
 
 private:
     void ensure(SDL_Renderer* ren, int ow, int oh);
+    // Hash of the buffer last uploaded, and whether the texture holds it.
+    // SAFE BY CONSTRUCTION: this is computed from the bytes actually drawn, so
+    // it cannot go stale the way a caller-declared "nothing changed" key can.
+    // That matters here because SIX call sites across four files draw into this
+    // one buffer -- the level HUD, the widescreen HUD, banners, the boss HUD,
+    // the pause menu and the confirm dialog -- and a key that missed one would
+    // leave a stale dialog on screen in exactly the paths tests cover worst.
+    std::uint64_t last_hash_ = 0;
+    std::uint64_t last_key_ = kAlwaysRedraw;
+    bool tex_has_content_ = false;
+    bool skipped_ = false;      // this pass: caller drew nothing
+    bool key_was_same_ = false; // this pass: the key claimed "unchanged"
+    bool verify_ = false;       // OLDUVAI_OVERLAY_VERIFY
+    bool verify_init_ = false;
+    // Rows that held content at the last flush.  The clear only has to erase
+    // what was actually drawn, and the hash pass already reads every byte, so
+    // this extent costs nothing to collect and turns a full-panel 3.7 MB memset
+    // into a strip.  NO CALLER CHANGES: it is derived from the drawn bytes, so
+    // it cannot disagree with them the way a declared key can.
+    // Inclusive [dirty_lo_, dirty_hi_]; lo > hi means "nothing drawn".
+    int dirty_lo_ = 0, dirty_hi_ = -1;
 
     std::vector<std::uint8_t> buf_;
     SDL_Texture* tex_ = nullptr;

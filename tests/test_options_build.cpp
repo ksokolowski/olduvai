@@ -207,3 +207,34 @@ TEST_CASE("options_build: vga_scan forces vsync only for CLASSIC (0.9.2 bug)") {
         CHECK(go.vsync == false);   // the HD substrate must not be vsync-forced
     }
 }
+
+TEST_CASE("options_build: smooth keys reach GameOptions; bad values warn, not exit") {
+    CliArgs a;
+    PlaySettings s;
+    s.smooth_subframes = "2";
+    s.smooth_vsync = "off";
+    GameOptions go;
+    BuildOutcome bo = build_game_options(a, s, go);
+    REQUIRE(bo.ok);
+    CHECK(go.smooth_subframes == 2);
+    CHECK(go.smooth_vsync_off == true);
+
+    PlaySettings t;
+    t.smooth_subframes = "99";
+    t.smooth_vsync = "sometimes";
+    GameOptions go2;
+    bo = build_game_options(a, t, go2);
+    REQUIRE(bo.ok);                       // a broken config never blocks play
+    CHECK(go2.smooth_subframes == 0);     // auto
+    CHECK(go2.smooth_vsync_off == false); // auto
+    CHECK(bo.warnings.size() == 2);
+}
+
+TEST_CASE("options_build: the profile family reaches GameOptions") {
+    CliArgs a;
+    PlaySettings s;
+    s.profile_family = "handheld";
+    GameOptions go;
+    REQUIRE(build_game_options(a, s, go).ok);
+    CHECK(go.profile_family == "handheld");
+}

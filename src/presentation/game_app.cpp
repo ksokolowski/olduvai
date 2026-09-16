@@ -21,11 +21,13 @@
 #include "presentation/input/autofire.hpp"
 #include "presentation/diag/debug_overlay.hpp"
 #include "presentation/render/game_render.hpp"
+#include "presentation/render/hd_warm.hpp"
 #include "presentation/level/level_save.hpp"
 #include "presentation/menu/parse_util.hpp"
 #include "presentation/menu/pause_bindings.hpp"
 #include "presentation/menu/pause_flow.hpp"
 #include "presentation/diag/draw_log.hpp"
+#include "presentation/diag/frame_stats.hpp"
 #include "presentation/sequence/end_sequence.hpp"
 #include "presentation/input/frame_input.hpp"
 #include "presentation/render/frame_presenter.hpp"
@@ -293,7 +295,7 @@ struct TransitionState {
     // frame composed WIDE *before* the rebind (old neighbours); the incoming
     // is composed wide after the rebind (new neighbours) inside the playback
     // block.  `wide` gates the whole wide path; when false the legacy 320
-    // upload_and_show path runs unchanged.
+    // `fp.present` path runs unchanged.
     std::vector<std::uint8_t> old_wide;
     bool wide = false;
 
@@ -311,12 +313,7 @@ struct TransitionState {
 };
 
 struct LevelDiag {
-    // OLDUVAI_FRAME_STATS: per-frame wall-clock budget accounting.
-    struct FrameStats {
-        std::uint64_t frames = 0, overruns = 0;
-        double worst_ms = 0.0, worst_present_ms = 0.0, present_ms = 0.0;
-        Uint64 t0 = 0;
-    } stats;
+    FrameStats stats;
     // OLDUVAI_PACE_TRACE: --vga-scan hold-frame scanout counters.
     struct VgaScan {
         unsigned long fill_presents = 0, fill_ticks = 0;
@@ -1029,6 +1026,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     wsctx.hd_cache = &g.hd_cache;
     wsctx.internal_level_id = g.config.internal_id;
     wsctx.surface_screen_count = static_cast<int>(g.tiles.screens.size());
+    wsctx.level_visual_background = g.config.visual_background;
     wsctx.fallback_ld = _fallback_ld;
     wsctx.compose_static =
         [&g](int s, FrameBuffer& out, LevelRenderAssets* ra,
@@ -1239,7 +1237,11 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     PauseService pause(pause_model, menu_ok,
                        {&g, &replay, &opts, &audio, &sw, &god_active,
                         &abort_to_title, &out_load, &want_reinit, &reinit_req,
-                        &lsz, hd_scale, display_level});
+                        &lsz, hd_scale, display_level,
+                        // A live Aspect edit changes no output size, so the
+                        // widescreen presenter would otherwise not notice
+                        // until the next Alt+Enter.
+                        [&wsp] { wsp.aspect_changed(); }});
 
     // ── F5 bug-report form ─────────────────────────────────────────────────
     // F5 freezes the sim and opens an in-engine form (tag/repro choice rows +
@@ -1270,35 +1272,13 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     // play and --replay (capturing replay bugs is useful).
     int frame = 0;
 
-    // OLDUVAI_FRAME_STATS: per-frame timing health — the headless twin of
-    // OLDUVAI_AUDIO_STATS.  Measures a frame's WORK (loop top -> just before the
-    // pacing wait; the intentional sleep is excluded) at perf-counter
-    // resolution, tracking the worst frame vs the ~55 ms tick budget, how many
-    // frames blew it, and the present/upload phase within that worst frame.
-    // Lets slow-HW frame-budget violations be diagnosed without a display;
-    // near-zero cost when the env var is unset.
-    const bool frame_stats = std::getenv("OLDUVAI_FRAME_STATS") != nullptr;
-    const double fs_perf_ms =
-        1000.0 / static_cast<double>(SDL_GetPerformanceFrequency());
-    const double fs_budget_ms = 1000.0 / 18.2065;   // one DosTicker period
     LevelDiag diag;
+    diag.stats.begin_run();
 
-    // RAII timer that folds upload_and_show's wall time into diag.stats.present_ms,
-    // robust to that lambda's early-return paths; inert when disabled.
-    struct FsPresentTimer {
-        double* accum;
-        double perf_ms;
-        bool on;
-        Uint64 t0;
-        FsPresentTimer(double* a, double pm, bool o)
-            : accum(a), perf_ms(pm), on(o),
-              t0(o ? SDL_GetPerformanceCounter() : 0) {}
-        ~FsPresentTimer() {
-            if (on)
-                *accum += static_cast<double>(SDL_GetPerformanceCounter() - t0) *
-                          perf_ms;
-        }
-    };
+    // (The RAII present timer that used to live here moved onto FramePresenter
+    // with the `upload_and_show` alias it existed to wrap — §3.7 cluster 3.
+    // diag.stats.perf_ms / .enabled below are still read: they are what `fp`
+    // is wired with.)
     const Uint32 frame_ms = 1000 / 18;   // 18 Hz logic (aux pacing sites)
     DosTicker dos_ticker;                // drift-free 18.2065 Hz main pacing
     bool vga_scan_ok = true;   // cleared when the driver clearly refused vsync
@@ -1316,6 +1296,15 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     // Refresh-adaptive sub-frame count — the SAME helper boss_app uses
     // (smooth_present.hpp), so the two render loops can't drift.
     const int smooth_N = smooth_subframe_count(win);
+    // The vsync fill honours smooth_N only when it was ASKED FOR, never from
+    // the refresh-derived default.  Capping the default is a REGRESSION, and it
+    // was measured as one on a 144 Hz panel: five presents then a 20 ms timer
+    // wait is burst-then-stall, where filling the tick at vblank rate is even.
+    //   uncapped  fps 126.33  1%low 56.40  jitter 1.45ms  eff_hz 15.14
+    //   capped    fps  86.77  1%low 29.31  jitter 6.00ms  eff_hz 15.54
+    // Four times the jitter for 2.6% of game speed.  The refresh-derived value
+    // is a HINT for the discrete path; only an explicit request is a ceiling.
+    const bool smooth_sub_explicit = smooth_subframes_explicit();
 
     // Enhanced smooth-motion presents via vsync-locked render interpolation:
     // logic stays a fixed 18 Hz, but the tick's wall-time is filled with
@@ -1385,7 +1374,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     // output by ow/wsp.native_w(), and size the font cap to that wide-domain scale
     // (8 * ow/wsp.native_w()).  EVERY widescreen present must use this same mapping
     // — the steady peek frame (wsp.present), the steady bezel/pillarbox
-    // frame (upload_and_show), and the wide transitions (present_wide_transition)
+    // frame (fp.present), and the wide transitions (wsp->present_transition)
     // — so the HUD text sits at one fixed place and never floats/jumps between a
     // transition and the steady frame.  The non-widescreen path keeps
     // draw_enhanced_hud_text's full-width ow/320 mapping.  Does NOT restore the
@@ -1418,6 +1407,9 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     wsp.set_draw_banners([&](std::vector<std::uint8_t>& b, int ow, int oh) {
         draw_enhanced_banners(b, ow, oh);
     });
+    // Opt this site into the overlay skip.  BannerPresenter::key() returns 0
+    // whenever it would draw anything, so a visible banner forces a redraw.
+    wsp.set_banners_key([&]() { return banners.key(); });
 
     // OLDUVAI_MENU_SCRIPT: drive the menus headlessly with synthetic SDL key
     // events (same SDL_PushEvent path the gamepad uses), one token per frame.
@@ -1438,7 +1430,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
 
     // The per-frame upload/composite/present pipeline now lives in
     // FramePresenter (frame_presenter.cpp); wire it to the live run-loop state.
-    // The FsPresentTimer stays here so it still brackets the whole present.
+    // It brackets its own present time now (present_ms/perf_ms/stats_on below).
     FramePresenter fp;
     fp.surface = &surface;   // was nine members, wired one at a time
     fp.render = &g.render;
@@ -1452,18 +1444,52 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     fp.draw_cheat_rows_native = draw_cheat_rows_native;
     fp.draw_cheat_rows = draw_cheat_rows;
     fp.draw_enhanced_banners = draw_enhanced_banners;
-    auto upload_and_show = [&](FrameBuffer& f, bool with_hud = true,
-                               bool do_present = true) {
-        FsPresentTimer fs_pt(&diag.stats.present_ms, fs_perf_ms, frame_stats);
-        fp.present(f, with_hud, do_present);
-    };
+    // §3.7 cluster 3: `upload_and_show` is GONE.  It was a lambda whose whole
+    // body was an RAII timer plus `fp.present(...)`, with a signature and
+    // defaults already identical to present()'s — a wrapper whose only content
+    // belonged to the presenter.  The timer is a FramePresenter member now, so
+    // the loop calls the pipeline directly and one prologue name and one
+    // std::function adapter leave the driver.
+    fp.present_ms = &diag.stats.present_ms;
+    fp.swap_ms = &diag.stats.swap_ms;
+    fp.upload_ms = &diag.stats.upload_ms;
+    fp.present_calls = &diag.stats.present_calls;
+    // The HUD overlay is owned by the LevelSurface and reached by both
+    // presenters, so its sinks are set once here rather than per presenter.
+    surface.overlay().clear_ms = &diag.stats.ov_clear_ms;
+    surface.overlay().upload_ms = &diag.stats.ov_upload_ms;
+    surface.overlay().blit_ms = &diag.stats.ov_blit_ms;
+    surface.overlay().perf_ms = diag.stats.perf_ms;
+    surface.overlay().hash_ms = &diag.stats.ov_hash_ms;
+    surface.overlay().uploads_skipped = &diag.stats.ov_skipped;
+    surface.overlay().stats_on = diag.stats.enabled;
+    fp.perf_ms = diag.stats.perf_ms;
+    fp.stats_on = diag.stats.enabled;
+    // The widescreen presenter accumulates into the SAME counter: a frame goes
+    // through exactly one of them, so summing is right and it keeps the stat
+    // meaning "time spent presenting this frame" in either aspect.
+    wsp.present_ms = &diag.stats.present_ms;
+    wsp.swap_ms = &diag.stats.swap_ms;
+    wsp.upload_ms = &diag.stats.upload_ms;
+    wsp.present_calls = &diag.stats.present_calls;
+    wsp.fg_ms = &diag.stats.fg_ms;
+    wsp.tick_paused = &diag.stats.tick_paused;
+    wsp.present_iv = &diag.stats.present_iv_ms;
+    wsp.last_present_pc = &diag.stats.last_present_pc;
+    fp.present_iv = &diag.stats.present_iv_ms;
+    fp.last_present_pc = &diag.stats.last_present_pc;
+    wsp.bg_copy_ms = &diag.stats.bg_copy_ms;
+    wsp.scene_ms = &diag.stats.scene_ms;
+    wsp.glyph_ms = &diag.stats.glyph_ms;
+    wsp.perf_ms = diag.stats.perf_ms;
+    wsp.stats_on = diag.stats.enabled;
 
-    // std::function view of upload_and_show for the services extracted out
-    // of this frame loop (ReportFormService, CC3); the lambda stays the
-    // single implementation — this is a call adapter, not a copy.
+    // std::function view of the present for the services extracted out of this
+    // frame loop (ReportFormService, DescentCtx, CC3).  A call adapter, not a
+    // copy — and now over `fp` itself rather than over a lambda over `fp`.
     const std::function<void(FrameBuffer&, bool, bool)> upload_and_show_fn =
-        [&upload_and_show](FrameBuffer& f, bool with_hud, bool do_present) {
-            upload_and_show(f, with_hud, do_present);
+        [&fp](FrameBuffer& f, bool with_hud, bool do_present) {
+            fp.present(f, with_hud, do_present);
         };
     // ── Widescreen present (§8.7, Option A) — moved to WidescreenPresenter
     // (wsp.present(), OL-B5) together with the Tier-1 margin-monster draw and
@@ -1484,8 +1510,8 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     ScreenPresenter screen(surface,
                            [&](const FrameBuffer& f, bool do_present) {
                                FrameBuffer copy = f;   // upload may mutate
-                               upload_and_show(copy, /*with_hud=*/false,
-                                               do_present);
+                               fp.present(copy, /*with_hud=*/false,
+                                          do_present);
                            },
                            frame_ms);
     const PresentFn present = screen.fn();
@@ -1527,6 +1553,29 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         loading_hd_text = make_text_screen_hd(text_screen_deps,
                                               "OLDUVAI_DUMP_LOADING",
                                               "loading");
+    }
+
+    // Warm the HD sprite cache BEFORE the loading screen, not after: the
+    // upscales then happen while "Please Wait" is already on the display,
+    // which is a moment the player expects to wait.  Lazily, they landed in
+    // the frame that first drew each sprite — measured on a Cortex-A53 at
+    // 1137.81 ms for 56 sprites on entering the L1 secret room, the worst
+    // remaining hitch in the handheld port.  See hd_warm.hpp.
+    if (hd_scale > 1) {
+        const auto t0 = SDL_GetPerformanceCounter();
+        const std::size_t n =
+            warm_hd_sprite_cache(g.hd_cache, g.render.tile_sprites,
+                                 g.render.palette, hd_scale, opts.hd_profile) +
+            warm_hd_sprite_cache(g.hd_cache, g.render.entity_sprites,
+                                 g.render.palette, hd_scale, opts.hd_profile);
+        if (std::getenv("OLDUVAI_FRAME_STATS") != nullptr) {
+            const double ms = 1000.0 *
+                static_cast<double>(SDL_GetPerformanceCounter() - t0) /
+                static_cast<double>(SDL_GetPerformanceFrequency());
+            std::fprintf(stderr,
+                         "hd-warm: %zu upscales in %.1f ms (cache now %zu)\n",
+                         n, ms, g.hd_cache.size());
+        }
     }
 
     // Level-entry loading screen.
@@ -1600,10 +1649,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         cursor_autohide_frame();   // keyboard game: park the OS arrow
         pause.begin_frame();
 
-        if (frame_stats) {
-            diag.stats.present_ms = 0.0;
-            diag.stats.t0 = SDL_GetPerformanceCounter();
-        }
+        diag.stats.begin_tick();
         const Uint32 t0 = SDL_GetTicks();
         sample_debug_perf(diag, any_debug_overlay);
 
@@ -1696,7 +1742,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         // CC3 seam 1). ──
         if (report_form.service_freeze(
                 {g, god_active, display_level, internal, hd_scale,
-                 /*want_presented=*/hd || wsp.present_path(), wsp, ren,
+                 /*want_presented=*/hd || wsp.present_path(), wsp, ren, win,
                  frame_ms, upload_and_show_fn}))
             continue;
         {
@@ -2083,10 +2129,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
             tctx.hd = hd;
             tctx.hd_scale = hd_scale;
             tctx.hd_profile = &opts.hd_profile;
-            tctx.ws_margin = wsp.margin();
-            tctx.ws_native_w = wsp.native_w();
-            tctx.ws_backdrop_ok = wsp.backdrop_ok();
-            tctx.ws_backdrop = &wsp.backdrop();
+            tctx.wsp = &wsp;   // borrowed; was four copied accessors
             tctx.hd_cache = &g.hd_cache;
             tctx.state = &g.state;
             tctx.render = &g.render;
@@ -2095,12 +2138,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
             tctx.slide_end_x = trans.slide_end_x;
             tctx.slide_end_y = trans.slide_end_y;
 
-            tctx.upload_and_show = [&](FrameBuffer& f) { upload_and_show(f); };
-            tctx.present_wide_transition =
-                [&wsp](std::vector<std::uint8_t>& wide, bool with_hud,
-                       bool pre_upscaled) {
-                    wsp.present_transition(wide, with_hud, pre_upscaled);
-                };
+            tctx.upload_and_show = [&fp](FrameBuffer& f) { fp.present(f); };
             tctx.make_rt = [&](FrameBuffer& b) { return make_rt(b); };
             tctx.compose_static = [&](int s, FrameBuffer& out,
                                       bool frozen_full) {
@@ -2498,7 +2536,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                     wsp.present(bubble_hook);
                 } else {
                     maybe_dump_steady(fb.px.data(), fb.w, fb.h);
-                    upload_and_show(fb);
+                    fp.present(fb);
                 }
                 wsp.set_float_pos(false);
                 log_draw(sub);
@@ -2519,12 +2557,42 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                     // filling the tick until the render budget is met, then
                     // carry the overshoot (bounded to one tick) into the next
                     // tick's budget so the logic cadence averages 18 Hz.
+                    // smooth_N is an UPPER BOUND here too, not just in the
+                    // discrete branch below.  It was not, so
+                    // OLDUVAI_SMOOTH_SUBFRAMES silently did nothing whenever
+                    // runtime vsync was accepted -- which is the common case,
+                    // since SDL_RenderSetVSync succeeds even when the renderer
+                    // was created without PRESENTVSYNC.
+                    //
+                    // WHY IT MATTERS.  Filling to render_budget alone commits
+                    // to as many sub-frames as nominally fit, and on a weak
+                    // part each one costs real logic rate.  Measured on a
+                    // TrimUI Smart Pro: 2.29 sub-frames -> 16.90 Hz,
+                    // 3.29 -> 14.40, 4.29 -> 11.32.  A straight ~2.5-3 Hz per
+                    // sub-frame, with no cliff -- so the only way to buy the
+                    // logic clock back is to ask for fewer, and before this
+                    // there was no way to ask without also disabling vsync and
+                    // taking tearing instead.
+                    //
+                    // Default smooth_N is 4-5, so a machine that was already
+                    // fitting 4 or fewer is unaffected.
                     const Uint32 el = SDL_GetTicks() - tick_t0;
-                    if (el >= render_budget || sub >= 64) {
+                    // Only the BUDGET path may claim the tick was paced.
+                    // pace_end_of_tick skips its sleep entirely when
+                    // smooth_vsync_ran is set, because the vsync fill is
+                    // assumed to have consumed the whole tick via the panel.
+                    // Breaking early on the smooth_N cap does NOT consume it,
+                    // so claiming otherwise ends the tick short with no sleep
+                    // and the game runs FAST -- measured at 20.52 Hz against a
+                    // target of 18.2, which eff_hz caught immediately and no
+                    // other counter would have.  Fall through to timer pacing.
+                    const bool budget_met = el >= render_budget;
+                    if (budget_met || (smooth_sub_explicit && sub >= smooth_N) ||
+                        sub >= 64) {
                         smooth_carryover = el > frame_ms
                                                ? std::min(el - frame_ms, frame_ms)
                                                : 0;
-                        smooth_vsync_ran = true;
+                        smooth_vsync_ran = budget_met;
                         break;
                     }
                 } else {
@@ -2567,7 +2635,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                 wsp.present(bubble_hook);
             } else {
                 maybe_dump_steady(fb.px.data(), fb.w, fb.h);
-                upload_and_show(fb);
+                fp.present(fb);
             }
             log_draw(0);
         }
@@ -2601,7 +2669,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                 // Widescreen: re-render through the SAME present the live frame
                 // used so the capture matches the screen exactly — peek frames
                 // via wsp.present (wide composite), bezel/pillarbox
-                // frames (caves, bosses, L3/L7) via upload_and_show (centre 320
+                // frames (caves, bosses, L3/L7) via fp.present (centre 320
                 // pillarboxed at wsp.margin() with the correctly-mapped HUD).  Then
                 // RenderReadPixels the full output.
                 // Render WITHOUT presenting (do_present=false) so RenderReadPixels
@@ -2610,7 +2678,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                 if (wsp.present_path())
                     wsp.present(bubble_hook, /*do_present=*/false);
                 else
-                    upload_and_show(fb, /*with_hud=*/true, /*do_present=*/false);
+                    fp.present(fb, /*with_hud=*/true, /*do_present=*/false);
                 capture_renderer_output(ren, opts.screenshot);
             } else if (hd) {
                 // HD: the vector HUD text now lives in the output-resolution
@@ -2626,7 +2694,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                     enhance::EnhancedHudLayout hud_layout =
                         enhance::compute_enhanced_hud_layout(hd_text, g.state);
                     // fb already carries the bars (drawn by the last
-                    // upload_and_show); only the text overlay is missing.
+                    // fp.present); only the text overlay is missing.
                     int ow2 = 0, oh2 = 0;
                     if (text_overlay.begin(ren, hd_text, ow2, oh2)) {
                         enhance::draw_enhanced_hud_text(text_overlay.buffer(),
@@ -2658,17 +2726,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
 
         const Uint32 spent = SDL_GetTicks() - t0;
         if (any_debug_overlay) diag.perf.ms_accum += spent;
-        if (frame_stats) {
-            const double work_ms =
-                static_cast<double>(SDL_GetPerformanceCounter() - diag.stats.t0) *
-                fs_perf_ms;
-            ++diag.stats.frames;
-            if (work_ms > diag.stats.worst_ms) {
-                diag.stats.worst_ms = work_ms;
-                diag.stats.worst_present_ms = diag.stats.present_ms;  // present of the worst frame
-            }
-            if (work_ms > fs_budget_ms) ++diag.stats.overruns;
-        }
+        diag.stats.end_tick();
 
         pace_end_of_tick(ren, tex, dos_ticker, smooth_vsync_ran,
                          opts.vga_scan, hd, vga_scan_ok, &diag.vga.fill_presents,
@@ -2682,14 +2740,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                      static_cast<double>(diag.vga.fill_presents) /
                          static_cast<double>(diag.vga.fill_ticks),
                      diag.vga.fill_ticks);
-    if (frame_stats && diag.stats.frames > 0)
-        std::fprintf(stderr,
-                     "frame-stats L%d: frames=%llu overruns=%llu(>%.1fms) "
-                     "worst_work=%.2fms (present=%.2fms) budget=%.2fms\n",
-                     display_level,
-                     static_cast<unsigned long long>(diag.stats.frames),
-                     static_cast<unsigned long long>(diag.stats.overruns), fs_budget_ms,
-                     diag.stats.worst_ms, diag.stats.worst_present_ms, fs_budget_ms);
+    diag.stats.report(display_level);
     audio.stop_music();
     carry.lives = g.state.player.lives;
     carry.score = g.state.score;
@@ -2697,6 +2748,8 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
 }
 
 int run_game(const GameOptions& opts) {
+    // Publish the smooth-present tuning before any frame loop reads it.
+    smooth_present_config() = {opts.smooth_subframes, opts.smooth_vsync_off};
     // Runtime-mutable copy — Options edits (hd_profile, render_scale, audio
     // device, etc.) apply this session through rt; launch-fixed fields
     // (game_dir, frames, screenshot, replay, trace, level) stay on opts.
@@ -2929,6 +2982,7 @@ int run_game(const GameOptions& opts) {
                 // stays app-side; boss_app only calls the std::function).
                 be.music_device = rt.music_device;
                 be.sfx_backend = rt.sfx_backend;
+                be.profile_family = rt.profile_family;
                 be.persist = rt.persist;
 
                 // --god on a boss fight.  god is seeded per LEVEL ENTRY inside

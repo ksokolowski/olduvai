@@ -221,7 +221,12 @@ TEST_CASE("configure_pause_bind seeds the enhanced master baseline") {
     LogicalSize lsz(/*ren=*/nullptr, 0, 0);
     PauseBindWireDeps d{&god, /*audio=*/nullptr, &sw,  &opts, &session,
                         &want_reinit, &rr, &lsz, /*hd_scale=*/2,
-                        /*display_level=*/1};
+                        /*display_level=*/1,
+                        // No widescreen presenter in this rig; apply_aspect
+                        // null-checks it.  Named rather than left to default
+                        // because CI builds -Werror and
+                        // -Wmissing-field-initializers is in -Wextra.
+                        /*on_aspect_changed=*/nullptr};
     configure_pause_bind(bind, d);
     CHECK(bind.mem["enhanced"] == "true");
 }

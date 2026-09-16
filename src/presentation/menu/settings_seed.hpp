@@ -31,6 +31,7 @@ struct SettingsSeed {
     std::string aspect;           // "" reads as "keep"
     bool fullscreen = false;      // caller reads the SDL window flag
     EnhanceFlags flags;
+    std::string profile_family;   // "" resolves as desktop (apply_preset)
 };
 
 template <class Bind>
@@ -40,9 +41,15 @@ void seed_settings_mem(Bind& b, const SettingsSeed& s) {
              s.render_scale, s.music_device, s.sfx_backend};
     b.mem["music_device"] = s.music_device;
     b.mem["sfx_backend"] = s.sfx_backend;
+    // Read by apply_preset: the Style preset resolves in this family.
+    b.mem["profile_family"] = s.profile_family;
     b.mem["hd_profile"] = s.hd_profile.empty() ? "native" : s.hd_profile;
     b.mem["render_scale"] = std::to_string(s.render_scale);
     b.mem["aspect"] = s.aspect.empty() ? "keep" : s.aspect;
+    // Remembered for the widescreen gate (see StagingBindings::allowed_values):
+    // a value the user opened the menu holding stays offered for that visit,
+    // so cycling past it is always reversible.
+    b.aspect_at_entry = b.mem["aspect"];
     // Master-flag baseline: lets a preset click that matches the current
     // style net out of the staging diff (and marks the master as genuinely
     // staged when it does change).

@@ -292,6 +292,7 @@ void run_title_menu(TitleMenuCtx& ctx) {
                     (SDL_GetWindowFlags(sw.win) &
                      SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
                 seed.flags = rt.enhance;
+                seed.profile_family = rt.profile_family;
                 seed_settings_mem(mbind, seed);
                 // Tier-1 live Aspect on the title: set rt.aspect (the per-frame
                 // flush dims read it) + SDL_RenderSetLogicalSize for immediacy.

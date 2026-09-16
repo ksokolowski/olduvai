@@ -35,6 +35,9 @@ struct CliArgs {
     int play_window_h = 0;   // --window WxH (0 = auto)
     int play_start_screen = 0;
     std::string profile;
+    // --default-profile: a launcher's device defaults, layered BELOW
+    // play.json (options_resolve.hpp, layer_config).  Unvalidated here.
+    std::string default_profile;
     bool no_config = false;
     bool save_config = false;
     int play_frames = -1;

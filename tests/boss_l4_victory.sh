@@ -44,6 +44,14 @@
 #       --game-dir <dir> --enhanced --hd-profile mmpx --render-scale 2 \
 #       --aspect widescreen --window 896x400 --play-shot <out> --play-shot-frame 55
 #
+# GOLDEN RE-BLESSED 2026-09-07 — the old hash pinned a DEFECT, not a frame.
+# capture_renderer_output read the VIEWPORT (SDL_RenderReadPixels rect=nullptr)
+# without clearing the logical size, so this shot came out shifted flush-left
+# with the letterbox bar doubled on the right (content 0..831, bars 0/64).  The
+# corrected capture is centred (content 32..863, bars 32/32).  Proven, not
+# assumed: a build with the fix reverted reproduces the OLD hash exactly.
+# See BACKLOG §3.14's recurrence note.
+#
 # Skip (77) when game data or the binary is absent.
 
 GAME_DIR="${OLDUVAI_GAME_DATA:-${1:-$(dirname "$0")/../game_data}}"

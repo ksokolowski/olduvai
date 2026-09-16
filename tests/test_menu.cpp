@@ -110,6 +110,58 @@ TEST_CASE("choice cycles and wraps") {
     CHECK(b.get("c") == "x");  // wrap backwards
 }
 
+TEST_CASE("choice: an unlisted value steps into the list, it does not skip") {
+    // REGRESSION (2026-09-07).  adjust() used to read
+    //   int i = pos == vals.end() ? 0 : ...
+    // so a current token absent from the row's list was treated as index 0 and
+    // ONE keypress landed on values[1] — skipping values[0] entirely and
+    // giving no hint that the held value had been discarded.  Live case:
+    // Aspect held "widescreen" while its authored list was keep/4:3/stretch,
+    // so opening Video and nudging the row jumped straight to "4:3".
+    //
+    // What this guarantees is movement by one step from where you actually
+    // are.  It does NOT make the old value permanently reachable — that is
+    // the job of listing it (menus.json) and of never withholding a value the
+    // user holds (StagingBindings::allowed_values).
+    auto model = make_model();
+    FakeBindings b;
+    Menu menu(model, b);
+    menu.open("options");
+    menu.move(+1);   // Choice ("a","b","x")
+
+    b.set("c", "unlisted");
+    menu.adjust(+1);
+    CHECK(b.get("c") == "a");   // was "b" before the fix
+
+    b.set("c", "unlisted");
+    menu.adjust(-1);
+    CHECK(b.get("c") == "x");   // and symmetric the other way
+}
+
+TEST_CASE("choice: allowed_values narrows what the row cycles through") {
+    // The Aspect gate withholds "widescreen" from the cycle in classic mode,
+    // where selecting it would do nothing (the presenter needs hd()).
+    struct Narrowing : FakeBindings {
+        std::vector<std::string> allowed_values(const MenuItem& it) override {
+            std::vector<std::string> out;
+            for (const auto& v : it.values)
+                if (v != "b") out.push_back(v);   // "b" is inert right now
+            return out;
+        }
+    };
+    auto model = make_model();
+    Narrowing b;
+    b.set("c", "a");
+    Menu menu(model, b);
+    menu.open("options");
+    menu.move(+1);
+
+    menu.adjust(+1);
+    CHECK(b.get("c") == "x");   // "b" skipped, never offered
+    menu.adjust(+1);
+    CHECK(b.get("c") == "a");   // wraps within the narrowed list
+}
+
 TEST_CASE("slider clamps at bounds") {
     auto model = make_model();
     FakeBindings b;
