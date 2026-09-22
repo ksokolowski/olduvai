@@ -2,9 +2,12 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "enhance/hd_text.hpp"
 
+#include "enhance/banner_shader.hpp"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 
 #define STB_TRUETYPE_IMPLEMENTATION
@@ -102,6 +105,26 @@ int HdText::measure(const std::string& text) const {
     return static_cast<int>(x + 0.5f);
 }
 
+const HdText::Glyph& HdText::glyph(int codepoint) const {
+    std::uint32_t scale_bits = 0;
+    std::memcpy(&scale_bits, &px_scale_, sizeof scale_bits);
+    const std::uint64_t key =
+        (static_cast<std::uint64_t>(scale_bits) << 32) |
+        static_cast<std::uint32_t>(codepoint);
+    auto it = glyphs_.find(key);
+    if (it != glyphs_.end()) return it->second;
+    if (glyphs_.size() >= kMaxGlyphs) glyphs_.clear();
+    Glyph g;
+    const auto* info = reinterpret_cast<const stbtt_fontinfo*>(info_);
+    unsigned char* bm = stbtt_GetCodepointBitmap(
+        info, px_scale_, px_scale_, codepoint, &g.w, &g.h, &g.xoff, &g.yoff);
+    if (bm != nullptr) {
+        g.bitmap.assign(bm, bm + static_cast<std::size_t>(g.w) * g.h);
+        stbtt_FreeBitmap(bm, nullptr);
+    }
+    return glyphs_.emplace(key, std::move(g)).first->second;
+}
+
 // Rasterise `text` and blend it into `rgba`, asking `color(dx, dy, r, g, b)`
 // for the ink at each covered pixel.  See the declaration in hd_text.hpp for
 // why this is a template.
@@ -112,10 +135,15 @@ void HdText::rasterise(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
     const auto* info = reinterpret_cast<const stbtt_fontinfo*>(info_);
     float pen = static_cast<float>(x);
     for (std::size_t i = 0; i < text.size(); ++i) {
-        const int ch = text[i];
+        const int ch = static_cast<unsigned char>(text[i]);
         int w = 0, h = 0, xoff = 0, yoff = 0;
-        unsigned char* bitmap = stbtt_GetCodepointBitmap(
-            info, px_scale_, px_scale_, ch, &w, &h, &xoff, &yoff);
+        const Glyph& gl = glyph(ch);
+        w = gl.w;
+        h = gl.h;
+        xoff = gl.xoff;
+        yoff = gl.yoff;
+        const std::uint8_t* const bitmap =
+            gl.bitmap.empty() ? nullptr : gl.bitmap.data();
         if (bitmap != nullptr) {
             const int gx = static_cast<int>(pen + 0.5f) + xoff;
             const int gy = baseline_y + yoff;
@@ -140,7 +168,6 @@ void HdText::rasterise(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
                     rgba[o + 3] = 255;
                 }
             }
-            stbtt_FreeBitmap(bitmap, nullptr);
         }
         int adv, lsb;
         stbtt_GetCodepointHMetrics(info, ch, &adv, &lsb);
@@ -162,16 +189,17 @@ void HdText::draw(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
                            std::uint8_t& b) { r = cr; g = cg; b = cb; });
 }
 
-void HdText::draw_styled(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
-                         int x, int baseline_y, const std::string& text,
-                         const ShadeFn& shade) const {
-    if (info_ == nullptr || !shade) return;
-    // Text bbox for gradient normalisation: width = measure(); the glyph band
-    // runs from the cap top (baseline - cap_px) down to the baseline.
+void HdText::draw_banner(std::vector<std::uint8_t>& rgba, int buf_w,
+                         int buf_h, int x, int baseline_y,
+                         const std::string& text,
+                         const BannerShader& shader) const {
+    if (info_ == nullptr || buf_w <= 0) return;
     const float x0 = static_cast<float>(x);
     const float wspan = std::max(1.0f, static_cast<float>(measure(text)));
     const float ytop = static_cast<float>(baseline_y - cap_px_);
     const float hspan = std::max(1.0f, static_cast<float>(cap_px_));
+    col_term_.resize(static_cast<std::size_t>(buf_w));
+    col_done_.assign(static_cast<std::size_t>(buf_w), 0);
     rasterise(rgba, buf_w, buf_h, x, baseline_y, text,
               [&](int dx, int dy, std::uint8_t& r, std::uint8_t& g,
                   std::uint8_t& b) {
@@ -179,7 +207,13 @@ void HdText::draw_styled(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
                   float v = (static_cast<float>(dy) - ytop) / hspan;
                   u = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
                   v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
-                  shade(u, v, r, g, b);
+                  // u depends on dx alone, so the column term is too.
+                  const auto c = static_cast<std::size_t>(dx);
+                  if (col_done_[c] == 0) {
+                      col_term_[c] = shader.column_term(u);
+                      col_done_[c] = 1;
+                  }
+                  shader.shade(u, v, col_term_[c], r, g, b);
               });
 }
 

@@ -17,7 +17,10 @@ set -eu
 GAME_DIR="${OLDUVAI_GAME_DATA:-${1:-$(dirname "$0")/../game_data}}"
 GAME_DIR=$(cd "${GAME_DIR}" 2>/dev/null && pwd || echo "${GAME_DIR}")
 BINARY="${2:-$(dirname "$0")/../build/release/olduvai}"
-case "${BINARY}" in /*) ;; *) BINARY="$(pwd)/${BINARY}" ;; esac
+# Absolute is `/...` OR a drive-letter path: on Windows ctest passes
+# C:/.../olduvai, and prefixing $(pwd) to that made the binary "not found"
+# (a silent SKIP until CI got game files on Windows, 2026-09-22).
+case "${BINARY}" in /*|[A-Za-z]:[/\\]*) ;; *) BINARY="$(pwd)/${BINARY}" ;; esac
 SKIP=77
 
 if [ ! -f "${GAME_DIR}/FILESA.VGA" ]; then

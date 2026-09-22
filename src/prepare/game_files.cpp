@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
+#include "formats/hash64.hpp"
 #include "prepare/game_files.hpp"
 
 #include "formats/unsqz.hpp"
@@ -15,7 +16,9 @@
 #include <utility>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN   // CMakeLists.txt already defines it
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #endif
 
@@ -24,9 +27,6 @@ namespace fs = std::filesystem;
 namespace olduvai::prepare {
 
 namespace {
-
-constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
-constexpr std::uint64_t kFnvPrime = 1099511628211ull;
 
 // Case-insensitive compare of an on-disk filename against a canonical
 // upper-case required name.
@@ -91,21 +91,19 @@ std::uint64_t fnv1a64_file(const fs::path& path, bool& ok,
     size = 0;
     std::ifstream in(path, std::ios::binary);
     if (!in) return 0;
-    std::uint64_t h = kFnvOffset;
+    formats::Hash64 h;
     std::array<char, 1 << 16> buf;
     while (in) {
         in.read(buf.data(), static_cast<std::streamsize>(buf.size()));
         const std::streamsize n = in.gcount();
-        for (std::streamsize i = 0; i < n; ++i) {
-            h ^= static_cast<std::uint8_t>(buf[static_cast<std::size_t>(i)]);
-            h *= kFnvPrime;
-        }
+        h.mix_bytes(reinterpret_cast<const std::uint8_t*>(buf.data()),
+                    static_cast<std::size_t>(n));
         size += static_cast<std::uintmax_t>(n);
     }
     // A read error that is not plain EOF means we can't trust the digest.
     if (in.bad()) return 0;
     ok = true;
-    return h;
+    return h.value();
 }
 
 fs::path resolve_game_dir(const fs::path& dir) {

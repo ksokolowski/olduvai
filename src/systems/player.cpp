@@ -441,7 +441,7 @@ void init_death_halo(SystemsState& state) {
 
 void tick_death_halo(SystemsState& state) {
     if (!state.death_halo_active) return;
-    state.death_halo_y -= 8;   // rises every frame
+    state.death_halo_y -= kBalloonRisePerTick;   // rises every frame
 }
 
 }  // namespace olduvai::systems

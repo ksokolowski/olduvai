@@ -312,6 +312,7 @@ void OplMusicPlayer::apply_channel_volume(int logical_channel, int velocity) {
 
 void OplMusicPlayer::note_on(int logical_channel, int midi_note,
                              int velocity) {
+    if (logical_channel < 0 || logical_channel >= 11) return;   // see kRhythmBits
     ChannelState& ch = channels_[static_cast<std::size_t>(logical_channel)];
     ch.midi_note = midi_note;
     apply_channel_volume(logical_channel, velocity);
@@ -325,6 +326,7 @@ void OplMusicPlayer::note_on(int logical_channel, int midi_note,
 }
 
 void OplMusicPlayer::note_off(int logical_channel) {
+    if (logical_channel < 0 || logical_channel >= 11) return;   // see kRhythmBits
     channels_[static_cast<std::size_t>(logical_channel)].midi_note = -1;
     if (logical_channel >= 6) {
         rhythm_mask_ &= ~kRhythmBits[logical_channel];

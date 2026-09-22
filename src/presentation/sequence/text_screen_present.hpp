@@ -38,6 +38,7 @@
 
 #include "enhance/hd_text.hpp"
 #include "enhance/upscale.hpp"
+#include "presentation/image_out.hpp"   // present_output
 #include "presentation/render/level_surface.hpp"   // TextScreenDeps
 #include "presentation/render/logical_size.hpp"
 #include "presentation/render/text_overlay.hpp"
@@ -102,9 +103,17 @@ inline TextScreenHd make_text_screen_hd(const TextScreenDeps& d,
         // menu to open.  Only a window close stops these screens, and that is
         // what `false` means to both of their callers.
         if (!poll_screen_events(d.win)) return false;
-        SDL_UpdateTexture(d.tex, nullptr, hd_px.data(), w * 4);
-        SDL_RenderClear(ren);
-        SDL_RenderCopy(ren, d.tex, nullptr, nullptr);
+        if (hd_px.empty()) {
+            // A black scene (the tally): clear, and skip the full-panel
+            // texture upload that an upscaled black frame used to cost on
+            // every counting step (~4 MB at 1280x800).
+            SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+            SDL_RenderClear(ren);
+        } else {
+            SDL_UpdateTexture(d.tex, nullptr, hd_px.data(), w * 4);
+            SDL_RenderClear(ren);
+            SDL_RenderCopy(ren, d.tex, nullptr, nullptr);
+        }
         if (!rows.empty()) {
             int ow = 0, oh = 0;
             if (d.overlay->begin(ren, *d.hd_text, ow, oh)) {
@@ -121,7 +130,7 @@ inline TextScreenHd make_text_screen_hd(const TextScreenDeps& d,
         // golden came to photograph "Please Wait" instead of the tally.
         if (!capture_gate_frame(ren, *d.lsz, dump_env, dump_tag, dump_seq))
             return false;
-        SDL_RenderPresent(ren);
+        present_output(ren);
         SDL_Delay(d.frame_ms);
         (void)h_px;
         return true;

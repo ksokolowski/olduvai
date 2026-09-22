@@ -70,6 +70,7 @@ struct PauseActionsDeps {
     bool* god_active;
     int* want_warp;
     int display_level;
+    ConfirmDialog* confirm;   // the quit actions ask "Are you sure?" first
 };
 
 MenuActionTable make_pause_actions(PauseActionsDeps* d);

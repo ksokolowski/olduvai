@@ -4,6 +4,7 @@
 
 #include <SDL.h>
 
+#include <algorithm>
 #include <cstdlib>
 
 #include "enhance/enhanced_hud.hpp"          // compute/draw_enhanced_hud_*
@@ -197,8 +198,11 @@ void FramePresenter::present(FrameBuffer& f, bool with_hud, bool do_present) {
     // use_hd_text; since the per-feature flags collapsed the two are the same
     // expression (hd && hd_text.ok()), so either spelling is correct here.
     const bool show_cheat = cheat_open && hd && hd_text.ok();
-    const bool show_menu =
-        pause.open() && use_hd_text && !pause.confirm().is_open();
+    // menu().is_open() as well as pause.open(): the overlay flag is set
+    // before the screen opens, and a closed menu cannot say which screen it
+    // is showing (menu.hpp — the TrimUI crash).
+    const bool show_menu = pause.open() && use_hd_text &&
+                           !pause.confirm().is_open() && pause.menu().is_open();
     const bool show_confirm =
         pause.open() && use_hd_text && pause.confirm().is_open();
     // Save whenever the pause overlay is up (classic draws the bitmap menu into
@@ -210,6 +214,18 @@ void FramePresenter::present(FrameBuffer& f, bool with_hud, bool do_present) {
         int ow = 0, oh = 0;
         if (text_overlay.begin(ren, hd_text, ow, oh)) {
             auto& b = text_overlay.buffer();
+            // Where the 320x200 picture sits in the output: the letterboxed
+            // logical rect, narrowed in widescreen to the centre 320 — the
+            // menu and dialog glyphs are laid out in 320-native coordinates,
+            // so they map onto that region for the pillarbox frame AND for a
+            // wide frame (whose slab, laid out in native_w space, is centred
+            // on the same point at the same scale).
+            const MenuFrame pic =
+                wsp.active()
+                    ? MenuFrame::picture(ow, oh, logical_w, logical_h,
+                                         wsp.margin() * hd_scale,
+                                         320 * hd_scale)
+                    : MenuFrame::picture(ow, oh, logical_w, logical_h);
             if (draw_hud_overlay) {
                 if (wsp.active()) {
                     // Pillarboxed WS: HUD text uses the wide mapping (matches
@@ -218,33 +234,24 @@ void FramePresenter::present(FrameBuffer& f, bool with_hud, bool do_present) {
                     wsp.draw_wide_hud_text(b, ow, oh, hud_layout);
                     hd_text.set_cap_px(saved_cap);
                 } else {
+                    // Sized and placed for the PICTURE, not the window:
+                    // 4:3, or Keep in a window that is not 16:10, pillarboxes
+                    // it (§3.23).
+                    const int saved_cap = hd_text.cap_px();
+                    hd_text.set_cap_px(
+                        std::max(1, TextOverlay::cap_px_for(pic.w)));
                     enhance::draw_enhanced_hud_text(b, ow, oh, hd_text,
-                                                    hud_layout);
+                                                    hud_layout, pic.x, pic.y,
+                                                    pic.w, pic.h);
+                    hd_text.set_cap_px(saved_cap);
                     draw_enhanced_banners(b, ow, oh);
                 }
             }
             if (show_cheat) draw_cheat_rows(b, ow, oh);
-            // WS: the pause frame is pillarboxed at the margin — pass that rect
-            // so glyphs land on the slab instead of stretching across the bars.
-            // The menu/HUD GLYPHS are laid out in 320-native coordinates, so
-            // they always map onto the centre-320 region — for the pillarbox
-            // frame AND for a wide_frame (whose slab, laid out in native_w
-            // space, is centred on the same point at the same scale).  Mapping
-            // a wide_frame's glyphs across the full canvas instead would draw
-            // them at native_w/320 times the slab's scale.
-            int mfx = -1, mfy = -1, mfw = -1, mfh = -1;
-            if (wsp.active()) {
-                mfx = wsp.margin() * hd_scale * ow / logical_w;
-                mfw = 320 * hd_scale * ow / logical_w;
-                mfy = 0;
-                mfh = oh;
-            }
             if (show_menu)
-                draw_menu_vector(b, ow, oh, hd_text, pause.menu(), 0.0f,
-                                 MenuFrame{mfx, mfy, mfw, mfh});
+                draw_menu_vector(b, ow, oh, hd_text, pause.menu(), 0.0f, pic);
             if (show_confirm)
-                draw_confirm_vector(b, ow, oh, hd_text, pause.confirm(),
-                                    MenuFrame{mfx, mfy, mfw, mfh});
+                draw_confirm_vector(b, ow, oh, hd_text, pause.confirm(), pic);
             text_overlay.flush(ren, logical_w, logical_h);
         }
     }

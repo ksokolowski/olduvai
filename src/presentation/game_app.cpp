@@ -40,9 +40,10 @@
 #include "presentation/menu/dialog_key_map.hpp"
 #include "presentation/sequence/l3_end_level.hpp"
 #include "presentation/menu/menu.hpp"
-#include "presentation/diag/menu_script_util.hpp"
+#include "presentation/diag/menu_script.hpp"
 #include "presentation/menu/menu_model.hpp"
 #include "presentation/render/banner_fx.hpp"
+#include "presentation/render/rising_balloons.hpp"
 #include "presentation/render/banners.hpp"
 #include "presentation/menu/menu_render.hpp"
 #include "presentation/level/save_state.hpp"
@@ -50,6 +51,7 @@
 #include "presentation/audio/audio.hpp"
 #include "presentation/boss_app.hpp"
 #include "presentation/render/boss_widescreen.hpp"   // boss_ws_margin (shared margin math)
+#include "presentation/audio/game_music.hpp"
 #include "presentation/diag/bug_capture.hpp"
 #include "presentation/menu/pause_service.hpp"
 #include "presentation/diag/report_form.hpp"
@@ -103,10 +105,10 @@ namespace olduvai::presentation {
 
 namespace {
 
-using formats::CurArchive;
-
 // OLDUVAI_DUMP_LEVEL_FADE=<dir>: dump each level-complete fade frame as a
-// pre-upscale BMP.  Same device as OLDUVAI_DUMP_DESCENT and for the same
+// pre-upscale PNG (stb's encoder: the same bytes on every platform, where
+// SDL_SaveBMP's header differs between SDL 2.30 and sdl2-compat, and a hash
+// gate over it failed on Linux with identical pixels).  Same device as OLDUVAI_DUMP_DESCENT and for the same
 // reason — it makes the §3.7 slice-2 extraction provable byte-identical on a
 // path that no test could reach before.  Debug-only, and it MOVES WITH the
 // block it measures, so before/after dumps compare like with like.
@@ -164,7 +166,7 @@ void dump_level_fade(const std::vector<std::uint8_t>& px, int w, int h) {
     if (dir == nullptr) return;
     static int level_fade_seq = 0;
     char p[512];
-    std::snprintf(p, sizeof p, "%s/levelfade_%04d.bmp", dir, level_fade_seq++);
+    std::snprintf(p, sizeof p, "%s/levelfade_%04d.png", dir, level_fade_seq++);
     save_rgba_image(px.data(), w, h, p);
 }
 
@@ -230,30 +232,6 @@ void fade_wide_to_black(Loaded& g, WidescreenPresenter& wsp,
         SDL_Delay(frame_ms);
     }
 }
-
-void play_tally_music(SdlAudio& audio, const GameOptions& opts) {
-// The score tally plays BONUS.MDI (FUN_270a_01b4,
-// play_music(MUSIC_BONUS)) — same as the boss tally.  BONUS.MDI is
-// in FILESA.CUR (also FILESB.CUR); track id 1.  Buzzer variant
-// (BONUSBUZ.MDI when DS:0x8db5=='I') is a follow-up.
-if (audio.music_available()) {
-    // EXE Level_EndScreen fades the level track out (MDI_FadeStop
-    // 1f75:00e4) before starting BONUS.MDI (1f75:01bb) — match
-    // that fade so the music is never abruptly cut.
-    audio.fade_out_music();
-    formats::CurArchive ba(prepare::slurp_file(opts.game_dir / "FILESA.CUR"));
-    formats::CurArchive bb(prepare::slurp_file(opts.game_dir / "FILESB.CUR"));
-    const std::vector<std::uint8_t>* md = nullptr;
-    if (ba.contains("BONUS.MDI")) md = &ba.get("BONUS.MDI").data;
-    else if (bb.contains("BONUS.MDI")) md = &bb.get("BONUS.MDI").data;
-    if (md != nullptr) {
-        audio.play_music(*md, formats::mdi_track_id("bonus.mdi"));
-    }
-}
-}
-
-
-
 
 }  // namespace
 
@@ -324,15 +302,9 @@ struct LevelDiag {
         int samples = 0;
         double fps = 0.0, frame_ms = 0.0;
     } perf;
-    // OLDUVAI_MENU_SCRIPT: headless menu walk (drives tests/diag.menu.script.sh).
-    struct MenuScript {
-        std::vector<std::string> script;
-        std::size_t idx = 0;
-        int shot_ctr = 0;
-        std::string dir = ".";
-        std::string shot_path;   // set for one frame when a `shot` token fires
-        bool quit = false;
-    } menu;
+    // OLDUVAI_MENU_SCRIPT: headless menu walk (tests/menu_script.sh,
+    // tests/report_form.sh) — diag/menu_script.hpp.
+    MenuScript menu;
 };
 
 // Everything in the frame that must happen EXACTLY ONCE PER LOGIC TICK, in
@@ -402,67 +374,6 @@ void advance_once_per_tick(Loaded& g, FramePresenter& fp, FrameBuffer& fb,
     }
 }
 
-// Drive one step of the OLDUVAI_MENU_SCRIPT diagnostic script and report
-// whether it asked to quit.
-//
-// WHY IT IS OUT OF THE LOOP.  A branch-token histogram put run_platform_level's
-// densest region here — and none of it is gameplay: it is a token interpreter
-// for the headless menu gates (esc/down/enter/shot/type:/stab/quit).  It sat
-// inline in the frame loop purely because that is where the frame's input
-// handling is, which meant the loop's branchiest block was diagnostics
-// wearing a game-loop costume.
-//
-// Returns true when the script has ended or asked to quit; the CALLER owns the
-// loop exit (`outcome`, `running`, `break`), because a helper that could break
-// its caller's loop is worse than the inline block it replaced.
-bool drive_menu_script(LevelDiag& diag, ReportFormService& report_form) {
-    if (diag.menu.idx >= diag.menu.script.size()) {
-        diag.menu.quit = true;   // auto-exit at end of script
-    } else {
-        const std::string tok = diag.menu.script[diag.menu.idx++];
-        if (tok == "quit") diag.menu.quit = true;
-        else if (tok == "wait") { /* idle one frame */ }
-        else if (tok == "shot") {
-            char nm[32];
-            std::snprintf(nm, sizeof nm, "%03d.png", diag.menu.shot_ctr++);
-            diag.menu.shot_path = diag.menu.dir + "/" + nm;
-        } else if (tok.rfind("type:", 0) == 0) {
-            // Text-editor typing: '_' → space.  Dispatched STRAIGHT
-            // to the editor's event handler, NOT via SDL_PushEvent:
-            // sdl2-compat (Homebrew's SDL2 since 2026-07) refuses
-            // app-pushed TEXTINPUT events — its Event2to3 returns
-            // NULL ("we shouldn't be getting text input events this
-            // direction") and SDL3_PushEvent(NULL) segfaults.  The
-            // direct call reaches the same consumer the poll loop
-            // feeds; a TEXTINPUT can only insert (kNone), so the
-            // save/cancel handling there is not needed here.
-            std::string txt = tok.substr(5);
-            for (char& c : txt) if (c == '_') c = ' ';
-            if (report_form.open() && report_form.edit_open())
-                report_form.inject_text(txt);
-        } else if (tok == "stab" || tok == "ctrlenter") {
-            // Modifier chords the plain key-pusher can't express.
-            const SDL_Keycode ms =
-                tok == "stab" ? SDLK_TAB : SDLK_RETURN;
-            const Uint16 mod =
-                tok == "stab" ? KMOD_LSHIFT : KMOD_LCTRL;
-            for (bool down : {true, false}) {
-                SDL_Event e{};
-                e.type = down ? SDL_KEYDOWN : SDL_KEYUP;
-                e.key.state = down ? SDL_PRESSED : SDL_RELEASED;
-                e.key.keysym.sym = ms;
-                e.key.keysym.scancode = SDL_GetScancodeFromKey(ms);
-                e.key.keysym.mod = mod;
-                SDL_PushEvent(&e);
-            }
-        } else {
-            const SDL_Keycode sym = menu_token_sym(tok);
-            if (sym != SDLK_UNKNOWN) push_menu_key(sym);
-        }
-    }
-    return diag.menu.quit;
-}
-
 // Per-frame perf sampling for the debug overlays (F3 stats / OLDUVAI_PERF_LOG).
 //
 // Diagnostics, like drive_menu_script before it, and inline in the frame loop
@@ -496,6 +407,332 @@ if (any_debug_overlay) {
 }
 }
 
+namespace {
+
+// Classify the screen change and compose its outgoing 320 frame.  Which
+// transition this is — surface pan, fade pair, or one of the two enhanced
+// secret slides — follows from where the player was and where they are now,
+// and each flavour composes its outgoing frame differently; that is one
+// subject, and it is this function.  `warp_fade` is taken BY VALUE: the L7
+// fake-cave seam turns it on for this decision only.
+void classify_screen_transition(Loaded& g, const PrevFrame& pf,
+                                TransitionState& trans, FramePresenter& fp,
+                                WidescreenPresenter& wsp,
+                                const FrameBuffer& fb, bool enhanced,
+                                bool warp_fade, bool now_inside) {
+    const bool l7_fake_cave =
+        std::abs(pf.screen - g.state.current_screen) == 1 &&
+        systems::seam_kind(g.state.current_level, pf.screen,
+                           g.state.current_screen) ==
+            systems::SeamKind::FakeCaveInstant;
+    if (l7_fake_cave && enhanced) warp_fade = true;
+    if (!now_inside && !pf.inside && !warp_fade) {
+        trans.kind = 1;   // surface pan-scroll
+        const int ddx = g.state.player.x - pf.px;
+        const int ddy = g.state.player.y - pf.py;
+        if (std::abs(ddx) >= std::abs(ddy)) {
+            trans.dir = ddx < 0 ? 'R' : 'L';
+        } else {
+            trans.dir = ddy < 0 ? 'D' : 'U';
+        }
+
+        // Pan-scroll: re-compose the outgoing frame WITHOUT the
+        // player — the old screen's assets and entity binding
+        // are still live here (bind_screen runs below).  Both
+        // slide surfaces carrying a player shows two of them
+        // mid-pan; player-less old frame = the player "rides"
+        // the incoming screen, as in the original.  (Reference
+        // fix: renders old_surf with draw_player=False.)
+        {
+            auto rt = make_render_target(trans.old_frame, *fp.surface,
+                                        *fp.hd_cache);
+            compose_frame(rt, g.state, g.render,
+                          /*draw_player=*/false);
+        }
+        fp.draw_hud_for(trans.old_frame);
+    } else {
+        // Detect enhanced-mode secret-entry / secret-exit slides.
+        // Secret entry: was on surface (!pf.inside), now in secret
+        //   (now_inside && g.state.secret_flag).
+        // Secret exit:  was in secret (pf.secret), now on surface
+        //   (!now_inside).
+        const bool is_secret_entry =
+            enhanced && !pf.inside && now_inside &&
+            g.state.secret_flag;
+        const bool is_secret_exit =
+            enhanced && pf.secret && !now_inside;
+        if (is_secret_entry) {
+            // kind 3: 12-frame downward slide (surface→secret).
+            // Old frame: current surface, player-less so the player
+            // "rides" into the new screen.
+            trans.kind = 3;
+            {
+                auto rt = make_render_target(trans.old_frame, *fp.surface,
+                                        *fp.hd_cache);
+                compose_frame(rt, g.state, g.render,
+                              /*draw_player=*/false);
+            }
+            fp.draw_hud_for(trans.old_frame);
+            if (wsp.active()) {
+                // Wide OLD frame for the slide: a native-320 sibling of
+                // trans.old_frame (same state → same content), wrapped with
+                // the OLD surface cache (peek), still live before the
+                // rebind.  Built here because the kind 1/2 wide block below
+                // only handles those kinds.
+                FrameBuffer oc{};
+                RenderTarget rt{oc.px.data(), 320, 200, 1, nullptr,
+                                nullptr};
+                rt.advance_state = false;
+                compose_frame(rt, g.state, g.render, /*draw_player=*/false);
+                wsp.wrap_wide(oc, trans.slide_old_wide);
+                trans.slide_old_wide_ok = true;
+            }
+        } else if (is_secret_exit) {
+            // kind 4: 30-frame upward slide (secret→surface) with
+            // player-arc overlay.  Both surfaces rendered player-less;
+            // the overlay draws the jump sprite traversing from
+            // secret-exit-x to return-x.
+            trans.kind = 4;
+
+            // Save arc parameters before the state is mutated by
+            // bind_screen / clear_per_screen_state below.
+            trans.slide_secret_exit_x = g.state.secret_exit_x;
+            trans.slide_end_x = g.state.player.x;
+            trans.slide_end_y = g.state.player.y;
+
+            // Old (secret) frame: re-render player-less at the exit
+            // position.  Move player to exit pos for render, then
+            // restore.
+            const int saved_rx = g.state.player.x;
+            const int saved_ry = g.state.player.y;
+            g.state.player.x = trans.slide_secret_exit_x;
+            g.state.player.y = systems::kSecretFloorY - 30;
+
+            // Outgoing secret frame uses the last live scatter in
+            // g.render.tiles — no new LCG draws (parity with the
+            // classic path, which rolls 0 here).
+            // Note: the secret_flag is now 0 (exit cleared it), but
+            // the secret render assets are still live until bind_screen
+            // replaces them below.  Temporarily re-set secret_flag so
+            // compose_frame uses secret assets.
+            g.state.secret_flag = 1;
+
+            // Build bubble hook for the secret-side old surface.
+            std::function<void(RenderTarget&)> old_bubble_hook;
+            if (g.fluid_bubbles_initialized) {
+                const auto& bsnap = g.fluid_bubbles.bubbles();
+                const auto& tspr = g.render.tile_sprites;
+                const auto& tpal = g.render.palette;
+                old_bubble_hook = [&bsnap, &tspr, &tpal](RenderTarget& frm) {
+                    for (const auto& b2 : bsnap) {
+                        const int i2 = b2.sprite_idx;
+                        if (i2 >= 0 && i2 < static_cast<int>(tspr.size()))
+                            blit_sprite_keyed(frm, tspr[static_cast<std::size_t>(i2)],
+                                              tpal, static_cast<int>(b2.x),
+                                              static_cast<int>(b2.y));
+                    }
+                };
+            }
+            {
+                auto rt = make_render_target(trans.old_frame, *fp.surface,
+                                        *fp.hd_cache);
+                compose_frame(rt, g.state, g.render,
+                              /*draw_player=*/false, old_bubble_hook);
+            }
+            fp.draw_hud_for(trans.old_frame);
+            if (wsp.active()) {
+                // Wide OLD frame for the slide, built WHILE the transient
+                // secret state is live (secret_flag=1, player at exit,
+                // old_bubble_hook) — a native-320 sibling of trans.old_frame
+                // wrapped with the secret-room cache (no neighbours, null
+                // backdrop → self-tile margins).  Must precede the restore.
+                FrameBuffer oc{};
+                RenderTarget rt{oc.px.data(), 320, 200, 1, nullptr,
+                                nullptr};
+                rt.advance_state = false;
+                compose_frame(rt, g.state, g.render, /*draw_player=*/false,
+                              old_bubble_hook);
+                wsp.wrap_wide(oc, trans.slide_old_wide);
+                trans.slide_old_wide_ok = true;
+            }
+            g.state.secret_flag = 0;   // restore
+            g.state.player.x = saved_rx;
+            g.state.player.y = saved_ry;
+        } else {
+            trans.kind = 2;   // cave/secret/warp fade pair
+            // Fades keep the player on the old frame (the blend to
+            // black hides it) — snapshot last frame as displayed.
+            trans.old_frame = fb;
+        }
+    }
+}
+
+// What the wide pass below decided, for the post-rebind wide/not-wide call
+// that needs the NEW screen's status too.
+struct WideOutgoing {
+    bool old_wide;       // the OLD side is a ws_present_path screen
+    bool eligible_kind;  // this transition kind can go wide at all
+};
+
+// The same transition composed WIDE, while the peek cache still reflects the
+// OLD screen.  Runs after the classification above because it reads the kind
+// that one decided.
+WideOutgoing compose_outgoing_wide(Loaded& g, const PrevFrame& pf,
+                                   TransitionState& trans,
+                                   WidescreenPresenter& wsp) {
+    // ── Widescreen transitions (§8.7) — outgoing frame composed WIDE
+    // BEFORE the rebind, while the cache still reflects the OLD screen ──
+    // Decide whether this transition involves a ws_present_path screen on
+    // the OLD side (the new side is checked after the rebind, below).  We
+    // widen the two flavors whose 320 path pops the bars / jumps the HUD:
+    //   • kind 1 (surface↔surface pan) — the user's main complaint
+    //   • kind 2 (cave/secret/warp fade pair)
+    // The enhanced secret SLIDES (kind 3/4) stay on the 320 path: they
+    // are vertical pans between a surface and a self-tile secret room, and
+    // kind 4 temporarily mutates secret_flag/player to render its outgoing
+    // frame — too entangled to widen cleanly without regression risk.  In
+    // widescreen those slides are consistently 320-pillarboxed (no
+    // mid-flavor pop); widening them is a documented follow-up.
+    trans.wide = false;
+    trans.old_wide.clear();
+    bool ws_old = false;
+    const bool ws_eligible_kind =
+        (trans.kind == 1 || trans.kind == 2 ||
+         trans.kind == 3 || trans.kind == 4);
+    if (wsp.active() &&
+        (trans.kind == 1 || trans.kind == 2)) {
+        // The peek CACHE is still the old screen's here, but the
+        // STATE is not: enter_cave/exit_cave have already flipped
+        // cave_flag + current_screen to the NEW side (see the restore
+        // block below, which exists for exactly that reason).
+        // present_path()'s surface_selffill() case reads those two
+        // fields, so on a cave EXIT it mis-reads the outgoing CAVE as a
+        // no-neighbour SURFACE screen and wraps it with composed
+        // margins — the cave fade-OUT grew widescreen content the cave
+        // fade-IN correctly lacks.  pf.cave/pf.secret describe the
+        // OUTGOING side, so gate on them.
+        ws_old = !pf.cave && !pf.secret && wsp.present_path();
+
+        // Native-320 outgoing center matching the kind's content, composed
+        // from g.state (still the OLD screen — assets not yet rebound):
+        //   kind 1 (pan): player-LESS (the player rides the incoming
+        //                 screen, mirroring the HD trans.old_frame compose).
+        //   kind 2 (fade): player-INCLUDED (the fade-to-black hides it; the
+        //                  320 path snapshots `fb` with the player on it).
+        FrameBuffer old_center{};   // 320x200
+        {
+            // kind 2 (cave/secret/warp fade): by the time this block runs,
+            // enter_cave / exit_cave have ALREADY moved the player to the
+            // NEW screen's entry position and flipped cave_flag /
+            // current_screen.  The classic 320 path dodges this by
+            // snapshotting `fb` (the genuine last frame); the wide path
+            // re-composes, so without restoring the OLD screen state here
+            // the outgoing fade frame draws the player (and cave-vs-surface
+            // mode) at the NEW position over the OLD background — the
+            // "player flashes/jumps between the cave-exit and surface-entry
+            // position" regression (matches the early Python fix
+            // screen_scroll_transition_in_game.md, restricted there to the
+            // pan path).  The OLD screen's assets + entities are still bound
+            // (bind_screen runs below), so restoring the pre-change flags +
+            // screen + player position reproduces the true outgoing frame.
+            // advance_state=false: this is a render-only re-compose; the
+            // one authoritative per-tick advance is the main fb compose.
+            const int cur_px = g.state.player.x;
+            const int cur_py = g.state.player.y;
+            const int cur_screen = g.state.current_screen;
+            const int cur_cave = g.state.cave_flag;
+            const int cur_cave_index = g.state.cave_index;
+            const int cur_secret = g.state.secret_flag;
+            const int cur_psprite = g.state.player.sprite;
+            const int cur_pdx = g.state.player.dx;
+            const int cur_pdy = g.state.player.dy;
+            const int cur_pfacing = g.state.player.facing_left;
+            const int cur_pclub = g.state.player.club_flag;
+            const int cur_emerge = g.state.cave_emerge_frames;
+            if (trans.kind == 2) {
+                g.state.player.x = pf.px;
+                g.state.player.y = pf.py;
+                g.state.current_screen = pf.screen;
+                g.state.cave_flag = pf.cave ? 1 : 0;
+
+                // Restore the outgoing cave's index too (the exit set it
+                // to -1) so the STOP-sign render fires in the fade frame.
+                g.state.cave_index = pf.cave ? pf.cave_index : -1;
+                g.state.secret_flag = pf.secret ? 1 : 0;
+
+                // Player presentation of the LAST PRESENTED frame (the
+                // classic 320 path gets this for free by snapshotting
+                // `fb`): descent frame 46 + its dx on cave entry; the
+                // pre-emerge walk sprite (emerge=prev, normally 0) on
+                // cave exit.  advance_state=false above keeps the
+                // club-flag draw from double-decrementing.
+                // (Teleport tick fields are deliberately NOT swapped:
+                // on the sign-teleport consume tick both prev and cur
+                // values hide the player entirely — identical output —
+                // and the cloud FX is drawn by game_app hooks, not by
+                // compose_frame.)
+                g.state.player.sprite = pf.psprite;
+                g.state.player.dx = pf.pdx;
+                g.state.player.dy = pf.pdy;
+                g.state.player.facing_left = pf.pfacing;
+                g.state.player.club_flag = pf.pclub;
+                g.state.cave_emerge_frames = pf.emerge;
+            }
+            RenderTarget rt{old_center.px.data(), 320, 200, 1, nullptr,
+                            nullptr};
+            rt.advance_state = false;
+            compose_frame(rt, g.state, g.render,
+                          /*draw_player=*/trans.kind == 2);
+            if (trans.kind == 2) {
+                g.state.player.x = cur_px;
+                g.state.player.y = cur_py;
+                g.state.current_screen = cur_screen;
+                g.state.cave_flag = cur_cave;
+                g.state.cave_index = cur_cave_index;
+                g.state.secret_flag = cur_secret;
+                g.state.player.sprite = cur_psprite;
+                g.state.player.dx = cur_pdx;
+                g.state.player.dy = cur_pdy;
+                g.state.player.facing_left = cur_pfacing;
+                g.state.player.club_flag = cur_pclub;
+                g.state.cave_emerge_frames = cur_emerge;
+            }
+        }
+
+        // Wrap with the OLD side's peek-vs-bezel rule.  Whether the wide
+        // path actually runs is decided after the rebind (ws_old || ws_new).
+        // A kind-2 fade's OUTGOING frame must carry the SAME margins as
+        // the steady view it fades from — the peek cache + seam lists
+        // (straddler completions, row bridges, black base) are still the
+        // OLD screen's here, so wrap_wide_static reproduces it exactly.
+        // wrap_wide (compose_widescreen torus/mirror) instead flashed
+        // stale mirror content for the whole fade: the L3 trunk-entry
+        // dirt clutter (this branch's original s9-only scope), the L7 S2
+        // cave-entry rail gap, the S9→S10 warp-fade mirror, the S12→S13
+        // fade's cave-hall backdrop.  Restore the outgoing screen number
+        // so per-screen rules (L3 s9/s17 void, L7 cave-hall base) fire.
+        // Cave/secret bezel sides (ws_old false) keep wrap_wide_for.
+        if (ws_old && trans.kind == 2) {
+            const int cur_screen = g.state.current_screen;
+            g.state.current_screen = pf.screen;
+            wsp.wrap_wide_static(old_center, trans.old_wide);
+            g.state.current_screen = cur_screen;
+        } else {
+            wsp.wrap_wide_for(old_center, ws_old, trans.old_wide);
+        }
+    } else if (wsp.active() &&
+               (trans.kind == 3 || trans.kind == 4)) {
+        // kind 3/4: the wide OLD buffer was already built + wrapped inside
+        // the classification block (trans.slide_old_wide), while the secret
+        // state was live; ws_old just records that the old side is wide.
+        ws_old = trans.slide_old_wide_ok;
+    }
+    return {ws_old, ws_eligible_kind};
+}
+
+}  // namespace
+
+
 // ── Step 9's screen-change body, sans the trunk-descent dispatch ──────────
 // Extracted verbatim from run_platform_level (§3.7 D slice).  The probe put
 // this seam at 14 free names before the cut; six of those were the descent
@@ -516,323 +753,73 @@ void step9_screen_change(Loaded& g, const PrevFrame& pf,
     WidescreenPresenter& wsp = *fp.wsp;
     const bool now_inside = g.state.cave_flag || g.state.secret_flag;
     trans.slide_old_wide_ok = false;   // rebuilt per kind 3/4 classification
-            const bool l7_fake_cave =
-                std::abs(pf.screen - g.state.current_screen) == 1 &&
-                systems::seam_kind(g.state.current_level, pf.screen,
-                                   g.state.current_screen) ==
-                    systems::SeamKind::FakeCaveInstant;
-            if (l7_fake_cave && enhanced) warp_fade = true;
-            if (!now_inside && !pf.inside && !warp_fade) {
-                trans.kind = 1;   // surface pan-scroll
-                const int ddx = g.state.player.x - pf.px;
-                const int ddy = g.state.player.y - pf.py;
-                if (std::abs(ddx) >= std::abs(ddy)) {
-                    trans.dir = ddx < 0 ? 'R' : 'L';
-                } else {
-                    trans.dir = ddy < 0 ? 'D' : 'U';
-                }
+    classify_screen_transition(g, pf, trans, fp, wsp, fb, enhanced, warp_fade,
+                               now_inside);
+    const WideOutgoing wide = compose_outgoing_wide(g, pf, trans, wsp);
+    // The L3 trunk-descent branch (dispatched in run_platform_level)
+    // already called clear_per_screen_state, bind_screen, and cleared
+    // screen_change — this helper is only reached on every OTHER
+    // transition, so the common path runs unconditionally here.
+    systems::clear_per_screen_state(g.state);
+    bind_screen(g, g.state.current_screen);
+    wsp.update_cache();   // recompute peek for the new screen
+    g.state.screen_change = false;
 
-                // Pan-scroll: re-compose the outgoing frame WITHOUT the
-                // player — the old screen's assets and entity binding
-                // are still live here (bind_screen runs below).  Both
-                // slide surfaces carrying a player shows two of them
-                // mid-pan; player-less old frame = the player "rides"
-                // the incoming screen, as in the original.  (Reference
-                // fix: renders old_surf with draw_player=False.)
-                {
-                    auto rt = make_render_target(trans.old_frame, *fp.surface,
-                                                *fp.hd_cache);
-                    compose_frame(rt, g.state, g.render,
-                                  /*draw_player=*/false);
-                }
-                fp.draw_hud_for(trans.old_frame);
-            } else {
-                // Detect enhanced-mode secret-entry / secret-exit slides.
-                // Secret entry: was on surface (!pf.inside), now in secret
-                //   (now_inside && g.state.secret_flag).
-                // Secret exit:  was in secret (pf.secret), now on surface
-                //   (!now_inside).
-                const bool is_secret_entry =
-                    enhanced && !pf.inside && now_inside &&
-                    g.state.secret_flag;
-                const bool is_secret_exit =
-                    enhanced && pf.secret && !now_inside;
-                if (is_secret_entry) {
-                    // kind 3: 12-frame downward slide (surface→secret).
-                    // Old frame: current surface, player-less so the player
-                    // "rides" into the new screen.
-                    trans.kind = 3;
-                    {
-                        auto rt = make_render_target(trans.old_frame, *fp.surface,
-                                                *fp.hd_cache);
-                        compose_frame(rt, g.state, g.render,
-                                      /*draw_player=*/false);
-                    }
-                    fp.draw_hud_for(trans.old_frame);
-                    if (wsp.active()) {
-                        // Wide OLD frame for the slide: a native-320 sibling of
-                        // trans.old_frame (same state → same content), wrapped with
-                        // the OLD surface cache (peek), still live before the
-                        // rebind.  Built here because the kind 1/2 wide block below
-                        // only handles those kinds.
-                        FrameBuffer oc{};
-                        RenderTarget rt{oc.px.data(), 320, 200, 1, nullptr,
-                                        nullptr};
-                        rt.advance_state = false;
-                        compose_frame(rt, g.state, g.render, /*draw_player=*/false);
-                        wsp.wrap_wide(oc, trans.slide_old_wide);
-                        trans.slide_old_wide_ok = true;
-                    }
-                } else if (is_secret_exit) {
-                    // kind 4: 30-frame upward slide (secret→surface) with
-                    // player-arc overlay.  Both surfaces rendered player-less;
-                    // the overlay draws the jump sprite traversing from
-                    // secret-exit-x to return-x.
-                    trans.kind = 4;
+    // The original skips walk/gravity for one frame after every
+    // screen change (the screen-draw frame runs no gameplay).
+    g.state.transition_skip = true;
 
-                    // Save arc parameters before the state is mutated by
-                    // bind_screen / clear_per_screen_state below.
-                    trans.slide_secret_exit_x = g.state.secret_exit_x;
-                    trans.slide_end_x = g.state.player.x;
-                    trans.slide_end_y = g.state.player.y;
+    // The NEW screen's widescreen status is now known (cache updated).
+    // The wide transition path runs when EITHER side is ws_present —
+    // so neither side ever pillarbox-pops the bars mid-pan/fade.
+    if (wsp.active() && wide.eligible_kind) {
+        const bool ws_new = wsp.present_path();
+        trans.wide = wide.old_wide || ws_new;
+    }
 
-                    // Old (secret) frame: re-render player-less at the exit
-                    // position.  Move player to exit pos for render, then
-                    // restore.
-                    const int saved_rx = g.state.player.x;
-                    const int saved_ry = g.state.player.y;
-                    g.state.player.x = trans.slide_secret_exit_x;
-                    g.state.player.y = systems::kSecretFloorY - 30;
+    // Note: the L3 trunk-descent path keeps trans.wide false — its
+    // descent animation is its own (non-peek) flow, left unchanged.
+}
 
-                    // Outgoing secret frame uses the last live scatter in
-                    // g.render.tiles — no new LCG draws (parity with the
-                    // classic path, which rolls 0 here).
-                    // Note: the secret_flag is now 0 (exit cleared it), but
-                    // the secret render assets are still live until bind_screen
-                    // replaces them below.  Temporarily re-set secret_flag so
-                    // compose_frame uses secret assets.
-                    g.state.secret_flag = 1;
-
-                    // Build bubble hook for the secret-side old surface.
-                    std::function<void(RenderTarget&)> old_bubble_hook;
-                    if (g.fluid_bubbles_initialized) {
-                        const auto& bsnap = g.fluid_bubbles.bubbles();
-                        const auto& tspr = g.render.tile_sprites;
-                        const auto& tpal = g.render.palette;
-                        old_bubble_hook = [&bsnap, &tspr, &tpal](RenderTarget& frm) {
-                            for (const auto& b2 : bsnap) {
-                                const int i2 = b2.sprite_idx;
-                                if (i2 >= 0 && i2 < static_cast<int>(tspr.size()))
-                                    blit_sprite_keyed(frm, tspr[static_cast<std::size_t>(i2)],
-                                                      tpal, static_cast<int>(b2.x),
-                                                      static_cast<int>(b2.y));
-                            }
-                        };
-                    }
-                    {
-                        auto rt = make_render_target(trans.old_frame, *fp.surface,
-                                                *fp.hd_cache);
-                        compose_frame(rt, g.state, g.render,
-                                      /*draw_player=*/false, old_bubble_hook);
-                    }
-                    fp.draw_hud_for(trans.old_frame);
-                    if (wsp.active()) {
-                        // Wide OLD frame for the slide, built WHILE the transient
-                        // secret state is live (secret_flag=1, player at exit,
-                        // old_bubble_hook) — a native-320 sibling of trans.old_frame
-                        // wrapped with the secret-room cache (no neighbours, null
-                        // backdrop → self-tile margins).  Must precede the restore.
-                        FrameBuffer oc{};
-                        RenderTarget rt{oc.px.data(), 320, 200, 1, nullptr,
-                                        nullptr};
-                        rt.advance_state = false;
-                        compose_frame(rt, g.state, g.render, /*draw_player=*/false,
-                                      old_bubble_hook);
-                        wsp.wrap_wide(oc, trans.slide_old_wide);
-                        trans.slide_old_wide_ok = true;
-                    }
-                    g.state.secret_flag = 0;   // restore
-                    g.state.player.x = saved_rx;
-                    g.state.player.y = saved_ry;
-                } else {
-                    trans.kind = 2;   // cave/secret/warp fade pair
-                    // Fades keep the player on the old frame (the blend to
-                    // black hides it) — snapshot last frame as displayed.
-                    trans.old_frame = fb;
-                }
-            }
-
-            // ── Widescreen transitions (§8.7) — outgoing frame composed WIDE
-            // BEFORE the rebind, while the cache still reflects the OLD screen ──
-            // Decide whether this transition involves a ws_present_path screen on
-            // the OLD side (the new side is checked after the rebind, below).  We
-            // widen the two flavors whose 320 path pops the bars / jumps the HUD:
-            //   • kind 1 (surface↔surface pan) — the user's main complaint
-            //   • kind 2 (cave/secret/warp fade pair)
-            // The enhanced secret SLIDES (kind 3/4) stay on the 320 path: they
-            // are vertical pans between a surface and a self-tile secret room, and
-            // kind 4 temporarily mutates secret_flag/player to render its outgoing
-            // frame — too entangled to widen cleanly without regression risk.  In
-            // widescreen those slides are consistently 320-pillarboxed (no
-            // mid-flavor pop); widening them is a documented follow-up.
-            trans.wide = false;
-            trans.old_wide.clear();
-            bool ws_old = false;
-            const bool ws_eligible_kind =
-                (trans.kind == 1 || trans.kind == 2 ||
-                 trans.kind == 3 || trans.kind == 4);
-            if (wsp.active() &&
-                (trans.kind == 1 || trans.kind == 2)) {
-                // The peek CACHE is still the old screen's here, but the
-                // STATE is not: enter_cave/exit_cave have already flipped
-                // cave_flag + current_screen to the NEW side (see the restore
-                // block below, which exists for exactly that reason).
-                // present_path()'s surface_selffill() case reads those two
-                // fields, so on a cave EXIT it mis-reads the outgoing CAVE as a
-                // no-neighbour SURFACE screen and wraps it with composed
-                // margins — the cave fade-OUT grew widescreen content the cave
-                // fade-IN correctly lacks.  pf.cave/pf.secret describe the
-                // OUTGOING side, so gate on them.
-                ws_old = !pf.cave && !pf.secret && wsp.present_path();
-
-                // Native-320 outgoing center matching the kind's content, composed
-                // from g.state (still the OLD screen — assets not yet rebound):
-                //   kind 1 (pan): player-LESS (the player rides the incoming
-                //                 screen, mirroring the HD trans.old_frame compose).
-                //   kind 2 (fade): player-INCLUDED (the fade-to-black hides it; the
-                //                  320 path snapshots `fb` with the player on it).
-                FrameBuffer old_center{};   // 320x200
-                {
-                    // kind 2 (cave/secret/warp fade): by the time this block runs,
-                    // enter_cave / exit_cave have ALREADY moved the player to the
-                    // NEW screen's entry position and flipped cave_flag /
-                    // current_screen.  The classic 320 path dodges this by
-                    // snapshotting `fb` (the genuine last frame); the wide path
-                    // re-composes, so without restoring the OLD screen state here
-                    // the outgoing fade frame draws the player (and cave-vs-surface
-                    // mode) at the NEW position over the OLD background — the
-                    // "player flashes/jumps between the cave-exit and surface-entry
-                    // position" regression (matches the early Python fix
-                    // screen_scroll_transition_in_game.md, restricted there to the
-                    // pan path).  The OLD screen's assets + entities are still bound
-                    // (bind_screen runs below), so restoring the pre-change flags +
-                    // screen + player position reproduces the true outgoing frame.
-                    // advance_state=false: this is a render-only re-compose; the
-                    // one authoritative per-tick advance is the main fb compose.
-                    const int cur_px = g.state.player.x;
-                    const int cur_py = g.state.player.y;
-                    const int cur_screen = g.state.current_screen;
-                    const int cur_cave = g.state.cave_flag;
-                    const int cur_cave_index = g.state.cave_index;
-                    const int cur_secret = g.state.secret_flag;
-                    const int cur_psprite = g.state.player.sprite;
-                    const int cur_pdx = g.state.player.dx;
-                    const int cur_pdy = g.state.player.dy;
-                    const int cur_pfacing = g.state.player.facing_left;
-                    const int cur_pclub = g.state.player.club_flag;
-                    const int cur_emerge = g.state.cave_emerge_frames;
-                    if (trans.kind == 2) {
-                        g.state.player.x = pf.px;
-                        g.state.player.y = pf.py;
-                        g.state.current_screen = pf.screen;
-                        g.state.cave_flag = pf.cave ? 1 : 0;
-
-                        // Restore the outgoing cave's index too (the exit set it
-                        // to -1) so the STOP-sign render fires in the fade frame.
-                        g.state.cave_index = pf.cave ? pf.cave_index : -1;
-                        g.state.secret_flag = pf.secret ? 1 : 0;
-
-                        // Player presentation of the LAST PRESENTED frame (the
-                        // classic 320 path gets this for free by snapshotting
-                        // `fb`): descent frame 46 + its dx on cave entry; the
-                        // pre-emerge walk sprite (emerge=prev, normally 0) on
-                        // cave exit.  advance_state=false above keeps the
-                        // club-flag draw from double-decrementing.
-                        // (Teleport tick fields are deliberately NOT swapped:
-                        // on the sign-teleport consume tick both prev and cur
-                        // values hide the player entirely — identical output —
-                        // and the cloud FX is drawn by game_app hooks, not by
-                        // compose_frame.)
-                        g.state.player.sprite = pf.psprite;
-                        g.state.player.dx = pf.pdx;
-                        g.state.player.dy = pf.pdy;
-                        g.state.player.facing_left = pf.pfacing;
-                        g.state.player.club_flag = pf.pclub;
-                        g.state.cave_emerge_frames = pf.emerge;
-                    }
-                    RenderTarget rt{old_center.px.data(), 320, 200, 1, nullptr,
-                                    nullptr};
-                    rt.advance_state = false;
-                    compose_frame(rt, g.state, g.render,
-                                  /*draw_player=*/trans.kind == 2);
-                    if (trans.kind == 2) {
-                        g.state.player.x = cur_px;
-                        g.state.player.y = cur_py;
-                        g.state.current_screen = cur_screen;
-                        g.state.cave_flag = cur_cave;
-                        g.state.cave_index = cur_cave_index;
-                        g.state.secret_flag = cur_secret;
-                        g.state.player.sprite = cur_psprite;
-                        g.state.player.dx = cur_pdx;
-                        g.state.player.dy = cur_pdy;
-                        g.state.player.facing_left = cur_pfacing;
-                        g.state.player.club_flag = cur_pclub;
-                        g.state.cave_emerge_frames = cur_emerge;
-                    }
-                }
-
-                // Wrap with the OLD side's peek-vs-bezel rule.  Whether the wide
-                // path actually runs is decided after the rebind (ws_old || ws_new).
-                // A kind-2 fade's OUTGOING frame must carry the SAME margins as
-                // the steady view it fades from — the peek cache + seam lists
-                // (straddler completions, row bridges, black base) are still the
-                // OLD screen's here, so wrap_wide_static reproduces it exactly.
-                // wrap_wide (compose_widescreen torus/mirror) instead flashed
-                // stale mirror content for the whole fade: the L3 trunk-entry
-                // dirt clutter (this branch's original s9-only scope), the L7 S2
-                // cave-entry rail gap, the S9→S10 warp-fade mirror, the S12→S13
-                // fade's cave-hall backdrop.  Restore the outgoing screen number
-                // so per-screen rules (L3 s9/s17 void, L7 cave-hall base) fire.
-                // Cave/secret bezel sides (ws_old false) keep wrap_wide_for.
-                if (ws_old && trans.kind == 2) {
-                    const int cur_screen = g.state.current_screen;
-                    g.state.current_screen = pf.screen;
-                    wsp.wrap_wide_static(old_center, trans.old_wide);
-                    g.state.current_screen = cur_screen;
-                } else {
-                    wsp.wrap_wide_for(old_center, ws_old, trans.old_wide);
-                }
-            } else if (wsp.active() &&
-                       (trans.kind == 3 || trans.kind == 4)) {
-                // kind 3/4: the wide OLD buffer was already built + wrapped inside
-                // the classification block (trans.slide_old_wide), while the secret
-                // state was live; ws_old just records that the old side is wide.
-                ws_old = trans.slide_old_wide_ok;
-            }
-
-            // The L3 trunk-descent branch (dispatched in run_platform_level)
-            // already called clear_per_screen_state, bind_screen, and cleared
-            // screen_change — this helper is only reached on every OTHER
-            // transition, so the common path runs unconditionally here.
-            systems::clear_per_screen_state(g.state);
-            bind_screen(g, g.state.current_screen);
-            wsp.update_cache();   // recompute peek for the new screen
-            g.state.screen_change = false;
-
-            // The original skips walk/gravity for one frame after every
-            // screen change (the screen-draw frame runs no gameplay).
-            g.state.transition_skip = true;
-
-            // The NEW screen's widescreen status is now known (cache updated).
-            // The wide transition path runs when EITHER side is ws_present —
-            // so neither side ever pillarbox-pops the bars mid-pan/fade.
-            if (wsp.active() && ws_eligible_kind) {
-                const bool ws_new = wsp.present_path();
-                trans.wide = ws_old || ws_new;
-            }
-
-            // Note: the L3 trunk-descent path keeps trans.wide false — its
-            // descent animation is its own (non-peek) flow, left unchanged.
+// The F5 report of a platform level: the live SystemsState, the widescreen
+// presenter's display state, and — when the present path transforms the
+// frame (HD or widescreen) — the frame as the player saw it.
+void write_platform_report(
+    Loaded& g, WidescreenPresenter& wsp, SDL_Renderer* ren, SDL_Window* win,
+    const FrameBuffer& shot, const BugAnnotations& ann, int display_level,
+    int internal, int hd_scale, bool hd,
+    const std::function<void(FrameBuffer&, bool, bool)>& upload_and_show) {
+    // Read the present path's live state at the moment of capture — the
+    // report is otherwise silent about exactly the thing a visual bug is
+    // about (bug_capture.hpp's DisplayInfo note).
+    DisplayInfo di = read_display_info(ren, win);
+    di.aspect = wsp.aspect();
+    di.hd = wsp.hd();
+    di.hd_scale = wsp.hd_scale();
+    di.ws_active = wsp.active();
+    di.ws_margin = wsp.margin();
+    di.ws_native_w = wsp.native_w();
+    const bool want_presented = hd || wsp.present_path();
+    const std::string dir = write_bug_report(
+        g.state, shot, g.render.entity_sprites, display_level, internal,
+        hd_scale, ann, want_presented, di);
+    // screenshot_presented.png — what the player actually saw: the scene run
+    // through the live present (HD upscale + widescreen margins), which the
+    // native shot skips.  Re-render the frozen scene WITHOUT presenting so
+    // RenderReadPixels sees the backbuffer (a post-present read is black on
+    // Metal).  Classic 1x is pixel-equal to the native shot, so it is skipped
+    // there.  Empty bubble hook: the L1-secret cosmetic bubbles are
+    // immaterial to a bug shot.
+    if (!dir.empty() && want_presented) {
+        if (wsp.present_path()) {
+            wsp.present(std::function<void(RenderTarget&)>{},
+                        /*do_present=*/false);
+        } else {
+            FrameBuffer copy = shot;
+            upload_and_show(copy, /*with_hud=*/true, /*do_present=*/false);
+        }
+        capture_renderer_output(ren, dir + "/screenshot_presented.png");
+    }
 }
 
 LevelOutcome run_platform_level(GameOptions& opts, int display_level,
@@ -842,23 +829,11 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                                 std::optional<SaveState>& out_load,
                                 std::optional<PendingReinit>& out_reinit,
                                 int& out_warp_display) {
-    InputReplay replay;
-    if (!opts.replay.empty() && !replay.load(opts.replay)) {
-        // load() returns false when the file has zero input events — almost
-        // always because a --trace file (one FrameState object per line, no
-        // key/action/time_ms) was passed to --replay by mistake.  Silence here
-        // reads as "replay does nothing"; say what to do instead.
-        std::fprintf(stderr,
-            "olduvai: --replay '%s' contained no input events — nothing to "
-            "replay.  This file is likely a --trace capture (game state), not "
-            "inputs.  Record a replayable session with --record-inputs "
-            "<file>, then --replay that file.\n",
-            opts.replay.c_str());
-    }
-    TraceWriter trace;
-    if (!opts.trace.empty()) trace.open(opts.trace);
-    InputRecorder input_rec;
-    if (!opts.record_inputs.empty()) input_rec.open(opts.record_inputs);
+    RunCapture capture;
+    capture.open(opts.replay, opts.trace, opts.record_inputs);
+    InputReplay& replay = capture.replay;
+    TraceWriter& trace = capture.trace;
+    InputRecorder& input_rec = capture.input_rec;
 
     // HD upscaling + the enhanced (vector) HUD/menu are one mode: they require
     // --enhanced.  An hd_profile alone (e.g. a stray play.json key) no longer
@@ -898,6 +873,12 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                      opts.game_dir.string().c_str());
         return LevelOutcome::kQuit;
     }
+    // The level the user asked for (--level) is the DISPLAY level, while the
+    // rules keying on the level number use the INTERNAL one, and slots 3 and 5
+    // swap (kGameLevelOrder).  Say both once at load so a hand-run capture
+    // names the level it actually photographed (BACKLOG §6, 2026-09-21).
+    std::fprintf(stderr, "game: level %d (internal %d)\n", display_level,
+                 internal);
 
     // Enhanced icy-glider sea-level normalisation (level_setup.hpp): flatten the
     // decorative water to one continuous body during the glider (L5, enhanced).
@@ -922,6 +903,11 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         g.state.player.lives = 99;     // EXE cap
         g.state.food_count = systems::kFoodGate;  // full belly
     }
+    // OLDUVAI_FORCE_FOOD=<n>: start the level with n food (debug/test hook,
+    // like the other OLDUVAI_FORCE_*).  --god cannot do it under --replay,
+    // and tests/food_gate_transition.sh needs the gate screen both ways.
+    if (const int food = env_int("OLDUVAI_FORCE_FOOD", -1); food >= 0)
+        g.state.food_count = food;
 
     // Enhanced #20b — level-start arrival materialization (owner idea
     // 2026-07-05): the mid-air spawn plays the teleport ARRIVAL sequence
@@ -1194,11 +1180,23 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
             g.state.teleport_fx_y + (30 - s.height));
     };
 
+    // Enhanced: the L1 balloon bunch floats away when the ride lands on
+    // screen 12 (render/rising_balloons.hpp — shared with the boss fly-in).
+    // Stepped once per tick before the compose; `fx_alpha` interpolates its
+    // rise on the smooth-motion sub-frames (1 everywhere else).
+    RisingBalloons rising_balloons;
+    float fx_alpha = 1.0f;
+    auto draw_rising_balloons = [&](RenderTarget& t) {
+        rising_balloons.draw(t, g.render.entity_sprites, g.render.palette,
+                             fx_alpha);
+    };
+
     // The widescreen present draws the smoke tail over its wide foreground
     // (same site the in-loop wsp.present lambda called it from).
     wsp.set_draw_overlay_tail([&](RenderTarget& t) {
         draw_l3_smoke_tail(t);
         draw_teleport_fx(t);
+        draw_rising_balloons(t);
     });
     bool running = true;
 
@@ -1396,9 +1394,15 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     // BannerPresenter owns the fly-away latch and the wall-clock animation
     // (banners.hpp); the shell keeps the enhanced-only gating at the call
     // sites and the once-per-logic-tick arm_tick() placement below.
-    BannerPresenter banners(hd_text, g.state, opts.banner_fx);
+    BannerPresenter banners(hd_text, g.state, opts.banner_fx,
+                            opts.frames > 0 || !opts.screenshot.empty());
+    // Every banner draw — both presenters, the smooth path — comes through
+    // here, so this is the one place that keeps banners out from under an
+    // open menu: pause, the F5 form, the F7 picker (owner report, 2026-09-17:
+    // NOT ENOUGH FOOD stayed on top of the pause menu).
     auto draw_enhanced_banners = [&](std::vector<std::uint8_t>& b,
                                      int ow, int oh) {
+        if (pause.open() || report_form.open() || cheats.open()) return;
         banners.draw(b, ow, oh);
     };
 
@@ -1424,9 +1428,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     // (or use OLDUVAI_REINIT_TEST, which reinit_smoke drives instead).
     // Parsing + key injection live in menu_script_util.hpp (shared with the
     // title-menu walk); the type:/chord tokens below stay local to this loop.
-    diag.menu.script = parse_menu_script(std::getenv("OLDUVAI_MENU_SCRIPT"));
-    if (const char* d = std::getenv("OLDUVAI_MENU_SCRIPT_DIR"))
-        diag.menu.dir = d;
+    diag.menu.load_from_env();
 
     // The per-frame upload/composite/present pipeline now lives in
     // FramePresenter (frame_presenter.cpp); wire it to the live run-loop state.
@@ -1456,13 +1458,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     fp.present_calls = &diag.stats.present_calls;
     // The HUD overlay is owned by the LevelSurface and reached by both
     // presenters, so its sinks are set once here rather than per presenter.
-    surface.overlay().clear_ms = &diag.stats.ov_clear_ms;
-    surface.overlay().upload_ms = &diag.stats.ov_upload_ms;
-    surface.overlay().blit_ms = &diag.stats.ov_blit_ms;
-    surface.overlay().perf_ms = diag.stats.perf_ms;
-    surface.overlay().hash_ms = &diag.stats.ov_hash_ms;
-    surface.overlay().uploads_skipped = &diag.stats.ov_skipped;
-    surface.overlay().stats_on = diag.stats.enabled;
+    wire_overlay_stats(diag.stats, surface.overlay());
     fp.perf_ms = diag.stats.perf_ms;
     fp.stats_on = diag.stats.enabled;
     // The widescreen presenter accumulates into the SAME counter: a frame goes
@@ -1516,13 +1512,6 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                            frame_ms);
     const PresentFn present = screen.fn();
 
-    auto skip_held = []() -> bool {
-        const Uint8* k = SDL_GetKeyboardState(nullptr);
-        return k[SDL_SCANCODE_SPACE] != 0 ||
-               (k[SDL_SCANCODE_RETURN] != 0 && enter_skip_allowed()) ||
-               gamepad::fire_held();
-    };
-
     // Enhanced score tally: route text through the cartoon vector font at HD
     // resolution.  present_hd uploads a ready HD buffer; the
     // tally builds it (upscaled black base + cartoon rows).  Classic → null.
@@ -1533,27 +1522,14 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                                           &text_overlay, &lsz,
                                           hd_scale, &opts.hd_profile,
                                           frame_ms};
-    TextScreenHd tally_hd_text;
-    if (use_hd_text) {
-        tally_hd_text = make_text_screen_hd(text_screen_deps,
-                                            "OLDUVAI_DUMP_TALLY", "tally");
-    }
-
     LevelOutcome outcome = LevelOutcome::kQuit;
 
-    // Enhanced loading screen: route the two text rows through the cartoon
-    // vector font at HD res (reference records the loading lines into a
-    // TextLayer).  Classic → null hd_text (byte-identical bitmap path).
-    //
-    // Same presenter as the tally — this used to copy tally_hd_text's four
-    // fields one by one, which is what a shared type looks like before anyone
-    // says so.  It differs only in which gate dump it answers to.
-    TextScreenHd loading_hd_text;
-    if (use_hd_text) {
-        loading_hd_text = make_text_screen_hd(text_screen_deps,
-                                              "OLDUVAI_DUMP_LOADING",
-                                              "loading");
-    }
+    // The loading card and the tally both route their text rows through the
+    // cartoon vector font at HD res (the reference records the loading lines
+    // into a TextLayer); classic passes a null hd_text and keeps the
+    // byte-identical bitmap path.  Both handles are built by
+    // ScreenPresenter::text_screen at the screen itself — they differ only in
+    // which gate dump they answer to, which is the argument for one wiring.
 
     // Warm the HD sprite cache BEFORE the loading screen, not after: the
     // upscales then happen while "Please Wait" is already on the display,
@@ -1579,33 +1555,23 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     }
 
     // Level-entry loading screen.
-    screen.begin_screen("OLDUVAI_DUMP_LOADING", "loading");
-    if (!show_loading_screen(nullptr, display_level, g.charset,
-                             g.render.palette, present, loading_hd_text)) {
+    if (!screen.text_screen(text_screen_deps, use_hd_text,
+                            "OLDUVAI_DUMP_LOADING", "loading",
+                            [&](const TextScreenHd& hd) {
+                                return show_loading_screen(
+                                    nullptr, display_level, g.charset,
+                                    g.render.palette, present, hd);
+                            })) {
         running = false;
     }
-    screen.end_screen();   // fades/transitions/descent are not this gate
 
     // Level music starts AFTER the loading screen, with the level itself —
     // the reference plays it post-setup (_show_loading_screen →
     // _setup_level → play_level_music); starting it earlier had the track
     // running over the "Please Wait" text.
-    if (running && audio.music_available()) {
-        if (const char* mname = level_music_name(internal)) {
-            formats::CurArchive fa2(prepare::slurp_file(opts.game_dir / "FILESA.CUR"));
-            formats::CurArchive fb3(prepare::slurp_file(opts.game_dir / "FILESB.CUR"));
-            const std::vector<std::uint8_t>* md = nullptr;
-            if (fa2.contains(mname)) md = &fa2.get(mname).data;
-            else if (fb3.contains(mname)) md = &fb3.get(mname).data;
-            if (md != nullptr) {
-                std::string lower = mname;
-                for (auto& ch2 : lower) {
-                    lower[static_cast<std::size_t>(&ch2 - lower.data())] =
-                        static_cast<char>(std::tolower(ch2));
-                }
-                audio.play_music(*md, formats::mdi_track_id(lower));
-            }
-        }
+    if (running) {
+        if (const char* mname = level_music_name(internal))
+            play_game_music(&audio, opts.game_dir, mname);
     }
 
     // Screen-change transition bookkeeping: the old screen's last frame
@@ -1645,6 +1611,10 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
     // PauseService (CC3 seam 2); begin_frame() runs the dirty-session
     // Discard at the TOP of the loop so it fires on the first iteration
     // after pause closes, before any input that could reopen pause.
+    // The player position of the last PRESENTED frame, for the level-end
+    // fade (set by the 8b intercept on its way out of the loop).
+    int end_px = 0;
+    int end_py = 0;
     while (running) {
         cursor_autohide_frame();   // keyboard game: park the OS arrow
         pause.begin_frame();
@@ -1664,8 +1634,8 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         // OLDUVAI_MENU_SCRIPT: consume one token before the poll so the synthetic
         // key is processed by this frame's event loop (drives pause/menus exactly
         // like a human — open via ESC, navigate, activate, cheats).
-        if (!diag.menu.script.empty()) {
-            if (drive_menu_script(diag, report_form)) {
+        if (diag.menu.active()) {
+            if (drive_menu_script(diag.menu, &report_form)) {
                 outcome = LevelOutcome::kQuitProgram;
                 running = false;
                 break;
@@ -1734,16 +1704,35 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         // the menu (or confirm dialog) over a dark backdrop.  The `continue`
         // skips frame-counter, run_frame, post-frame logic and gameplay render
         // — a full freeze.  Quit to Title routes through the normal
-        // game-over→title path; Quit to Desktop / Restart use new outcomes. ──
+        // game-over→title path; Exit Game / Restart use new outcomes. ──
         // ── F5 report form: freeze + draw over the frozen scene (before the
         // pause block; the two are mutually exclusive since F5 only fires
         // outside pause).  Save writes the report from the stashed frame;
         // the service owns the whole frame when open (ReportFormService,
         // CC3 seam 1). ──
-        if (report_form.service_freeze(
-                {g, god_active, display_level, internal, hd_scale,
-                 /*want_presented=*/hd || wsp.present_path(), wsp, ren, win,
-                 frame_ms, upload_and_show_fn}))
+        if (report_form.open() && report_form.service_freeze(
+                {[&](FrameBuffer& out) {
+                     g.state.god_mode = god_active;
+                     RenderTarget prt{out.px.data(), out.w, out.h, 1,
+                                      nullptr, nullptr};
+                     prt.advance_state = false;   // see FreezeDeps::compose
+                     compose_frame(prt, g.state, g.render,
+                                   /*draw_player=*/true);
+                 },
+                 [&](FrameBuffer& f) {
+                     upload_and_show_fn(f, /*with_hud=*/false,
+                                        /*do_present=*/true);
+                 },
+                 [&](const FrameBuffer& shot, const BugAnnotations& ann) {
+                     write_platform_report(g, wsp, ren, win, shot, ann,
+                                           display_level, internal, hd_scale,
+                                           hd, upload_and_show_fn);
+                 },
+                 g.charset,
+                 g.render.entity_sprites.size() > 33
+                     ? &g.render.entity_sprites[33]
+                     : nullptr,
+                 &g.render.palette, frame_ms}))
             continue;
         {
             // Freeze + draw live in PauseService (CC3 seam 2); the intent →
@@ -1771,7 +1760,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                     case PauseService::FreezeResult::kAbortGameOver:
                         outcome = LevelOutcome::kGameOver; break;
                     case PauseService::FreezeResult::kShotQuit:
-                        // kQuitProgram is the "Quit to Desktop" outcome
+                        // kQuitProgram is the "Exit Game" outcome
                         // run_game exits on (pause_shot must not advance the
                         // sequencer).
                         outcome = LevelOutcome::kQuitProgram;
@@ -1887,61 +1876,16 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         if (frame == env_int("OLDUVAI_FORCE_LEVEL_COMPLETE", -1))
             g.state.level_complete = true;
 
-        // 8b. Level-complete intercept.
+        // 8b. Level-complete intercept: leave the loop, as the reference
+        // does (`if state.level_complete: break`) and the EXE does (FUN_21f3_006f
+        // +0x01a1 jumps to its exit block) — the pseudo-exit screen never
+        // binds or renders, and this frame is neither composed, presented nor
+        // traced.  The fade and the tally run after the loop, like boss_app's.
         if (g.state.level_complete) {
-            // The original jumps straight to its exit block — the
-            // pseudo-exit screen never binds or renders.
             g.state.screen_change = false;
-
-            // Fade to black from the LAST PRESENTED gameplay frame (already in
-            // fb), then the tally.  Do NOT re-compose g.state here: by the time
-            // level_complete is set, transitions.cpp has wrapped the player to
-            // the LEFT edge of the final screen (the EXE pseudo-exit), so
-            // re-composing flashes that one-frame glitch.  The EXE/Python jump
-            // straight to the fade from the clean last frame (the reference
-            // breaks before rendering the level-complete state).
-            if (wsp.active()) {
-                fade_wide_to_black(g, wsp, win, pf.px, pf.py,
-                                   frame_ms, running);
-            } else {
-                FrameBuffer work{fb_w, fb_h};
-                for (int f2 = 0; f2 <= kFadeFrames; ++f2) {
-                    apply_fade(work, fb, static_cast<double>(f2) / kFadeFrames);
-                    dump_level_fade(work.px, work.w, work.h);
-                    if (!present(work)) break;
-                }
-            }
-
-            // Fade-dump mode stops the PROGRAM here.  Every dumped frame comes
-            // from the fade above, so by this point the gate has everything it
-            // measures; going on would play the tally and then the next level,
-            // and the run only ended because the harness timed it out — six
-            // minutes of wall clock, of which fifty seconds was work.  A gate
-            // that slow gets disabled, so it exits instead.
-            if (std::getenv("OLDUVAI_DUMP_LEVEL_FADE") != nullptr) {
-                outcome = LevelOutcome::kQuitProgram;
-            } else {
-                play_tally_music(audio, opts);
-                // show_score_tally returns FALSE when the tally was quit — a
-                // window close.  boss_app has always acted on that; this side
-                // discarded it, so closing the window during a platform tally
-                // was ignored and the game advanced to the next level instead
-                // of exiting.  One screen, two stacks, two behaviours: the
-                // §3.14 drift, in the return value this time.
-                //
-                // It also means the dump hook needs no special case here: it
-                // returns false once it has its frames, which is exactly the
-                // "tally was quit" it already is.
-                screen.begin_screen("OLDUVAI_DUMP_TALLY", "tally");
-                const bool tally_done =
-                    show_score_tally(g.state, display_level, 500, g.charset,
-                                     g.render.palette, present, skip_held,
-                                     tally_hd_text,
-                                     TallyAudio{&audio, opts.enhanced});
-                outcome = tally_done ? LevelOutcome::kComplete
-                                     : LevelOutcome::kQuitProgram;
-            }
-            running = false;
+            end_px = pf.px;
+            end_py = pf.py;
+            break;
         }
         if (g.state.game_over || abort_to_title) {
             // The MORT.MDI death music + THEEND.PC1 picture are now shown by
@@ -2080,6 +2024,14 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                 }
             };
         }
+        // The balloons are held while the L1 ride is on (drawn at the same
+        // origin as the death halo); a death sends up the game's own halo.
+        rising_balloons.step(g.state.enhanced_active,
+                             g.state.current_level == 1 &&
+                                 g.state.glider_active,
+                             g.state.player.death_counter == 0,
+                             g.state.player.x, g.state.player.y - 30,
+                             g.state.current_screen);
         {
             auto rt = make_rt(fb);
 
@@ -2100,6 +2052,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                           bubble_hook);
             draw_l3_smoke_tail(rt);
             draw_teleport_fx(rt);
+            draw_rising_balloons(rt);
         }
 
         advance_once_per_tick(g, fp, fb, banners, l3_smoke_tail);
@@ -2115,6 +2068,8 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         // The HUD pans with the screen — both buffers carry their own
         // baked HUD, matching the original's full-screen CRTC pan.
         if (trans.kind != 0) {
+            // No banner over a moving screen (BannerPresenter::set_suppressed).
+            banners.set_suppressed(true);
             // Narrow shell context for the extracted blocking players
             // (transition_players.cpp, OL-B3).  Built per played transition —
             // the by-value fields carry this frame's values and pace_last
@@ -2252,6 +2207,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                                 trans.dir);
             }
             trans.kind = 0;
+            banners.set_suppressed(false);
         }
 
         // Debug/test hook: OLDUVAI_AUTO_FULLSCREEN=<frame> programmatically
@@ -2348,6 +2304,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                             static_cast<float>(smooth_N);
                     if (alpha > 1.0f) alpha = 1.0f;
                 }
+                fx_alpha = alpha;   // this sub-frame's balloon rise
 
                 // ONE guarded decision per field, writing BOTH shadows.
                 //
@@ -2515,6 +2472,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                                   bubble_hook);
                     draw_l3_smoke_tail(rt);
                     draw_teleport_fx(rt);
+                    draw_rising_balloons(rt);
                 }
 
                 fp.draw_hud_for(fb);
@@ -2603,6 +2561,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                     if (sub_spent < sub_ms) SDL_Delay(sub_ms - sub_spent);
                 }
             }
+            fx_alpha = 1.0f;
 
             // Restore every logic value the sub-frames touched.
             g.state.player = saved_p;
@@ -2665,47 +2624,22 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
 
         ++frame;
         if (!opts.screenshot.empty() && frame == opts.screenshot_frame) {
-            if (wsp.active()) {
-                // Widescreen: re-render through the SAME present the live frame
-                // used so the capture matches the screen exactly — peek frames
-                // via wsp.present (wide composite), bezel/pillarbox
-                // frames (caves, bosses, L3/L7) via fp.present (centre 320
-                // pillarboxed at wsp.margin() with the correctly-mapped HUD).  Then
-                // RenderReadPixels the full output.
-                // Render WITHOUT presenting (do_present=false) so RenderReadPixels
-                // sees the frame in the backbuffer — on Metal a read AFTER present
-                // returns black (the swapchain image is gone).
+            if (wsp.active() || hd) {
+                // HD / widescreen: the vector HUD text lives in the
+                // output-resolution overlay, not in fb, so capture the FINAL
+                // output — re-rendered through the SAME present the live
+                // frame used (peek frames via wsp.present's wide composite;
+                // everything else via fp.present, which also places the text
+                // for the picture's aspect), WITHOUT presenting: on Metal a
+                // RenderReadPixels after present returns black.  fp.present
+                // redraws the opaque HUD bars into fb; drawing them twice
+                // leaves the same pixels.  (The HD branch here used to
+                // re-draw scene + HUD text by hand — a copy of fp.present
+                // that missed every change to it, §3.23 included.)
                 if (wsp.present_path())
                     wsp.present(bubble_hook, /*do_present=*/false);
                 else
                     fp.present(fb, /*with_hud=*/true, /*do_present=*/false);
-                capture_renderer_output(ren, opts.screenshot);
-            } else if (hd) {
-                // HD: the vector HUD text now lives in the output-resolution
-                // overlay (drawn AFTER the scene RenderCopy), not in fb — so
-                // capture the FINAL rendered output (scene + overlay).  Re-draw
-                // the scene + overlay WITHOUT presenting (RenderReadPixels reads
-                // the backbuffer, which a prior present may have swapped away),
-                // then read the output-resolution pixels.
-                SDL_UpdateTexture(tex, nullptr, fb.px.data(), fb.w * 4);
-                SDL_RenderClear(ren);
-                SDL_RenderCopy(ren, tex, nullptr, nullptr);
-                if (use_hd_text) {
-                    enhance::EnhancedHudLayout hud_layout =
-                        enhance::compute_enhanced_hud_layout(hd_text, g.state);
-                    // fb already carries the bars (drawn by the last
-                    // fp.present); only the text overlay is missing.
-                    int ow2 = 0, oh2 = 0;
-                    if (text_overlay.begin(ren, hd_text, ow2, oh2)) {
-                        enhance::draw_enhanced_hud_text(text_overlay.buffer(),
-                                                        ow2, oh2, hd_text,
-                                                        hud_layout);
-                        draw_enhanced_banners(text_overlay.buffer(), ow2, oh2);
-                        if (cheats.open())
-                            draw_cheat_rows(text_overlay.buffer(), ow2, oh2);
-                        text_overlay.flush(ren, lsz.w(), lsz.h());
-                    }
-                }
                 capture_renderer_output(ren, opts.screenshot);
             } else {
                 // Classic: the bitmap HUD is in the 320x200 buffer — save it.
@@ -2731,6 +2665,50 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         pace_end_of_tick(ren, tex, dos_ticker, smooth_vsync_ran,
                          opts.vga_scan, hd, vga_scan_ok, &diag.vga.fill_presents,
                          &diag.vga.fill_ticks);
+    }
+
+    // ── Level end: fade to black, then the tally — after the loop.  The 8b
+    // break skipped the loop's game-over check, so it is made here, in the
+    // reference's order: a game over on the completing frame wins.
+    if (g.state.level_complete && (g.state.game_over || abort_to_title)) {
+        outcome = LevelOutcome::kGameOver;
+    } else if (g.state.level_complete) {
+        // Fade from the LAST PRESENTED gameplay frame (still in fb).  Do NOT
+        // re-compose g.state: level_complete has already moved the player
+        // (the EXE pseudo-exit), so a re-compose would show a frame the
+        // player never saw.
+        bool fade_ok = true;
+        if (wsp.active()) {
+            bool still_running = true;
+            fade_wide_to_black(g, wsp, win, end_px, end_py, frame_ms,
+                               still_running);
+            fade_ok = still_running;
+        } else {
+            fade_ok = fade_to_black(fb, present, [](const FrameBuffer& f) {
+                dump_level_fade(f.px, f.w, f.h);
+            });
+        }
+
+        // Fade-dump mode stops the PROGRAM here: the gate has every frame it
+        // measures, and playing the tally and the next level only made the
+        // harness wait for its timeout (six minutes, fifty seconds of work).
+        if (!fade_ok || std::getenv("OLDUVAI_DUMP_LEVEL_FADE") != nullptr) {
+            outcome = LevelOutcome::kQuitProgram;
+        } else {
+            // false = the tally was quit (window close) — and the dump hook's
+            // way of ending the run once it has its frames.
+            play_tally_music(&audio, opts.game_dir);
+            const bool tally_done = screen.text_screen(
+                text_screen_deps, use_hd_text, "OLDUVAI_DUMP_TALLY", "tally",
+                [&](const TextScreenHd& hd) {
+                    return show_score_tally(
+                        g.state.player.lives, g.state.score, display_level,
+                        500, g.charset, g.render.palette, present, hd,
+                        TallyAudio{&audio, opts.enhanced});
+                });
+            outcome = tally_done ? LevelOutcome::kComplete
+                                 : LevelOutcome::kQuitProgram;
+        }
     }
 
     if (draw_log != nullptr) std::fclose(draw_log);
@@ -2982,6 +2960,7 @@ int run_game(const GameOptions& opts) {
                 // stays app-side; boss_app only calls the std::function).
                 be.music_device = rt.music_device;
                 be.sfx_backend = rt.sfx_backend;
+                be.sound_avail = probe_sound_cards(rt.rom_dir, rt.soundfont);
                 be.profile_family = rt.profile_family;
                 be.persist = rt.persist;
 
@@ -3066,7 +3045,7 @@ int run_game(const GameOptions& opts) {
                         }
                     }
                 }
-                if (r.quit_program) {          // boss Pause → Quit to Desktop
+                if (r.quit_program) {          // boss Pause → Exit Game
                     quit_requested = true;
                     break;
                 }
@@ -3096,7 +3075,8 @@ int run_game(const GameOptions& opts) {
                 if (outcome == LevelOutcome::kLoadCheckpoint && load_request) {
                     // Jump to the saved level and apply the checkpoint there.
                     carry.lives = load_request->hdr.player.lives;
-                    carry.score = load_request->hdr.score;
+                    // Range-checked in deserialize: fits a 32-bit long.
+                    carry.score = static_cast<long>(load_request->hdr.score);
                     display = load_request->hdr.level;   // display level
                     restore = load_request;
                     load_request.reset();
@@ -3154,7 +3134,7 @@ int run_game(const GameOptions& opts) {
                     continue;
                 }
                 if (outcome == LevelOutcome::kQuitProgram) {
-                    quit_requested = true;   // Pause → Quit to Desktop
+                    quit_requested = true;   // Pause → Exit Game
                     break;
                 }
                 if (outcome != LevelOutcome::kComplete) {

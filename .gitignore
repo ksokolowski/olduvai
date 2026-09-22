@@ -7,6 +7,10 @@ compile_commands.json
 .cache/
 .DS_Store
 
+# per-machine CMake presets (ccache, a job count sized to one box) — CMake's own
+# convention: CMakePresets.json is shared, CMakeUserPresets.json is never committed
+CMakeUserPresets.json
+
 # the user's game files must never be committed (content policy)
 game_data
 
@@ -22,3 +26,6 @@ olduvai-*-windows-x86_64.zip
 # dir; a run that forgets to drops this file in the repo root instead.
 *.profraw
 *.profdata
+
+# Per-job test venv (windows CI builds it from tests/requirements.txt with uv)
+.venv-tests/

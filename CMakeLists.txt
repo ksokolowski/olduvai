@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.21)
 project(olduvai
-    VERSION 0.9.7
+    VERSION 0.9.8
     DESCRIPTION "Native recreation of the Prehistorik (1991) engine"
     LANGUAGES CXX C)
 
@@ -46,8 +46,10 @@ else()
     # compose, the smooth-motion lerp).  That is a numerics change needing the
     # widescreen/transition goldens re-verified, not a warning cleanup, and it
     # does not belong in a release cut.  BACKLOG §4b #9.
-    add_compile_options(-Wold-style-cast -Wcast-qual -Wformat=2
-                        -Wnon-virtual-dtor -Wextra-semi -Wimplicit-fallthrough)
+    # The three C++-only flags are scoped to C++ sources: on the vendored C
+    # (Nuked-OPL3) cc1 prints "valid for C++/ObjC++ but not for C" per file.
+    add_compile_options(-Wcast-qual -Wformat=2 -Wimplicit-fallthrough
+        "$<$<COMPILE_LANGUAGE:CXX>:-Wold-style-cast;-Wnon-virtual-dtor;-Wextra-semi>")
 endif()
 
 # Treat warnings as errors on demand (default OFF so a stray warning never
@@ -96,11 +98,12 @@ endfunction()
 # it.  SYSTEM include directories are the mechanism that can — the compiler
 # suppresses diagnostics from headers found there.  MSVC needs the /external
 # switches turned on explicitly before /external:I means anything.
+# (`/external:anglebrackets-` used to follow here: no such spelling exists —
+# only `/external:anglebrackets` does — so every TU printed D9002 and ignored
+# it, 244 times a job.  Its evident intent, <> includes NOT external, is
+# MSVC's default anyway.)
 if(MSVC)
     add_compile_options(/external:W0)
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 19.29)
-        add_compile_options(/external:anglebrackets-)
-    endif()
 endif()
 
 # Address + UB sanitizers for a verification build (local runs and the CI
@@ -322,6 +325,12 @@ if(OLDUVAI_FUZZ)
     target_compile_options(fuzz_formats PRIVATE -fsanitize=fuzzer)
     target_link_options(fuzz_formats PRIVATE -fsanitize=fuzzer)
     target_link_libraries(fuzz_formats PRIVATE olduvai_formats)
+    # The parsers live in olduvai_formats, so THAT is what needs libFuzzer's
+    # coverage hooks: -fsanitize=fuzzer on the harness instruments only the
+    # harness TU, and the fuzzer then mutates blind — the CI smoke plateaued
+    # at 43 edges over nine parsers until this landed.  -no-link adds the
+    # hooks without a second main().
+    target_compile_options(olduvai_formats PRIVATE -fsanitize=fuzzer-no-link)
 endif()
 
 # ── presentation (SDL2; optional so headless format work still builds) ─────
@@ -372,6 +381,7 @@ if(SDL2_FOUND)
         src/presentation/boss_app.cpp
         src/presentation/render/boss_render.cpp
         src/presentation/audio/audio.cpp
+        src/presentation/audio/game_music.cpp
         src/presentation/audio/host_midi.cpp
         src/presentation/audio/opl_sfx.cpp
         src/presentation/audio/midi_seq.cpp
@@ -379,6 +389,7 @@ if(SDL2_FOUND)
         src/presentation/image_out.cpp
         src/presentation/diag/draw_log.cpp
         src/presentation/diag/frame_stats.cpp
+        src/presentation/diag/menu_script.cpp
         src/presentation/sequence/end_sequence.cpp
         src/presentation/input/frame_input.cpp
         src/presentation/render/frame_presenter.cpp
@@ -391,6 +402,7 @@ if(SDL2_FOUND)
         src/presentation/menu/settings_session.cpp
         src/presentation/menu/settings_flow.cpp
         src/presentation/menu/confirm_dialog.cpp
+        src/presentation/menu/about_info.cpp
         src/presentation/level/save_state.cpp
         src/presentation/render/widescreen.cpp
         src/presentation/render/boss_widescreen.cpp
@@ -735,6 +747,9 @@ add_executable(olduvai_tests EXCLUDE_FROM_ALL
     tests/test_hd_asset_cache_disk.cpp
     tests/test_fluid_bubbles.cpp
     tests/test_game_files.cpp
+    tests/test_hash64.cpp
+    tests/test_transition_geometry.cpp
+    tests/test_edge_margin_policy.cpp
     tests/test_menu.cpp
     tests/test_menu_model.cpp
     tests/test_save_state.cpp
@@ -930,8 +945,15 @@ if(SDL2_FOUND)
         tests/test_sdl_audio.cpp
         tests/test_pause_actions.cpp
         tests/test_hud_render_stride.cpp
-        tests/test_smooth_subpixel.cpp)
+        tests/test_smooth_subpixel.cpp
+        tests/test_text_overlay_upload.cpp
+        tests/test_banners.cpp
+        tests/test_rising_balloons.cpp
+        tests/test_about_info.cpp
+        tests/test_sound_card.cpp)
     target_include_directories(olduvai_sdl_tests SYSTEM PRIVATE third_party)
+    target_compile_definitions(olduvai_sdl_tests PRIVATE
+        OLDUVAI_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     target_link_libraries(olduvai_sdl_tests PRIVATE olduvai_presentation
                                                     ${OLDUVAI_SDL2})
     add_test(NAME sdl_unit COMMAND olduvai_sdl_tests)
@@ -1104,6 +1126,47 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
+    # Enhanced: the fly-in balloons float away (owner idea 2026-09-17).
+    # Skips (77) without game data.
+    add_test(NAME balloon_flyaway
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/balloon_flyaway.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(balloon_flyaway PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # No classic NOT ENOUGH FOOD sprites in an Enhanced transition (owner
+    # report 2026-09-17). Skips (77) without game data.
+    add_test(NAME food_gate_transition
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/food_gate_transition.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(food_gate_transition PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # The F5 report written from a boss arena (BACKLOG §3.30 step 1): Display
+    # section, boss state, n/a for the platform-only rows. Skips (77).
+    add_test(NAME boss_report
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/boss_report.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(boss_report PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # Nothing is presented after the platform tally: the level loop used to
+    # re-present the finished level once, between the tally and the next
+    # "Please Wait" (owner report, 2026-09-16). Skips (77) without game data.
+    add_test(NAME tally_no_flash
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/tally_no_flash.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(tally_no_flash PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
     # Title-screen Style Apply equivalence: drives the title menu via the
     # OLDUVAI_MENU_SCRIPT walk — apply Enhanced HD at the title, then reboot
     # on the persisted config — and byte-compares the two menu shots (no
@@ -1139,6 +1202,19 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
                 "${CMAKE_SOURCE_DIR}/game_data"
                 "$<TARGET_FILE:olduvai>")
     set_tests_properties(cave_exit_margins PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # The level-EDGE margins (first/last screen, cave-hall warp seams) render
+    # their enhancement.  No gate covered them: cave_exit_margins pins a cave
+    # exit and wide_transition pins a pan, and neither composes a level edge —
+    # so the L1 island's sky+lake, L3's voided dead-end band and the L7 hall's
+    # black seams existed only in code and in the owner's memory.
+    add_test(NAME level_edge_margins
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/level_edge_margins.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(level_edge_margins PROPERTIES
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
@@ -1220,6 +1296,16 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
                 "${CMAKE_SOURCE_DIR}/game_data"
                 "$<TARGET_FILE:olduvai>")
     set_tests_properties(golden_trace_l7s4 PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # Level exit: display 5 from screen 18, walked off the right edge — the
+    # only scenario that ENDS in a level completion (§3.29).
+    add_test(NAME golden_trace_l5s18_exit
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l5s18_exit.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l5s18_exit PROPERTIES
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
@@ -1342,6 +1428,17 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
+    # HD vector text stays inside the picture at every aspect (§3.23): the
+    # overlay is drawn at output resolution, so a pillarboxed picture must be
+    # told where it is.  A property, not a hash: the bars stay black.
+    add_test(NAME aspect_hd_text
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/aspect_hd_text.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(aspect_hd_text PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
     # §3.20's two empty display-mode cells: --aspect 4:3 (the only mode with a
     # different logical HEIGHT, 240) and --aspect stretch (the only mode that
     # disables logical scaling). Each gate asserts its own output size — proof
@@ -1371,6 +1468,36 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
                 "${CMAKE_SOURCE_DIR}/game_data"
                 "$<TARGET_FILE:olduvai>")
     set_tests_properties(boss_pause_shot PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # BOSS pause GATES the smooth-motion granularity of the pause compose
+    # (BACKLOG §3.4): the plain golden cannot distinguish "correctly inert"
+    # from "not exercised", because the discrete sub-frame fill converges on
+    # the logic position.  OLDUVAI_BOSS_PAUSE_MIDINTERP injects a
+    # deterministic mid-tick float state into the fight's own globals, so this
+    # gate passes only when the pause compose honors the triple.  Skips (77)
+    # without game data.
+    add_test(NAME boss_pause_midinterp
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/boss_pause_midinterp.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(boss_pause_midinterp PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # Enhanced --play-shot REPRODUCIBILITY (BACKLOG §6).  The GET READY / NOT
+    # ENOUGH FOOD vector banners used to animate off SDL_GetTicks(), so two runs
+    # of ONE binary captured different pixels and every before/after byte
+    # comparison was silently invalid.  The banner now uses the logic tick clock
+    # in the headless capture modes.  Asserts behaviour, not a golden: two runs
+    # of the same frame must match, two different frames must differ (the banner
+    # still animates).  Skips (77) without game data.
+    add_test(NAME play_shot_determinism
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/play_shot_determinism.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(play_shot_determinism PROPERTIES
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
@@ -1673,7 +1800,7 @@ list(LENGTH _olduvai_tests _olduvai_total)
 # register only the two non-SDL gated tests (screen_tiles, sqz_parity) — as do
 # builds with no shell interpreter, since the other 18 are all .sh-driven.
 if(SDL2_FOUND AND _olduvai_shell_tests)
-    set(_olduvai_gated_expected 54)   # +1: hd_text_screens, +2: L4/L6 fights, +1: L6 slam-hd, +2: pause 4:3/stretch, +1: gameover_shot, +10: the adopted oracle scenarios (§3.15 item 2), +2: boss_l2/l6_victory
+    set(_olduvai_gated_expected 63)   # +1: boss_pause_midinterp, +1: play_shot_determinism, +1: level_edge_margins, +1: aspect_hd_text, +1: balloon_flyaway, +1: food_gate_transition, +1: boss_report, +1: golden_trace_l5s18_exit, +1: tally_no_flash, +1: hd_text_screens, +2: L4/L6 fights, +1: L6 slam-hd, +2: pause 4:3/stretch, +1: gameover_shot, +10: the adopted oracle scenarios (§3.15 item 2), +2: boss_l2/l6_victory
 else()
     set(_olduvai_gated_expected 2)
 endif()

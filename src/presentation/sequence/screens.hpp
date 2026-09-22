@@ -44,6 +44,9 @@ using SkipFn = std::function<bool()>;
 struct HdTextRow {
     int native_baseline_y;
     std::string text;
+    // 0 centred, 1 label (right-aligned to the colon column), 2 value
+    // (left-aligned after it), 3 width reservation for the value column —
+    // measured, never drawn (draw_tally_rows_overlay).
     int align = 0;
 };
 
@@ -51,7 +54,9 @@ struct HdTextRow {
 // draws the centred vector-text `rows` at the renderer's OUTPUT resolution as
 // a 1:1 overlay over the scene — so the text stays crisp regardless of how far
 // SDL scales the scene texture up to the window.  The scene buffer carries NO
-// vector text (it is left black / upscaled-only).  Returns false to abort.
+// vector text (it is left black / upscaled-only).  An EMPTY scene buffer means
+// a black scene: the presenter clears and uploads nothing.  Returns false to
+// abort.
 using HdPresentFn = std::function<bool(const std::vector<std::uint8_t>&, int w,
                                        int h, const std::vector<HdTextRow>&)>;
 
@@ -81,6 +86,12 @@ constexpr int kFadeFrames = 18;
 
 // Multiply the frame towards black (t = 0 → unchanged, 1 → black).
 void apply_fade(FrameBuffer& dst, const FrameBuffer& src, double t);
+
+// Present `from` faded to black over kFadeFrames + 1 frames (the last one
+// fully black).  `on_frame`, when set, sees each faded frame before it is
+// presented.  Returns false as soon as `present` does (the user quit).
+bool fade_to_black(const FrameBuffer& from, const PresentFn& present,
+                   const std::function<void(const FrameBuffer&)>& on_frame = {});
 
 // Fade `from` to black, then the loading screen in; hold; fade to black.
 // Returns false if the user quit.
@@ -125,7 +136,11 @@ struct TallyAudio {
     bool enhanced = false;         // gate: set from --enhanced
 };
 
-// The level-completion tally.  Mutates score/lives in `state`.
+// The level-completion tally, shared by the platform and boss drivers
+// (EXE Level_EndScreen(N,500): FUN_270a_01b4, called from the platform exits
+// 21f3:082b / 2276:0ea4 / 2361:06d6 / 25b2:0892 and the boss exits 23cf:0fc9 /
+// 24cc:0818 / 254f:0620).  Mutates `lives` and `score`.  Both drivers call it
+// AFTER their level loop has ended, so nothing is presented after it.
 // The two 4-second pauses are edge-triggered: only a fresh SPACE/RETURN
 // KEYDOWN (not a key held from gameplay) advances them.  The countdown
 // loops themselves are never skippable (EXE FUN_270a_01b4 pacing).
@@ -133,19 +148,12 @@ struct TallyAudio {
 // text rows via the cartoon vector font at HD resolution (classic bitmap path
 // suppressed) — see TextScreenHd.  A default-constructed handle (null hd_text)
 // keeps the byte-identical bitmap path.
-bool show_score_tally(systems::SystemsState& state, int display_level,
-                      int bonus, const std::vector<formats::Sprite>& charset,
-                      const std::vector<formats::Rgb>& pal,
-                      const PresentFn& present, const SkipFn& skip,
-                      const TextScreenHd& hd = {}, const TallyAudio& sfx = {});
-
-// Boss-level overload: takes lives/score by reference directly (BossPlayerState
-// has no SystemsState wrapper).  Same edge-triggered skip semantics.
-// EXE: Level_EndScreen(N,500) at 23cf:0fc9 / 24cc:0818 / 254f:0620.
+// Returns false when the tally was quit (window close).
 bool show_score_tally(int& lives, long& score, int display_level,
                       int bonus, const std::vector<formats::Sprite>& charset,
                       const std::vector<formats::Rgb>& pal,
-                      const PresentFn& present, const SkipFn& skip,
+                      const PresentFn& present,
                       const TextScreenHd& hd = {}, const TallyAudio& sfx = {});
+
 
 }  // namespace olduvai::presentation

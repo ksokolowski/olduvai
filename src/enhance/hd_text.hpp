@@ -9,9 +9,12 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace olduvai::enhance {
+
+class BannerShader;
 
 class HdText {
 public:
@@ -51,24 +54,21 @@ public:
               int baseline_y, const std::string& text, std::uint8_t r,
               std::uint8_t g, std::uint8_t b) const;
 
-    // Per-pixel styled draw (enhanced banner effects).  `shade(u, v, r, g, b)`
-    // sets the colour for each covered pixel, where u∈[0,1] spans the whole
-    // text width (left→right) and v∈[0,1] spans the cap height (top→bottom).
-    // This gives gradients (vertical = v, e.g. fire/gold), rainbows
-    // (horizontal = u) and pulses/scrolls (fold a time phase into the closure).
-    // Coverage alpha-blending is identical to draw().
-    using ShadeFn = std::function<void(float u, float v, std::uint8_t& r,
-                                       std::uint8_t& g, std::uint8_t& b)>;
-    void draw_styled(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
+    // Per-pixel banner effect (enhance/banner_shader.hpp): each covered pixel
+    // is coloured by the shader at (u, v), u spanning the text width and v the
+    // cap height.  The shader is inlined into the glyph loop — it was a
+    // std::function per pixel — and its column term (the flicker) is computed
+    // once per column.  Coverage alpha-blending is identical to draw().
+    void draw_banner(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
                      int x, int baseline_y, const std::string& text,
-                     const ShadeFn& shade) const;
+                     const BannerShader& shader) const;
 
 private:
-    // The glyph walk both draw() and draw_styled() perform: for each character,
+    // The glyph walk both draw() and draw_banner() perform: for each character,
     // rasterise, blend its coverage into `rgba` clipped to the buffer, then
     // advance the pen by the advance width plus the kerning pair.  The two
     // differed ONLY in where the ink colour came from — fixed for draw(), a
-    // shade callback over normalised (u, v) for draw_styled() — so `color`
+    // banner shader over normalised (u, v) for draw_banner() — so `color`
     // supplies it per pixel and everything else is written once.
     //
     // A template rather than a std::function so draw()'s constant colour costs
@@ -78,6 +78,25 @@ private:
     void rasterise(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h, int x,
                    int baseline_y, const std::string& text,
                    ColorFn color) const;
+
+    // Rasterised glyphs, keyed by (active scale, codepoint).  stb_truetype
+    // rebuilds a glyph from its curves (and mallocs the bitmap) on every
+    // call, and the overlay redraws animated text — the GET READY / NOT
+    // ENOUGH FOOD banners, the tally — on every present; a cache turns that
+    // into a copy.  The bitmaps are the ones stb would return, so the output
+    // is unchanged.  Main thread only (text is never drawn from the scaler
+    // workers); cleared when it grows past kMaxGlyphs (a few sizes x ASCII
+    // is a few hundred entries — only window resizes add more).
+    struct Glyph {
+        std::vector<std::uint8_t> bitmap;
+        int w = 0, h = 0, xoff = 0, yoff = 0;
+    };
+    const Glyph& glyph(int codepoint) const;
+    static constexpr std::size_t kMaxGlyphs = 4096;
+    mutable std::unordered_map<std::uint64_t, Glyph> glyphs_;
+    // draw_banner's per-column flicker, reused across calls (main thread).
+    mutable std::vector<float> col_term_;
+    mutable std::vector<std::uint8_t> col_done_;
 
     std::vector<std::uint8_t> font_data_;
     int cap_px_ = 0;         // active cap height in px (last set_cap_px arg)

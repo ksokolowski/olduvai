@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
+#include "formats/hash64.hpp"
 #include "prepare/exe_tables.hpp"
 
 #include <array>
@@ -66,12 +67,9 @@ constexpr std::uint16_t kSeparator = 0x0000;
 // FNV-1a/64 over an in-memory image (same digest family the prepare cache
 // key uses for files).
 std::uint64_t fnv1a64(const std::vector<std::uint8_t>& d) {
-    std::uint64_t h = 1469598103934665603ull;
-    for (const std::uint8_t b : d) {
-        h ^= b;
-        h *= 1099511628211ull;
-    }
-    return h;
+    formats::Hash64 h;
+    h.mix_bytes(d.data(), d.size());
+    return h.value();
 }
 
 struct KnownBuild {

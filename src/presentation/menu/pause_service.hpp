@@ -95,7 +95,7 @@ public:
     enum class FreezeResult {
         kNone,             // pause closed — the frame proceeds
         kFroze,            // overlay drawn; caller `continue`s (full freeze)
-        kQuitProgram,      // Pause → Quit to Desktop
+        kQuitProgram,      // Pause → Exit Game
         kRestartLevel,     // Pause → Restart Level
         kLoadCheckpoint,   // Pause → Load Game (out_load already set)
         kWarpLevel,        // Cheats → Warp! (want_warp() has the target)

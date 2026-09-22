@@ -7,6 +7,7 @@
 // out of game_render.cpp so that file is the foreground/entity + compose glue
 // (SOC roadmap: bg_compose).  Public entry points are declared in
 // game_render.hpp; the caches and tile helpers stay file-local here.
+#include "formats/hash64.hpp"
 #include "presentation/render/game_render.hpp"
 
 #include "presentation/render/tile_patterns.hpp"
@@ -19,6 +20,7 @@
 
 #include "core/game_tables.hpp"
 #include "enhance/upscale.hpp"
+#include "presentation/render/edge_margin_policy.hpp"
 #include "presentation/render/widescreen.hpp"
 #include "systems/cave_logic.hpp"
 
@@ -180,24 +182,24 @@ void draw_bg_tiles(RenderTarget& t, systems::SystemsState& state,
 std::uint64_t static_bg_key(const systems::SystemsState& state,
                             const LevelRenderAssets& a, int scale,
                             const std::string& profile) {
-    std::uint64_t k = 1469598103934665603ull;
-    auto mix = [&](std::uint64_t v) { k ^= v; k *= 1099511628211ull; };
+    formats::Hash64 key;
+    auto mix = [&](std::uint64_t v) { key.mix(v); };
     mix(static_cast<std::uint64_t>(state.current_level));
     mix(static_cast<std::uint64_t>(state.current_screen));
     mix(state.cave_flag ? 1u : 0u);
-    mix(static_cast<std::uint64_t>(state.cave_index + 1));
+    mix(static_cast<std::uint64_t>(state.cave_index) + 1);
     mix(state.secret_flag ? 1u : 0u);
     mix(static_cast<std::uint64_t>(scale));
     for (char c : profile) mix(static_cast<unsigned char>(c));
     mix(a.visual_background ? 1u : 0u);
-    mix(static_cast<std::uint64_t>(a.bg_fill_index + 1));
+    mix(static_cast<std::uint64_t>(a.bg_fill_index) + 1);
     for (const Rgb& c : a.palette) { mix(c.r); mix(c.g); mix(c.b); }
     for (const auto& td : a.tiles) {
-        mix(static_cast<std::uint64_t>(td.sprite_idx + 1));
+        mix(static_cast<std::uint64_t>(td.sprite_idx) + 1);
         mix(static_cast<std::uint64_t>(td.x & 0xFFFF));
         mix(static_cast<std::uint64_t>(td.y & 0xFFFF));
     }
-    return k;
+    return key.value();
 }
 
 struct StaticBgEntry { std::uint64_t key; std::vector<std::uint8_t> hd; };
@@ -314,16 +316,181 @@ void continue_l1_end_water(const systems::SystemsState& state,
 
 const SeamTiles::Tiles SeamTiles::kNone{};
 
+// ── Phases of the wide static compose ───────────────────────────────────────
+// compose_static_wide_bg_native was 252 lines and 81 cognitive-complexity
+// points (BACKLOG §3.12): flags, then four independent passes over the same
+// wide buffer.  Each pass is moved VERBATIM with its comments — they record
+// user-verified rules and cost more to rediscover than to carry — and each
+// probed at 8-10 free names before the cut (probe_slice.sh), which is what
+// made these the two worth taking.
+
+// No-neighbour margin: redraw the static background TILES un-clipped so a
+// wide tile authored past the screen edge reaches the widescreen edge.
+void fill_no_neighbour_margin(std::vector<std::uint8_t>& wide, int wide_w,
+                              int margin, const LevelRenderAssets& a,
+                              const systems::SystemsState& state,
+                              const FrameBuffer* left,
+                              const FrameBuffer* right,
+                              const EdgeMarginPolicy& policy) {
+// No-neighbour margin: re-draw the static bg TILES into the wide buffer
+// UN-CLIPPED (origin_x = margin) so a wide bg tile authored PAST the screen
+// edge — the L3 level-end tree trunk #22 (x=96, width 288 → x=384) — draws on
+// through into the margin instead of being clipped at 320 and mirror-mangled.
+// x-clip protects the OPPOSITE margin where a real neighbour peek lives.
+// L1 end screen: compose_widescreen already filled the margin with pure
+// backdrop (sky+mountains); the tile layer-extension would draw the island's
+// ground/palm back into it, so skip it there (open sky beside the island).
+if ((left == nullptr || right == nullptr) && !policy.skip_tile_extension) {
+    RenderTarget wt{wide.data(), wide_w, 200, 1, nullptr, nullptr};
+    wt.origin_x = margin;
+    wt.clip_x_lo = (left != nullptr) ? margin : 0;   // protect a real peek
+    wt.clip_x_hi = (right != nullptr) ? margin + 320 : wide_w;
+    // Compose the no-neighbour margin from the real background LAYERS
+    // extended to the screen edge (NOT a mirror, which duplicated the trunk):
+    // draw each bg tile in its authored order so the layering is preserved
+    // (backdrop → trunk → ground), letting a wide tile (the L3 trunk #22,
+    // x=96 w=288 → x=384) spill through; AND continue any horizontal tile ROW
+    // (the forest backdrop #31, the dirt-floor #1) into the margin by
+    // repeating it from the edge-most member, so the backdrop and floor reach
+    // the widescreen edge just like the centre.
+    for (const auto& tp : a.tiles) {
+        if (tp.sprite_idx < 0 ||
+            tp.sprite_idx >= static_cast<int>(a.tile_sprites.size()))
+            continue;
+        const auto& spr =
+            a.tile_sprites[static_cast<std::size_t>(tp.sprite_idx)];
+        const int w = spr.width;
+        // Dead-end strip (screen 9/17): the level-end giant trunk wood-grain
+        // (ELEML3 tiles 24/25, a vertical COLUMN at x≈176) ends exactly at the
+        // screen edge, so its own blit doesn't spill — but the row
+        // continuation below would REPEAT it into the no-neighbour margin.
+        // Suppress that so the strip stays pure forest backdrop (#31 + torus)
+        // + voided floor; the CENTRE copy keeps the trunk.  (Screen 9 has no
+        // 24/25 tiles, so this is a no-op there.)
+        const bool l3_trunk_tile =
+            policy.void_ground_right &&
+            (tp.sprite_idx == 24 || tp.sprite_idx == 25);
+        blit_sprite(wt, spr, a.palette, tp.x, tp.y);   // tile itself (spills)
+        bool right_nb = false, left_nb = false;        // row membership
+        for (const auto& o : a.tiles)
+            if (o.sprite_idx == tp.sprite_idx && o.y == tp.y) {
+                if (o.x == tp.x + w) right_nb = true;
+                if (o.x == tp.x - w) left_nb = true;
+            }
+        // ONLY continue a row that already spans to the SCREEN EDGE — a
+        // full-width background band (forest backdrop #31, dirt floor #1).
+        // A short foreground run (a platform — in particular the descent-
+        // overlay platform tiles the trunk-descent STAMPS into the tile list
+        // after Phase 2) does NOT reach the edge, so repeating it would paint
+        // an extra platform across the whole bezel.  Gate on edge-reach.
+        //
+        // L7 (volcanic): drop the left_nb requirement so a SINGLE edge tile
+        // continues too — L7-18's right rock wall (sprite 4) is a 2-column
+        // block up top but a SINGLE column at the bottom rows (y=159/189);
+        // without this the bottom rock isn't repeated and the lava backdrop
+        // shows through (the "cut" strip).  The wide L3 trunk #22 is unharmed
+        // (it spills via its own blit, on a non-L7 level).
+        const bool l7 = state.current_level == 7;
+        if (right == nullptr && !right_nb && tp.x + w >= 320 &&
+            (left_nb || l7) && !l3_trunk_tile)            // rightmost, at edge
+            for (int x = tp.x + w; x < 320 + margin; x += w)
+                blit_sprite(wt, spr, a.palette, x, tp.y);
+        if (left == nullptr && !left_nb && tp.x <= 0 &&
+            (right_nb || l7))                             // leftmost, at edge
+            for (int x = tp.x - w; x + w > -margin; x -= w)
+                blit_sprite(wt, spr, a.palette, x, tp.y);
+    }
+}
+}
+
+// The layering rules for seam overhangs: a neighbour's straddling tile may
+// cross into the centre, but must sit UNDER the centre's authored tiles.
+void apply_seam_layering(std::vector<std::uint8_t>& wide, int wide_w,
+                         int margin, const LevelRenderAssets& a,
+                         const SeamTiles& seams) {
+    const auto& left_seam = seams.left;
+    const auto& right_seam = seams.right;
+    const auto& left_bridge = seams.left_bridge;
+    const auto& right_bridge = seams.right_bridge;
+// LAYERING RULES (both user-verified the hard way):
+//   * The CURRENT screen's straddle redraw stays MARGINS-ONLY — its centre
+//     part already exists with the authored z-order; re-blitting it in the
+//     centre put a column over tiles the authored order draws above it.
+//   * A NEIGHBOUR's seam overhang may cross the seam into the centre (the
+//     trunk's genuine ~16px continuation — clipping it at the seam line
+//     left a sliced bark edge, Dark Woods S14), but it must sit UNDER the
+//     centre's authored level tiles: after the seam blits, the centre's
+//     level tiles (a.tiles[backdrop_tile_count..]) are redrawn clipped to
+//     the centre, so authored content always wins (L7 S13's rock wall)
+//     while the overhang stays visible where the centre has only backdrop.
+{
+    RenderTarget tt{wide.data(), wide_w, 200, 1, nullptr, nullptr};
+    tt.origin_x = margin;
+    auto blit_tiles =
+        [&](const std::vector<LevelRenderAssets::TileDraw>& tiles,
+            int dx) {
+            for (const auto& tp : tiles) {
+                if (tp.sprite_idx < 0 ||
+                    tp.sprite_idx >=
+                        static_cast<int>(a.tile_sprites.size()))
+                    continue;
+                blit_sprite(tt,
+                            a.tile_sprites[static_cast<std::size_t>(
+                                tp.sprite_idx)],
+                            a.palette, tp.x + dx, tp.y);
+            }
+        };
+    // (The CURRENT screen's straddling tiles are completed INSIDE the
+    // neighbour peeks as underlay — compose_surface_screen_static's
+    // `underlay` param — so their margin part sits UNDER the neighbour's
+    // authored tiles; no margins-only re-blit here.)
+    // Neighbour seam straddlers → CENTRE-ONLY overhang.  Their margin
+    // part already exists in the peek WITH the neighbour's authored
+    // z-order (dirt-top rows draw over subsurface rock there); the
+    // earlier own-margin re-blit painted the lone straddler back OVER
+    // the finished peek and buried S14's dirt layer under its own
+    // (4,-16,141) subsurface rock.
+    tt.clip_x_lo = margin;
+    tt.clip_x_hi = margin + 320;
+    blit_tiles(left_seam, -320);
+    blit_tiles(right_seam, +320);
+    // Seam-hole BRIDGES are synthetic (tile_patterns::seam_row_bridges)
+    // — the peek does NOT contain them, so they draw into their own
+    // margin too (protect only the opposite margin).
+    tt.clip_x_lo = -(1 << 28);
+    tt.clip_x_hi = margin + 320;
+    blit_tiles(left_bridge, -320);
+    tt.clip_x_lo = margin;
+    tt.clip_x_hi = 1 << 28;
+    blit_tiles(right_bridge, +320);
+    // Restore the centre's authored level tiles over the overhang.
+    if (!left_seam.empty() || !right_seam.empty() ||
+        !left_bridge.empty() || !right_bridge.empty()) {
+        tt.clip_x_lo = margin;
+        tt.clip_x_hi = margin + 320;
+        const int n0 = a.backdrop_tile_count;
+        for (std::size_t i = static_cast<std::size_t>(n0 < 0 ? 0 : n0);
+             i < a.tiles.size(); ++i) {
+            const auto& tp = a.tiles[i];
+            if (tp.sprite_idx < 0 ||
+                tp.sprite_idx >= static_cast<int>(a.tile_sprites.size()))
+                continue;
+            blit_sprite(tt,
+                        a.tile_sprites[static_cast<std::size_t>(
+                            tp.sprite_idx)],
+                        a.palette, tp.x, tp.y);
+        }
+    }
+}
+}
+
 void compose_static_wide_bg_native(
     systems::SystemsState& state, const LevelRenderAssets& a, int margin,
     const FrameBuffer* left, const FrameBuffer* right,
     const FrameBuffer* backdrop, std::vector<std::uint8_t>& wide,
     SeamTiles seams) {
-    // Bind back to the names the body uses; the body below is unchanged.
-    const auto& left_seam = seams.left;
-    const auto& right_seam = seams.right;
-    const auto& left_bridge = seams.left_bridge;
-    const auto& right_bridge = seams.right_bridge;
+    // The seam lists are bound inside apply_seam_layering, the only phase
+    // that reads them.
 
     // Compose the centre static layer at native 320, assemble the wide native
     // buffer (margins from neighbours / backdrop / self-tile), and extend the
@@ -338,34 +505,22 @@ void compose_static_wide_bg_native(
         draw_bg_base(nt, state, a);
         draw_bg_tiles(nt, state, a);
     }
-    // L1 (jungle) mid-air-island END screen: the area beside the island reads as
-    // OPEN SKY — fill the no-neighbour margin from the FOND backdrop only
-    // (sky+mountains), NOT the extended foreground ground.  Only this screen (the
-    // first/other screens keep the ground extension that looks right there).
-    // current_screen is kLastScreen during play, but the level-complete handler
-    // bumps it to kLastScreen+1 (the pseudo-exit) the instant level_complete
-    // fires (transitions.cpp) — and the level-end fade composes from THAT state.
-    // Accept both so the water margin survives into the fade's first frame
-    // instead of reverting to the mirror fallback.
-    const bool l1_end = state.current_level == 1 &&
-                        (state.current_screen == core::kLastScreen ||
-                         state.current_screen == core::kLastScreen + 1);
-    // L3 trunk-entry screen 9 RIGHT edge is an IMPASSABLE dead-end (player clamped
-    // at x=270; the trunk is entered going DOWN, never by walking right).  Its
-    // full-width floor reaches the edge, so the no-neighbour margin mirrors a
-    // walkable dirt ledge to nowhere — void just that dirt band so the strip reads
-    // as "just backdrop" (forest + grass), like screen 0's left whose floor
-    // doesn't reach the edge.  right==nullptr confirms the no-neighbour side.
-    const bool l3_deadend_right =
-        state.current_level == 3 && right == nullptr &&
-        (state.current_screen == 9 || state.current_screen == 17);
+    // WHAT this screen's no-neighbour margins should look like — the level's
+    // first/last screen and the cave halls each need a different invention,
+    // and those rules live in edge_margin_policy.hpp (one pure function, one
+    // test per rule) rather than as booleans threaded through the compositor.
+    const EdgeMarginPolicy policy =
+        edge_margin_policy(state, /*has_backdrop=*/backdrop != nullptr,
+                           /*screen_uses_backdrop=*/a.visual_background,
+                           /*has_left=*/left != nullptr,
+                           /*has_right=*/right != nullptr);
     compose_widescreen(wide, margin, center, left, right, MarginFill{/*hud_rows=*/0,
                        backdrop, /*reflect_pure=*/false,
                        /*margin_edge_brightness=*/1.0f,
-                       /*repeat_no_backdrop=*/state.secret_flag == 0,
-                       /*ground_backdrop=*/l1_end && backdrop != nullptr,
+                       /*repeat_no_backdrop=*/policy.repeat_no_backdrop,
+                       /*ground_backdrop=*/policy.sky_only,
                        /*void_ground_left=*/false,
-                       /*void_ground_right=*/l3_deadend_right});
+                       /*void_ground_right=*/policy.void_ground_right});
     const int wide_w = 320 + 2 * margin;
     // Tile-based surface levels (internal 3/7 — no FOND backdrop): a
     // no-neighbour margin gets a BLACK BASE before the tile layer-extension
@@ -379,18 +534,14 @@ void compose_static_wide_bg_native(
     // are the same case — their outer seams are the S9/S13 warp boundaries.)
     // FOND levels (1/5) keep the validated backdrop-extension; secret rooms
     // keep their deliberate self-tile.
-    const bool tile_level_edge = !a.visual_background &&
-                                 state.secret_flag == 0 &&
-                                 state.current_screen < 100;
+    const bool tile_level_edge = policy.black_base;
     // L7 lava cave-hall (screens 10-12): the outer seams (S10 left = the S9
     // cave-descent warp, S12 right = the S13 teleport warp) stay PURE BLACK —
     // like the regular cave interiors (user-picked after seeing the darkness-
     // rows and gray-wall alternatives): the warp boundaries are impassable
     // and the hall reads as a closed cave.  The l7_cave_hall flag below also
     // skips the row-continuation for these margins.
-    const bool l7_cave_hall = state.current_level == 7 &&
-                              state.current_screen >= 10 &&
-                              state.current_screen <= 12;
+
     if (tile_level_edge) {
         auto fill_black = [&](int x0, int x1) {
             for (int y = 0; y < 200; ++y)
@@ -403,79 +554,13 @@ void compose_static_wide_bg_native(
         if (left == nullptr) fill_black(0, margin);
         if (right == nullptr) fill_black(margin + 320, wide_w);
     }
-    // No-neighbour margin: re-draw the static bg TILES into the wide buffer
-    // UN-CLIPPED (origin_x = margin) so a wide bg tile authored PAST the screen
-    // edge — the L3 level-end tree trunk #22 (x=96, width 288 → x=384) — draws on
-    // through into the margin instead of being clipped at 320 and mirror-mangled.
-    // x-clip protects the OPPOSITE margin where a real neighbour peek lives.
-    // L1 end screen: compose_widescreen already filled the margin with pure
-    // backdrop (sky+mountains); the tile layer-extension would draw the island's
-    // ground/palm back into it, so skip it there (open sky beside the island).
-    if ((left == nullptr || right == nullptr) && !l1_end && !l7_cave_hall) {
-        RenderTarget wt{wide.data(), wide_w, 200, 1, nullptr, nullptr};
-        wt.origin_x = margin;
-        wt.clip_x_lo = (left != nullptr) ? margin : 0;   // protect a real peek
-        wt.clip_x_hi = (right != nullptr) ? margin + 320 : wide_w;
-        // Compose the no-neighbour margin from the real background LAYERS
-        // extended to the screen edge (NOT a mirror, which duplicated the trunk):
-        // draw each bg tile in its authored order so the layering is preserved
-        // (backdrop → trunk → ground), letting a wide tile (the L3 trunk #22,
-        // x=96 w=288 → x=384) spill through; AND continue any horizontal tile ROW
-        // (the forest backdrop #31, the dirt-floor #1) into the margin by
-        // repeating it from the edge-most member, so the backdrop and floor reach
-        // the widescreen edge just like the centre.
-        for (const auto& tp : a.tiles) {
-            if (tp.sprite_idx < 0 ||
-                tp.sprite_idx >= static_cast<int>(a.tile_sprites.size()))
-                continue;
-            const auto& spr =
-                a.tile_sprites[static_cast<std::size_t>(tp.sprite_idx)];
-            const int w = spr.width;
-            // Dead-end strip (screen 9/17): the level-end giant trunk wood-grain
-            // (ELEML3 tiles 24/25, a vertical COLUMN at x≈176) ends exactly at the
-            // screen edge, so its own blit doesn't spill — but the row
-            // continuation below would REPEAT it into the no-neighbour margin.
-            // Suppress that so the strip stays pure forest backdrop (#31 + torus)
-            // + voided floor; the CENTRE copy keeps the trunk.  (Screen 9 has no
-            // 24/25 tiles, so this is a no-op there.)
-            const bool l3_trunk_tile =
-                l3_deadend_right && (tp.sprite_idx == 24 || tp.sprite_idx == 25);
-            blit_sprite(wt, spr, a.palette, tp.x, tp.y);   // tile itself (spills)
-            bool right_nb = false, left_nb = false;        // row membership
-            for (const auto& o : a.tiles)
-                if (o.sprite_idx == tp.sprite_idx && o.y == tp.y) {
-                    if (o.x == tp.x + w) right_nb = true;
-                    if (o.x == tp.x - w) left_nb = true;
-                }
-            // ONLY continue a row that already spans to the SCREEN EDGE — a
-            // full-width background band (forest backdrop #31, dirt floor #1).
-            // A short foreground run (a platform — in particular the descent-
-            // overlay platform tiles the trunk-descent STAMPS into the tile list
-            // after Phase 2) does NOT reach the edge, so repeating it would paint
-            // an extra platform across the whole bezel.  Gate on edge-reach.
-            //
-            // L7 (volcanic): drop the left_nb requirement so a SINGLE edge tile
-            // continues too — L7-18's right rock wall (sprite 4) is a 2-column
-            // block up top but a SINGLE column at the bottom rows (y=159/189);
-            // without this the bottom rock isn't repeated and the lava backdrop
-            // shows through (the "cut" strip).  The wide L3 trunk #22 is unharmed
-            // (it spills via its own blit, on a non-L7 level).
-            const bool l7 = state.current_level == 7;
-            if (right == nullptr && !right_nb && tp.x + w >= 320 &&
-                (left_nb || l7) && !l3_trunk_tile)            // rightmost, at edge
-                for (int x = tp.x + w; x < 320 + margin; x += w)
-                    blit_sprite(wt, spr, a.palette, x, tp.y);
-            if (left == nullptr && !left_nb && tp.x <= 0 &&
-                (right_nb || l7))                             // leftmost, at edge
-                for (int x = tp.x - w; x + w > -margin; x -= w)
-                    blit_sprite(wt, spr, a.palette, x, tp.y);
-        }
-    }
+    fill_no_neighbour_margin(wide, wide_w, margin, a, state, left, right,
+                             policy);
     // L1 end (mid-air island in a lake): continue the lake's water into the
     // right margin (+ the centre's bottom-right void past the island).  Must run
     // AGAIN after wrap_wide_static's centre overlay (which would clobber the
     // void part), so it lives in a shared helper — see continue_l1_end_water.
-    if (l1_end && right == nullptr)
+    if (policy.water_continues)
         continue_l1_end_water(state, a, /*origin_x=*/margin,
                               /*buf_w=*/320 + 2 * margin, wide);
     // Seam-straddle continuity (tile_patterns): any tile that straddles a
@@ -489,76 +574,7 @@ void compose_static_wide_bg_native(
     //   * the NEIGHBOURS' straddling tiles (collected by the caller via
     //     tile_patterns::seam_straddling_tiles), re-blitted at ∓320 so the
     //     peeked trunk/bush is completed within the margin.
-    // LAYERING RULES (both user-verified the hard way):
-    //   * The CURRENT screen's straddle redraw stays MARGINS-ONLY — its centre
-    //     part already exists with the authored z-order; re-blitting it in the
-    //     centre put a column over tiles the authored order draws above it.
-    //   * A NEIGHBOUR's seam overhang may cross the seam into the centre (the
-    //     trunk's genuine ~16px continuation — clipping it at the seam line
-    //     left a sliced bark edge, Dark Woods S14), but it must sit UNDER the
-    //     centre's authored level tiles: after the seam blits, the centre's
-    //     level tiles (a.tiles[backdrop_tile_count..]) are redrawn clipped to
-    //     the centre, so authored content always wins (L7 S13's rock wall)
-    //     while the overhang stays visible where the centre has only backdrop.
-    {
-        RenderTarget tt{wide.data(), wide_w, 200, 1, nullptr, nullptr};
-        tt.origin_x = margin;
-        auto blit_tiles =
-            [&](const std::vector<LevelRenderAssets::TileDraw>& tiles,
-                int dx) {
-                for (const auto& tp : tiles) {
-                    if (tp.sprite_idx < 0 ||
-                        tp.sprite_idx >=
-                            static_cast<int>(a.tile_sprites.size()))
-                        continue;
-                    blit_sprite(tt,
-                                a.tile_sprites[static_cast<std::size_t>(
-                                    tp.sprite_idx)],
-                                a.palette, tp.x + dx, tp.y);
-                }
-            };
-        // (The CURRENT screen's straddling tiles are completed INSIDE the
-        // neighbour peeks as underlay — compose_surface_screen_static's
-        // `underlay` param — so their margin part sits UNDER the neighbour's
-        // authored tiles; no margins-only re-blit here.)
-        // Neighbour seam straddlers → CENTRE-ONLY overhang.  Their margin
-        // part already exists in the peek WITH the neighbour's authored
-        // z-order (dirt-top rows draw over subsurface rock there); the
-        // earlier own-margin re-blit painted the lone straddler back OVER
-        // the finished peek and buried S14's dirt layer under its own
-        // (4,-16,141) subsurface rock.
-        tt.clip_x_lo = margin;
-        tt.clip_x_hi = margin + 320;
-        blit_tiles(left_seam, -320);
-        blit_tiles(right_seam, +320);
-        // Seam-hole BRIDGES are synthetic (tile_patterns::seam_row_bridges)
-        // — the peek does NOT contain them, so they draw into their own
-        // margin too (protect only the opposite margin).
-        tt.clip_x_lo = -(1 << 28);
-        tt.clip_x_hi = margin + 320;
-        blit_tiles(left_bridge, -320);
-        tt.clip_x_lo = margin;
-        tt.clip_x_hi = 1 << 28;
-        blit_tiles(right_bridge, +320);
-        // Restore the centre's authored level tiles over the overhang.
-        if (!left_seam.empty() || !right_seam.empty() ||
-            !left_bridge.empty() || !right_bridge.empty()) {
-            tt.clip_x_lo = margin;
-            tt.clip_x_hi = margin + 320;
-            const int n0 = a.backdrop_tile_count;
-            for (std::size_t i = static_cast<std::size_t>(n0 < 0 ? 0 : n0);
-                 i < a.tiles.size(); ++i) {
-                const auto& tp = a.tiles[i];
-                if (tp.sprite_idx < 0 ||
-                    tp.sprite_idx >= static_cast<int>(a.tile_sprites.size()))
-                    continue;
-                blit_sprite(tt,
-                            a.tile_sprites[static_cast<std::size_t>(
-                                tp.sprite_idx)],
-                            a.palette, tp.x, tp.y);
-            }
-        }
-    }
+    apply_seam_layering(wide, wide_w, margin, a, seams);
     // Extend the backdrop up through the top HUD-strip band across the FULL
     // wide width — center AND both margins — so the Score/Lives/Time line floats
     // over a continuous backdrop with no black notch in the corner strips.  Runs

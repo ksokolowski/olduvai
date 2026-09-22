@@ -26,7 +26,12 @@
 
 #include "formats/mdi.hpp"
 
-struct _opl3_chip;   // vendored Nuked-OPL3 (third_party/nuked_opl3/opl3.h)
+// Name inherited from the vendored Nuked-OPL3 (third_party/nuked_opl3/opl3.h
+// declares struct `_opl3_chip` as the tag behind its `opl3_chip` typedef); we
+// forward-declare it verbatim so the opaque pointer stays the same type as
+// the vendor's.
+// NOLINTNEXTLINE(bugprone-reserved-identifier)
+struct _opl3_chip;
 
 namespace olduvai::presentation {
 

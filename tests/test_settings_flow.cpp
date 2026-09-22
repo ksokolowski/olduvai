@@ -8,6 +8,7 @@
 #include "presentation/menu/settings_flow.hpp"
 
 #include <cstdio>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -285,6 +286,77 @@ int main() {
         CHECK(flow.handle_key(SettingsFlow::Key::kAccept) ==
               SettingsFlow::KeyOutcome::kIgnored);
         CHECK(rec.log.empty());
+    }
+
+    // A yes/no question (the quit confirm) resolves through the same keys
+    // without touching the settings session or reopening Options.
+    {
+        SettingsSession s;
+        ConfirmDialog d;
+        Recorder rec;
+        SettingsFlow flow(model, s, d, rec.hooks(cur));
+        int yes_calls = 0;
+        d.ask("Exit game?", [&] { ++yes_calls; });
+        CHECK(flow.handle_key(SettingsFlow::Key::kAccept) ==
+              SettingsFlow::KeyOutcome::kAnswered);   // No is the default
+        CHECK(yes_calls == 0);
+        CHECK(!d.is_open());
+
+        d.ask("Exit game?", [&] { ++yes_calls; });
+        CHECK(flow.handle_key(SettingsFlow::Key::kNext) ==
+              SettingsFlow::KeyOutcome::kConsumed);
+        CHECK(flow.handle_key(SettingsFlow::Key::kAccept) ==
+              SettingsFlow::KeyOutcome::kAnswered);
+        CHECK(yes_calls == 1);
+
+        d.ask("Exit game?", [&] { ++yes_calls; });
+        flow.handle_key(SettingsFlow::Key::kNext);
+        CHECK(flow.handle_key(SettingsFlow::Key::kCancel) ==
+              SettingsFlow::KeyOutcome::kAnswered);   // ESC = No
+        CHECK(yes_calls == 1);
+        CHECK(!d.is_open());
+        CHECK(rec.log.empty());   // no reopen, no apply, no revert
+    }
+
+    // A Sound card pick shows as one row: the choice the player made.
+    {
+        std::map<std::string, std::string> now = {
+            {"music_device", "opl"}, {"sfx_backend", "sb-dac"}};
+        const auto value_of = [&now](const std::string& k) { return now[k]; };
+
+        SettingsSession s;   // Auto -> Sound Blaster: both keys staged
+        s.stage("music_device", "music_device", "auto", "opl");
+        s.stage("sfx_backend", "sfx_backend", "auto", "sb-dac");
+        s.stage("aspect", "aspect", "keep", "4:3");
+        auto rows = build_display_changes(s, model, value_of);
+        CHECK(rows.size() == 2);
+        if (rows.size() == 2) {
+            CHECK(rows[0].key == "sound_card");
+            CHECK(rows[0].old_value == "auto");
+            CHECK(rows[0].new_value == "sb");
+            CHECK(rows[1].key == "aspect");
+        }
+
+        SettingsSession s2;  // Sound Blaster -> AdLib: only the SFX half moves
+        now["sfx_backend"] = "opl";
+        s2.stage("sfx_backend", "sfx_backend", "sb-dac", "opl");
+        rows = build_display_changes(s2, model, value_of);
+        CHECK(rows.size() == 1);
+        if (rows.size() == 1) CHECK(rows[0].key == "sound_card");
+        if (rows.size() == 1) CHECK(rows[0].old_value == "sb");
+        if (rows.size() == 1) CHECK(rows[0].new_value == "adlib");
+
+        SettingsSession s3;  // a mix from Advanced: the raw row stays
+        now["music_device"] = "mt32-builtin";
+        now["sfx_backend"] = "sb-dac";
+        s3.stage("music_device", "music_device", "opl", "mt32-builtin");
+        rows = build_display_changes(s3, model, value_of);
+        CHECK(rows.size() == 1);
+        if (rows.size() == 1) CHECK(rows[0].key == "music_device");
+
+        // Without the lookup, nothing folds (the old behaviour).
+        rows = build_display_changes(s, model);
+        CHECK(rows.size() == 3);
     }
 
     if (fails == 0) std::puts("settings_flow: OK");

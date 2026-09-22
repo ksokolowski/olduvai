@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "formats/voc.hpp"
+#include "presentation/audio/sound_card.hpp"
 #include "presentation/audio/host_midi.hpp"
 #include "presentation/audio/midi_seq.hpp"
 #include "presentation/audio/opl_music.hpp"
@@ -54,6 +55,7 @@ public:
     //   "opl"     — AdLib FM rendered through Nuked-OPL3 (EXE-faithful default)
     //   "sb-dac"  — digital VOC samples
     //   "midi"/"mt32-sfx" — catalog note events through the active synth
+    //   "none"    — no sound effects (the Sound card's Off)
     // audio_rate: SDL device sample rate in Hz (0 = device default / auto).
     // audio_buffer: device buffer in sample frames, power-of-two (0 = the
     // 2048-frame default).  Both mirror the reference --audio-rate /
@@ -84,6 +86,12 @@ public:
         return opl_music_ != nullptr || synth_ != nullptr || host_midi_active_;
     }
     const std::string& active_music_backend() const { return music_backend_; }
+    // False when the SFX backend is "none" (the Sound card's Off).
+    bool sfx_enabled() const { return !sfx_off_; }
+    // True when the requested music device could not start and the AdLib
+    // FM driver is playing instead.  Play wants that; --render-audio, which
+    // must render exactly the backend it was asked for, treats it as a skip.
+    bool music_fell_back() const { return music_fell_back_; }
     // True when play_music() feeds a General MIDI synth, i.e. the MDI
     // conversion must map Roland MT-32 programs to GM (build_gm_midi's
     // gm_translate).  gm-builtin = FluidSynth; gm-host = host MIDI out to a
@@ -196,6 +204,8 @@ private:
     std::string music_backend_ = "none";
     bool midi_sfx_ = false;
     bool opl_sfx_ = false;   // sfx_backend == "opl": render AdLib FM via Nuked
+    bool sfx_off_ = false;   // sfx_backend == "none": play_sfx is silent
+    bool music_fell_back_ = false;   // see music_fell_back()
     // Music mix gain (0..1).  Read lock-free by the audio callback, ramped
     // by fade_out_music() on the main thread; reset to 1 by play_music().
     std::atomic<float> music_gain_{1.0f};
@@ -224,5 +234,13 @@ private:
     std::vector<std::int16_t> capture_;   // interleaved stereo s16
     std::uint64_t capture_t0_ = 0;
 };
+
+// Which Sound card choices can sound on this machine (sound_card.hpp):
+// libmt32emu + an MT-32/CM-32L ROM pair in the ROM search path; FluidSynth +
+// a SoundFont; host MIDI built in + an output port.  File and library checks
+// only — no synth is started — and cached per (rom_dir, soundfont), since
+// every menu that shows the row asks.
+SoundCardAvail probe_sound_cards(const std::string& rom_dir,
+                                 const std::string& soundfont);
 
 }  // namespace olduvai::presentation

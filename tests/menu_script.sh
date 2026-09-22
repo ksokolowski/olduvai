@@ -18,6 +18,9 @@
 #   menu_baseline  — pause nav + Options + Cheats submenus + back-out (6 shots)
 #   menu_settings  — Options→Audio, drop Music volume 100→95, back out to the
 #                    confirm dialog, Apply (3 shots)
+#   menu_quit      — Quit → Exit Game → No, then → Yes ends the run (2 shots)
+#   title          — the title menu: About opens; Quit asks; Yes ends the run
+#   sound_card     — title Options -> Audio -> AdLib -> Apply: dialog + play.json
 #
 # NB: scenarios deliberately avoid reinit/warp/load/restart — those re-enter
 # run_platform_level, which re-reads OLDUVAI_MENU_SCRIPT from the top (the script
@@ -74,13 +77,18 @@ run_scenario() {
     XDG_CONFIG_HOME="${CFG_DIR}" OLDUVAI_MENU_SCRIPT="${SCRIPT}" \
         OLDUVAI_MENU_SCRIPT_DIR="${OUT_DIR}" timeout 60 \
         "${BINARY}" --play --level 1 --render-scale 1 --window 640x400 \
-        --game-dir "${GAME_DIR}" ${EXTRA} >/dev/null 2>&1
+        --game-dir "${GAME_DIR}" ${EXTRA} >/dev/null 2>"${OUT_DIR}/run.err"
     rm -rf "${CFG_DIR}"
     SCEN_FAIL=0
     while read -r WANT NAME; do
         [ -n "${NAME}" ] || continue
         if [ ! -s "${OUT_DIR}/${NAME}" ]; then
             echo "menu_script[$1]: FAIL — shot ${NAME} not produced"
+            # A run that writes NOTHING has failed at startup, and its stderr
+            # is the only witness — see BACKLOG §6, where this has now been
+            # seen three times on this Mac inside long ctest sequences.
+            [ -s "${OUT_DIR}/run.err" ] && sed -n '$p' "${OUT_DIR}/run.err" |
+                sed 's/^/    /'
             SCEN_FAIL=1
         elif [ "$(sha256 "${OUT_DIR}/${NAME}")" != "${WANT}" ]; then
             echo "menu_script[$1]: FAIL — ${NAME} differs from golden hash"
@@ -97,10 +105,11 @@ run_scenario() {
 
 run_scenario menu_baseline \
     "esc shot down shot down shot down enter shot esc shot down enter shot quit"
-# (the Options screen's first row is now the Presentation preset — one extra
-#  `down` keeps this walk's intent: Audio → Music volume 100→95)
+# (the Options screen's first row is the Style preset — one extra `down`; the
+#  Audio screen's first row is Sound card, so one `down` reaches Music volume:
+#  this walk's intent is Audio → Music volume 100→95)
 run_scenario menu_settings \
-    "esc down down down enter down enter down down left shot esc esc shot enter shot quit"
+    "esc down down down enter down enter down left shot esc esc shot enter shot quit"
 
 # The F7 power-up picker: its own overlay, its own key handling, and until this
 # scenario NOTHING exercised either — the pause shots never open it.  Added
@@ -132,13 +141,94 @@ run_scenario pause_cycle \
 # the dialog's own kAccept arm.  Region check: begin_frame's flow_.discard()
 # executes 0 times here — this route does NOT exercise the safety net.
 run_scenario pause_dialog_discard \
-    "esc down down down enter down enter down down left esc esc down enter shot quit"
+    "esc down down down enter down enter down left esc esc down enter shot quit"
 
 # Dirty session, dialog CANCELLED, then pause closed anyway: the only route
 # found that fires PauseService::begin_frame's discard net (region count 1 vs
 # 0 above).  That branch was previously executed by nothing in the suite.
 run_scenario pause_close_dirty \
-    "esc down down down enter down enter down down left esc esc esc wait esc wait esc shot quit"
+    "esc down down down enter down enter down left esc esc esc wait esc wait esc shot quit"
+
+# One Quit, confirmed (spec 2026-09-18): pause → Quit → Exit Game opens the
+# question on No (shot 000); Enter answers No and leaves the Quit screen up
+# (001); Exit Game again, Right to Yes, Enter — the run must END there, so the
+# trailing `shot` must never be written.  run_scenario checks 000/001; the
+# block below checks the missing 002 and the exit status.
+QUIT_SCRIPT="esc down down down down down down enter down enter shot enter shot enter right enter wait wait wait shot"
+run_scenario menu_quit "${QUIT_SCRIPT}"
+QDIR="$(mktemp -d /tmp/menu_quit.XXXXXX)"
+QCFG="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
+XDG_CONFIG_HOME="${QCFG}" OLDUVAI_MENU_SCRIPT="${QUIT_SCRIPT}" \
+    OLDUVAI_MENU_SCRIPT_DIR="${QDIR}" timeout 60 \
+    "${BINARY}" --play --level 1 --render-scale 1 --window 640x400 \
+    --game-dir "${GAME_DIR}" >/dev/null 2>&1
+QRC=$?
+rm -rf "${QCFG}"
+if [ ${QRC} -ne 0 ]; then
+    echo "menu_script[menu_quit]: FAIL — Exit Game -> Yes exited ${QRC}, want 0"
+    FAIL=1
+elif [ -e "${QDIR}/002.png" ]; then
+    echo "menu_script[menu_quit]: FAIL — the game kept running after Yes"
+    FAIL=1
+fi
+rm -rf "${QDIR}"
+
+# ── The title menu (no --level: the title-menu walk) ────────────────────────
+# Quit asks directly (shot 000, pinned); Right + Enter = Yes ends the run, so
+# 001 must never be written.  About carries the build id, which changes every
+# commit, so it is not hashed: it must render, and differ from the menu behind
+# it.  Its TEXT is pinned by test_about_info.cpp.
+TDIR="$(mktemp -d /tmp/menu_title.XXXXXX)"
+TCFG="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
+XDG_CONFIG_HOME="${TCFG}" \
+    OLDUVAI_MENU_SCRIPT="shot down down down enter shot esc down enter shot right enter wait wait wait shot" \
+    OLDUVAI_MENU_SCRIPT_DIR="${TDIR}" timeout 60 \
+    "${BINARY}" --play --render-scale 1 --window 640x400 \
+    --game-dir "${GAME_DIR}" >/dev/null 2>"${TDIR}/run.err"
+TRC=$?
+rm -rf "${TCFG}"
+TFAIL=0
+if [ ${TRC} -ne 0 ]; then
+    echo "menu_script[title]: FAIL — Quit -> Yes exited ${TRC}, want 0"; TFAIL=1
+elif [ ! -s "${TDIR}/001.png" ] ||
+     [ "$(sha256 "${TDIR}/000.png")" = "$(sha256 "${TDIR}/001.png")" ]; then
+    echo "menu_script[title]: FAIL — About did not open"; TFAIL=1
+elif [ "$(sha256 "${TDIR}/002.png")" != "$(cut -d' ' -f1 "${FIX}/title_quit.sha256")" ]; then
+    echo "menu_script[title]: FAIL — the Quit dialog differs from its golden"
+    TFAIL=1
+elif [ -e "${TDIR}/003.png" ]; then
+    echo "menu_script[title]: FAIL — the title menu kept running after Yes"
+    TFAIL=1
+fi
+if [ ${TFAIL} -eq 0 ]; then rm -rf "${TDIR}"; else echo "  kept: ${TDIR}"; FAIL=1; fi
+
+# Sound card on the title menu (BACKLOG §3.27): Options -> Audio, Right twice
+# (Auto -> Sound Blaster -> AdLib), back out, Apply.  The dialog names the ONE
+# choice made ("Sound card: Auto -> AdLib", pinned), and play.json gets the
+# pair the card stands for.  On the title, not in a level: an audio Apply
+# mid-level reloads the level, which restarts the script from the top.
+CDIR="$(mktemp -d /tmp/menu_card.XXXXXX)"
+CCFG="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
+XDG_CONFIG_HOME="${CCFG}" \
+    OLDUVAI_MENU_SCRIPT="down down enter down enter right shot right shot esc esc shot enter wait wait" \
+    OLDUVAI_MENU_SCRIPT_DIR="${CDIR}" timeout 60 \
+    "${BINARY}" --play --render-scale 1 --window 640x400 \
+    --game-dir "${GAME_DIR}" >/dev/null 2>"${CDIR}/run.err"
+CFAIL=0
+if [ ! -s "${CDIR}/002.png" ]; then
+    echo "menu_script[sound_card]: FAIL — no Apply-dialog shot; the run said:"
+    [ -s "${CDIR}/run.err" ] && sed -n '$p' "${CDIR}/run.err" | sed 's/^/    /'
+    CFAIL=1
+elif [ "$(sha256 "${CDIR}/002.png")" != "$(cut -d' ' -f1 "${FIX}/title_sound_card.sha256")" ]; then
+    echo "menu_script[sound_card]: FAIL — the Apply dialog differs from its golden"
+    CFAIL=1
+fi
+for want in '"music_device": "opl"' '"sfx_backend": "opl"'; do
+    grep -qF "${want}" "${CCFG}/olduvai/play.json" 2>/dev/null || {
+        echo "menu_script[sound_card]: FAIL — play.json lacks ${want}"; CFAIL=1; }
+done
+rm -rf "${CCFG}"
+if [ ${CFAIL} -eq 0 ]; then rm -rf "${CDIR}"; else echo "  kept: ${CDIR}"; FAIL=1; fi
 
 [ ${FAIL} -eq 0 ] && echo "menu_script: PASS"
 exit ${FAIL}

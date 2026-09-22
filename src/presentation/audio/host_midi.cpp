@@ -41,6 +41,10 @@ std::vector<std::string> host_midi_list_ports() {
         for (unsigned int i = 0; i < n; ++i) {
             names.push_back(probe.getPortName(i));
         }
+        // Empty IS the handling here: the two alternatives (rethrow, log)
+        // are a crash and an allocation in a path whose contract is "list the
+        // ports or say there are none".
+        // NOLINTNEXTLINE(bugprone-empty-catch)
     } catch (const RtMidiError&) {
         // No backend / driver problem → no ports.  Caller prints a clean
         // "no ports" message; never crash on enumeration.
@@ -124,6 +128,9 @@ void send3(HostMidiPlayer::Impl* impl, std::uint8_t s, std::uint8_t d1,
     }
     try {
         impl->out.sendMessage(&msg);
+        // A failing send is exactly the "keep informing, keep going" case:
+        // the next tick retries the message.
+        // NOLINTNEXTLINE(bugprone-empty-catch)
     } catch (const RtMidiError&) {
         // A transient send failure shouldn't take down the pump thread.
     }

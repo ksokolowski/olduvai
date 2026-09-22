@@ -47,15 +47,25 @@ std::set<std::string> options_subtree_screens(const MenuModel& model,
 // Resolve staged session changes into display-friendly StagedChange rows,
 // looking up labels and value-labels from the MenuModel.  Used for the
 // confirm-dialog contents by both the Pause and main-menu flows.
-std::vector<StagedChange> build_display_changes(const SettingsSession& sess,
-                                                const MenuModel& model);
+//
+// `value_of` (optional) reads a key's current, staged-or-not value.  With it,
+// a Sound card pick — which stages music_device and/or sfx_backend — shows as
+// the ONE choice the player made ("Sound card: Auto -> Sound Blaster"), not
+// as the two keys it wrote.  A pair no card names keeps the raw rows.
+std::vector<StagedChange> build_display_changes(
+    const SettingsSession& sess, const MenuModel& model,
+    const std::function<std::string(const std::string&)>& value_of = {});
 
 class SettingsFlow {
 public:
     // Semantic dialog keys (call sites map SDL keycodes; kNone = any other
     // key — consumed while the dialog is open, no effect).
     enum class Key { kNone, kPrev, kNext, kAccept, kCancel };
-    enum class KeyOutcome { kIgnored, kConsumed, kApplied, kDiscarded, kCancelled };
+    // kAnswered: a yes/no question (ConfirmDialog::ask) was resolved — Accept
+    // runs its Yes callback if Yes is selected; Cancel (ESC) answers No.  The
+    // settings session is not touched.
+    enum class KeyOutcome { kIgnored, kConsumed, kApplied, kDiscarded, kCancelled,
+                            kAnswered };
 
     struct Hooks {
         // Persist one applied change (config write; play.json).
@@ -87,6 +97,9 @@ public:
         // — the note should SAY so, or the Apply looks like a no-op).
         std::function<std::string(bool any_reinit, bool any_persist)>
             confirm_note;
+        // Optional: a key's current value (the bindings' get), so the dialog
+        // can name a Sound card pick as one row (build_display_changes).
+        std::function<std::string(const std::string&)> value_of;
     };
 
     SettingsFlow(const MenuModel& model, SettingsSession& session,

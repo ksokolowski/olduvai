@@ -12,6 +12,7 @@
 #include "presentation/render/widescreen.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 using namespace olduvai::presentation;
@@ -32,6 +33,37 @@ int main() {
         CHECK(boss_ws_margin(100, 100, "73") == 73);         // env override wins
         CHECK(boss_ws_margin(100, 100, "999") == 120);       // env clamped
         CHECK(boss_ws_margin(100, 100, "-5") == 0);
+    }
+
+    // THE property the margin exists for (BACKLOG §3.25): the composed canvas
+    // has the OUTPUT's aspect, so nothing is stretched and nothing is
+    // letterboxed.  The old checks ("21:9 gives a margin between 1 and 120")
+    // were satisfied by any value in that range and pinned nothing.
+    {
+        struct Case { int w, h; const char* what; };
+        const Case cases[] = {
+            {1280, 800, "16:10, the DOS aspect"},
+            {1280, 720, "720p — the panel both handhelds ship"},
+            {1920, 1080, "16:9"},
+            {2560, 1080, "21:9"},
+            {1920, 1200, "16:10 at another size"},
+        };
+        for (const Case& c : cases) {
+            const int m = boss_ws_margin(c.w, c.h, nullptr);
+            const int canvas_w = 320 + 2 * m;
+            // The canvas is 200 tall; its aspect must match the output's to
+            // within the rounding of one native column (2 canvas px).
+            const double want = static_cast<double>(c.w) / c.h;
+            const double got = canvas_w / 200.0;
+            CHECK(std::fabs(want - got) <= 2.0 / 200.0);
+            // 16:10 is the native aspect: no margin at all, by construction.
+            if (c.w * 10 == c.h * 16) CHECK(m == 0);
+        }
+        // Above the cap the canvas CANNOT match the output — there is no more
+        // arena to show — so it letterboxes on purpose.  32:9.
+        const int m = boss_ws_margin(3840, 1080, nullptr);
+        CHECK(m == 120);
+        CHECK(320 + 2 * m < static_cast<int>(200.0 * 3840 / 1080));
     }
 
     // make_clean_boss_bg: erases bright HUD pixels, keeps real scene

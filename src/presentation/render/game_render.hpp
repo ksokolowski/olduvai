@@ -165,6 +165,10 @@ std::vector<std::uint8_t> sprite_to_rgba(const formats::Sprite& s,
                                          const std::vector<formats::Rgb>& pal,
                                          bool flip_h);
 
+// The balloon bunch on its own (L1SPR.MAT) — the death halo, and the
+// Enhanced fly-away after a landing (render/rising_balloons.hpp).
+constexpr int kSprBalloonBunch = 117;
+
 // Scale-aware core: at scale 1 identical to the FrameBuffer path; at scale>1
 // resolves the sprite through the asset cache and blits the upscaled block
 // at (x*scale, y*scale).

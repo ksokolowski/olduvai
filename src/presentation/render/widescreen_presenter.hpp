@@ -333,7 +333,9 @@ private:
     int ow0_ = 0, oh0_ = 0;
     // Mutable: Alt+Enter fullscreen toggle / window resize recomputes the
     // margin (and so active_/native_w_/logical size) via rebuild_if_resized.
+    void note_no_margin_(int ow, int oh);
     int margin_ = 0;
+    bool said_no_margin_ = false;   // the §3.25 line, printed at most once
     bool active_ = false;
     int native_w_ = 320;   // wide native width (320 + 2*margin)
     SDL_Texture* wtex_ = nullptr;   // wide texture (lazy; recreated on resize)

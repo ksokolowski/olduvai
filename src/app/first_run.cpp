@@ -34,6 +34,7 @@
 #include "enhance/hd_text.hpp"
 #include "prepare/game_files.hpp"
 #include "presentation/image_out.hpp"
+#include "presentation/window_util.hpp"   // sdl_base_dir
 #include "presentation/menu/profile_table.hpp"
 
 namespace olduvai::app {
@@ -137,6 +138,68 @@ std::string ascii_only(const std::string& s) {
 // button, key or touch, or two minutes.  OLDUVAI_NOFILES_SHOT=<file> saves the
 // composed screen and returns at once (tests/nofiles_screen.sh).  Returns false
 // if it could not show anything; the log line has been printed either way.
+// Paint the page: the first line in the title colour, the rest in body grey,
+// the block centred.  The cap size fits the longest line to 90% of the width
+// and the whole block to 90% of the height, never below a readable 8 px --
+// the handhelds' panels and a desktop window are the same code path here.
+std::vector<std::uint8_t> paint_text_page(enhance::HdText& text,
+                                          const std::vector<std::string>& lines,
+                                          int ow, int oh) {
+    std::vector<std::uint8_t> px(static_cast<std::size_t>(ow) * oh * 4);
+    for (std::size_t i = 0; i < px.size(); i += 4) {
+        px[i] = 18; px[i + 1] = 16; px[i + 2] = 24; px[i + 3] = 255;
+    }
+    text.set_cap_px(std::max(8, oh / 34));
+    int widest = 1;
+    for (const auto& l : lines) widest = std::max(widest, text.measure(l));
+    if (widest > ow * 9 / 10)
+        text.set_cap_px(std::max(8, text.cap_px() * (ow * 9 / 10) / widest));
+    const int line_h = text.cap_px() * 2;
+    int y = (oh - static_cast<int>(lines.size()) * line_h) / 2 +
+            text.cap_px() * 3 / 2;
+    for (std::size_t i = 0; i < lines.size(); ++i, y += line_h) {
+        const int x = (ow - text.measure(lines[i])) / 2;
+        if (i == 0)
+            text.draw(px, ow, oh, x, y, lines[i], 255, 196, 64);
+        else
+            text.draw(px, ow, oh, x, y, lines[i], 220, 220, 228);
+    }
+    return px;
+}
+
+// Hold the page on screen until the player presses something, or two minutes
+// pass.  Every pad is opened for the wait: on a handheld there is no keyboard
+// to fall back to, and the launcher hands us a device nobody has opened yet.
+void wait_for_any_button(SDL_Renderer* ren, SDL_Texture* tex) {
+    std::vector<SDL_Joystick*> pads;
+    for (int j = 0; j < SDL_NumJoysticks(); ++j)
+        if (SDL_Joystick* js = SDL_JoystickOpen(j)) pads.push_back(js);
+    // The button that launched the port may still be bouncing:
+    // ignore input for the first 700 ms.
+    const Uint32 t0 = SDL_GetTicks();
+    bool done = false;
+    while (!done && SDL_GetTicks() - t0 < 120000) {
+        SDL_RenderClear(ren);
+        SDL_RenderCopy(ren, tex, nullptr, nullptr);
+        SDL_RenderPresent(ren);
+        SDL_Event e;
+        while (SDL_WaitEventTimeout(&e, 100)) {
+            const bool input =
+                e.type == SDL_KEYDOWN ||
+                e.type == SDL_JOYBUTTONDOWN ||
+                e.type == SDL_CONTROLLERBUTTONDOWN ||
+                e.type == SDL_MOUSEBUTTONDOWN ||
+                e.type == SDL_FINGERDOWN;
+            if (e.type == SDL_QUIT ||
+                (input && SDL_GetTicks() - t0 > 700)) {
+                done = true;
+                break;
+            }
+        }
+    }
+    for (SDL_Joystick* js : pads) SDL_JoystickClose(js);
+}
+
 bool show_text_screen(const std::vector<std::string>& lines) {
     if (SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK) != 0) return false;
     SDL_Window* win = SDL_CreateWindow(
@@ -156,70 +219,18 @@ bool show_text_screen(const std::vector<std::string>& lines) {
     if (ren != nullptr) {
         int ow = 0, oh = 0;
         SDL_GetRendererOutputSize(ren, &ow, &oh);
-        std::string exe_dir = ".";
-        if (char* base = SDL_GetBasePath()) {
-            exe_dir = base;
-            SDL_free(base);
-            while (exe_dir.size() > 1 && (exe_dir.back() == '/' ||
-                                          exe_dir.back() == '\\'))
-                exe_dir.pop_back();
-        }
+        const std::string exe_dir = olduvai::presentation::sdl_base_dir();
         enhance::HdText text;
         if (ow > 0 && oh > 0 && text.load(exe_dir, 1, "NotoSans-Regular.ttf")) {
-            std::vector<std::uint8_t> px(static_cast<std::size_t>(ow) * oh * 4);
-            for (std::size_t i = 0; i < px.size(); i += 4) {
-                px[i] = 18; px[i + 1] = 16; px[i + 2] = 24; px[i + 3] = 255;
-            }
-            // Fit the longest line to 90% of the width, and all of them to 90%
-            // of the height; never smaller than a readable 8 px capital.
-            text.set_cap_px(std::max(8, oh / 34));
-            int widest = 1;
-            for (const auto& l : lines) widest = std::max(widest, text.measure(l));
-            if (widest > ow * 9 / 10)
-                text.set_cap_px(std::max(8, text.cap_px() * (ow * 9 / 10) / widest));
-            const int line_h = text.cap_px() * 2;
-            int y = (oh - static_cast<int>(lines.size()) * line_h) / 2 +
-                    text.cap_px() * 3 / 2;
-            for (std::size_t i = 0; i < lines.size(); ++i, y += line_h) {
-                const int x = (ow - text.measure(lines[i])) / 2;
-                if (i == 0)
-                    text.draw(px, ow, oh, x, y, lines[i], 255, 196, 64);
-                else
-                    text.draw(px, ow, oh, x, y, lines[i], 220, 220, 228);
-            }
+            const std::vector<std::uint8_t> px =
+                paint_text_page(text, lines, ow, oh);
             if (const char* shot = std::getenv("OLDUVAI_NOFILES_SHOT")) {
                 shown = presentation::save_rgba_image(px.data(), ow, oh, shot);
             } else if (SDL_Texture* tex = SDL_CreateTexture(
                            ren, SDL_PIXELFORMAT_RGBA32,
                            SDL_TEXTUREACCESS_STATIC, ow, oh)) {
                 SDL_UpdateTexture(tex, nullptr, px.data(), ow * 4);
-                std::vector<SDL_Joystick*> pads;
-                for (int j = 0; j < SDL_NumJoysticks(); ++j)
-                    if (SDL_Joystick* js = SDL_JoystickOpen(j)) pads.push_back(js);
-                // The button that launched the port may still be bouncing:
-                // ignore input for the first 700 ms.
-                const Uint32 t0 = SDL_GetTicks();
-                bool done = false;
-                while (!done && SDL_GetTicks() - t0 < 120000) {
-                    SDL_RenderClear(ren);
-                    SDL_RenderCopy(ren, tex, nullptr, nullptr);
-                    SDL_RenderPresent(ren);
-                    SDL_Event e;
-                    while (SDL_WaitEventTimeout(&e, 100)) {
-                        const bool input =
-                            e.type == SDL_KEYDOWN ||
-                            e.type == SDL_JOYBUTTONDOWN ||
-                            e.type == SDL_CONTROLLERBUTTONDOWN ||
-                            e.type == SDL_MOUSEBUTTONDOWN ||
-                            e.type == SDL_FINGERDOWN;
-                        if (e.type == SDL_QUIT ||
-                            (input && SDL_GetTicks() - t0 > 700)) {
-                            done = true;
-                            break;
-                        }
-                    }
-                }
-                for (SDL_Joystick* js : pads) SDL_JoystickClose(js);
+                wait_for_any_button(ren, tex);
                 SDL_DestroyTexture(tex);
                 shown = true;
             }

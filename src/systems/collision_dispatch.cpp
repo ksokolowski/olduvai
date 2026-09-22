@@ -94,6 +94,101 @@ bool try_complete_sign_teleport(SystemsState& state) {
     return true;
 }
 
+namespace {
+
+// The three deepest blocks of process_entity_collisions' result walk, moved
+// out whole.  Each takes the same two subjects the block always read — the
+// state and the collision result — and keeps its own evidence comments; the
+// dispatch below reads as the sequence it always described in prose.
+
+void apply_spring_launch(SystemsState& state,
+                         const core::CollisionResult& result) {
+    PlayerState& p = state.player;
+    // Generic trampoline bounce.
+    if (result.spring_bounce && p.gravity_flag == 0) {
+        p.saved_y_vel = p.y_vel;
+        p.y_vel = kSpringYVel;
+        p.gravity_flag = 1;
+        state.sfx_spring_pending = true;
+    }
+    // Lava spring — type-specific launch formula.
+    if (result.peak_l7_spring) {
+        p.x += result.peak_l7_x_delta;
+        p.y += result.peak_l7_y_delta;
+        p.saved_y_vel = p.y_vel;
+        p.y_vel = result.peak_l7_y_vel;
+        p.gravity_flag = 1;
+        state.sfx_spring_pending = true;
+    }
+}
+
+void apply_cave_entrance(SystemsState& state,
+                         const core::CollisionResult& result) {
+    PlayerState& p = state.player;
+    // Cave entrance: arm the 2-frame descent animation (sprites 44 → 45).
+    if (result.cave_enter >= 0 && state.cave_flag == 0 && state.input.down) {
+        if (state.cave_entrance_mask == 0 && p.cave_warp_freeze == 0) {
+            state.cave_entrance_mask = (result.cave_enter << 2) | 1;
+            // EXE 2A04:0d09-0d0d (TYPE 0x12 handler): player_x = entrance_x
+            // before the descent arms — the +-8 px snap aligns the sprite
+            // with the hole art.  Faithful; owner-questioned + byte-verified
+            // 2026-07-05.
+            for (const Entity& e : state.entities) {  // snap to entrance x
+                if (e.obj_type == ObjType::CaveEntrance &&
+                    e.counter == result.cave_enter) {
+                    p.x = e.x;
+                    break;
+                }
+            }
+            // EXE: the ARM frame already shows the first descent sprite —
+            // Objects_Update (2A04, L1 main 21f3:0313) arms the mask and
+            // FUN_27f7_1b51 (21f3:043a) draws (mask&3)+0x2c at player_x+4
+            // within the SAME frame, then increments (27f7:1b9c) and skips
+            // walk/gravity.  The port's descent tick runs before run_frame,
+            // so mirror the same-frame draw + increment here; without it the
+            // arm tick presented one extra snapped-standing frame the EXE
+            // never shows.  Finding cave_enter_exit_presentation_model.md.
+            p.sprite = kSprCaveDescent1;
+            p.dx = 4;                       // FUN_27f7_1b51 0x1b7f
+            ++state.cave_entrance_mask;     // FUN_27f7_1b51 0x1b9c
+            state.skip_player_update = true;   // 1b51 mask branch: no walk
+        }
+    }
+}
+
+void apply_cave_sign_teleport(SystemsState& state,
+                              const core::CollisionResult& result) {
+    PlayerState& p = state.player;
+    // Cave sign teleport out of the cave to a surface destination.
+    if (result.cave_sign_screen >= 0 && state.cave_flag) {
+        // Enhanced #20 — teleport cloud sequence: in enhanced mode the
+        // teleport is DEFERRED 3 ticks so the departure clouds (87→86→85,
+        // big→small, player hidden) play at the sign-cross spot; the
+        // countdown completion in game_app applies the teleport and arms
+        // the arrival sequence (empty→85→86→85 → player in the EXE's own
+        // 0x27-tick halo shield).  Classic teleports immediately, exactly
+        // as the EXE.  The pending gate swallows the per-frame sign
+        // re-triggers while the clouds play.
+        if (state.enhanced_active) {
+            if (!state.pending_sign_teleport &&
+                state.teleport_out_ticks == 0) {
+                state.pending_sign_teleport = true;
+                state.pending_tel_screen = result.cave_sign_screen;
+                state.pending_tel_x = result.cave_sign_x;
+                state.pending_tel_y = result.cave_sign_y;
+                state.teleport_out_ticks = 12;  // 3 POSE + 3 cloud stages x 3
+                state.teleport_fx_x = p.x;
+                state.teleport_fx_y = p.y;
+            }
+        } else {
+            apply_sign_teleport(state, result.cave_sign_screen,
+                                result.cave_sign_x, result.cave_sign_y);
+        }
+    }
+}
+
+}  // namespace
+
 void process_entity_collisions(SystemsState& state) {
     PlayerState& p = state.player;
     if (p.death_counter > 0) return;
@@ -150,22 +245,7 @@ void process_entity_collisions(SystemsState& state) {
         add_score_popup(state, ev.x, ev.y, ev.value);
     }
 
-    // Generic trampoline bounce.
-    if (result.spring_bounce && p.gravity_flag == 0) {
-        p.saved_y_vel = p.y_vel;
-        p.y_vel = kSpringYVel;
-        p.gravity_flag = 1;
-        state.sfx_spring_pending = true;
-    }
-    // Lava spring — type-specific launch formula.
-    if (result.peak_l7_spring) {
-        p.x += result.peak_l7_x_delta;
-        p.y += result.peak_l7_y_delta;
-        p.saved_y_vel = p.y_vel;
-        p.y_vel = result.peak_l7_y_vel;
-        p.gravity_flag = 1;
-        state.sfx_spring_pending = true;
-    }
+    apply_spring_launch(state, result);
 
     // Climbing enter / clamp / exits.  y_vel is deliberately NOT touched
     // anywhere here (the stairs handler never writes it — preserving the
@@ -190,62 +270,9 @@ void process_entity_collisions(SystemsState& state) {
     }
     if (result.climb_exit_bottom && p.climbing) p.climbing = 0;
 
-    // Cave entrance: arm the 2-frame descent animation (sprites 44 → 45).
-    if (result.cave_enter >= 0 && state.cave_flag == 0 && state.input.down) {
-        if (state.cave_entrance_mask == 0 && p.cave_warp_freeze == 0) {
-            state.cave_entrance_mask = (result.cave_enter << 2) | 1;
-            // EXE 2A04:0d09-0d0d (TYPE 0x12 handler): player_x = entrance_x
-            // before the descent arms — the +-8 px snap aligns the sprite
-            // with the hole art.  Faithful; owner-questioned + byte-verified
-            // 2026-07-05.
-            for (const Entity& e : state.entities) {  // snap to entrance x
-                if (e.obj_type == ObjType::CaveEntrance &&
-                    e.counter == result.cave_enter) {
-                    p.x = e.x;
-                    break;
-                }
-            }
-            // EXE: the ARM frame already shows the first descent sprite —
-            // Objects_Update (2A04, L1 main 21f3:0313) arms the mask and
-            // FUN_27f7_1b51 (21f3:043a) draws (mask&3)+0x2c at player_x+4
-            // within the SAME frame, then increments (27f7:1b9c) and skips
-            // walk/gravity.  The port's descent tick runs before run_frame,
-            // so mirror the same-frame draw + increment here; without it the
-            // arm tick presented one extra snapped-standing frame the EXE
-            // never shows.  Finding cave_enter_exit_presentation_model.md.
-            p.sprite = kSprCaveDescent1;
-            p.dx = 4;                       // FUN_27f7_1b51 0x1b7f
-            ++state.cave_entrance_mask;     // FUN_27f7_1b51 0x1b9c
-            state.skip_player_update = true;   // 1b51 mask branch: no walk
-        }
-    }
+    apply_cave_entrance(state, result);
 
-    // Cave sign teleport out of the cave to a surface destination.
-    if (result.cave_sign_screen >= 0 && state.cave_flag) {
-        // Enhanced #20 — teleport cloud sequence: in enhanced mode the
-        // teleport is DEFERRED 3 ticks so the departure clouds (87→86→85,
-        // big→small, player hidden) play at the sign-cross spot; the
-        // countdown completion in game_app applies the teleport and arms
-        // the arrival sequence (empty→85→86→85 → player in the EXE's own
-        // 0x27-tick halo shield).  Classic teleports immediately, exactly
-        // as the EXE.  The pending gate swallows the per-frame sign
-        // re-triggers while the clouds play.
-        if (state.enhanced_active) {
-            if (!state.pending_sign_teleport &&
-                state.teleport_out_ticks == 0) {
-                state.pending_sign_teleport = true;
-                state.pending_tel_screen = result.cave_sign_screen;
-                state.pending_tel_x = result.cave_sign_x;
-                state.pending_tel_y = result.cave_sign_y;
-                state.teleport_out_ticks = 12;  // 3 POSE + 3 cloud stages x 3
-                state.teleport_fx_x = p.x;
-                state.teleport_fx_y = p.y;
-            }
-        } else {
-            apply_sign_teleport(state, result.cave_sign_screen,
-                                result.cave_sign_x, result.cave_sign_y);
-        }
-    }
+    apply_cave_sign_teleport(state, result);
 
     // Platform riding: snap on top.
     p.platform_flag = 0;

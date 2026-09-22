@@ -99,6 +99,11 @@ void maybe_dump_steady(const void* pixels, int w, int h) {
     note_dump_time(dir, name);
 }
 
+void present_output(SDL_Renderer* ren) {
+    maybe_dump_output(ren);
+    SDL_RenderPresent(ren);
+}
+
 void maybe_dump_output(SDL_Renderer* ren) {
     const char* dir = std::getenv("OLDUVAI_DUMP_OUTPUT");
     if (dir == nullptr || ren == nullptr) return;

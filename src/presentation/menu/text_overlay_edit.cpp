@@ -59,7 +59,7 @@ CaretPos caret_in(const std::vector<VisRow>& rows, int crow, int ccol) {
         // Last wrapped row of a logical line owns the end-of-line caret.
         const bool last_of_line =
             i + 1 >= static_cast<int>(rows.size()) ||
-            rows[static_cast<std::size_t>(i + 1)].lrow != crow;
+            rows[static_cast<std::size_t>(i) + 1].lrow != crow;
         if (ccol >= start && (ccol < start + len ||
                               (last_of_line && ccol <= start + len))) {
             out.vis = i;

@@ -143,11 +143,19 @@ TEST_CASE("deserialize enforces the v3 layout tag and semantic ranges") {
                         +[](SaveState& x) { x.hdr.level = 8; },
                         +[](SaveState& x) { x.hdr.current_level = 9; },
                         +[](SaveState& x) { x.hdr.current_screen = -1; },
-                        +[](SaveState& x) { x.hdr.current_screen = 3000; }}) {
+                        +[](SaveState& x) { x.hdr.current_screen = 3000; },
+                        // The score lands in a `long`, 32-bit on Windows.
+                        +[](SaveState& x) { x.hdr.score = -1; },
+                        +[](SaveState& x) { x.hdr.score = 0x80000000LL; },
+                        +[](SaveState& x) { x.hdr.next_life_score = 0x80000000LL; }}) {
         SaveState r = s;
         mutate(r);
         CHECK_FALSE(deserialize(serialize(r)).has_value());
     }
+    // The 32-bit ceiling itself still loads.
+    SaveState top = s;
+    top.hdr.score = 0x7fffffffLL;
+    CHECK(deserialize(serialize(top)).has_value());
 }
 
 TEST_CASE("EntitySnapshot canary: size tripwire + every-field round-trip") {

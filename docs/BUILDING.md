@@ -1,8 +1,13 @@
 # Building Olduvai from source
 
-Requires **CMake ≥ 3.21** and a **C++17** compiler. **SDL2** is required for
-the presentation layer — without it the engine core still builds headless
-(formats, systems, tests of those layers).
+Requires **CMake ≥ 3.21** and a **C++17** compiler. **SDL2 2.0.20 or newer** is
+required for the presentation layer — without it the engine core still builds
+headless (formats, systems, tests of those layers).
+
+2.0.20 is a tested floor, not a guess: CI builds the whole tree against the real
+2.0.20 headers on every push (Ubuntu 22.04's SDL2), and the Linux release is
+built there too. Configure does not check the version, so an older SDL2 fails
+partway through the compile rather than up front.
 
 ## SDL policy: SDL2-native, sdl2-compat-clean
 

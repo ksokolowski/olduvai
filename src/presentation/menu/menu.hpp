@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <cstdio>
 #include <functional>
 #include <map>
 #include <optional>
@@ -75,8 +76,18 @@ public:
     void close() { stack_.clear(); }
     bool is_open() const { return !stack_.empty(); }
 
-    const std::string& current_screen() const { return stack_.back().first; }
-    int cursor_index() const { return stack_.back().second; }
+    // Safe when CLOSED.  `stack_.back()` on an empty stack is undefined
+    // behaviour that yields a garbage key, and the only map::at in this tree
+    // is one line below — so the symptom of "asked a closed menu what it is
+    // showing" was `map::at: key not found` from a string nobody can read,
+    // thrown up through run_game and reported to the player as "your game
+    // files are corrupt" (TrimUI, 2026-09-20).  Closed menus now answer with
+    // an empty screen id instead.
+    const std::string& current_screen() const {
+        static const std::string kNone;
+        return stack_.empty() ? kNone : stack_.back().first;
+    }
+    int cursor_index() const { return stack_.empty() ? 0 : stack_.back().second; }
     const std::string& header() const { return screen().header; }
     std::vector<MenuRow> rows() const;
 
@@ -92,7 +103,23 @@ private:
     MenuActionTable actions_;
     std::vector<std::pair<std::string, int>> stack_;  // (screen_id, cursor)
 
-    const MenuScreen& screen() const { return model_.screens.at(current_screen()); }
+    // A screen the model does not have renders as nothing, and says so once
+    // on stderr.  It cannot happen through open()/activate(), which both
+    // validate — which is exactly why a throw here was so hard to read.
+    const MenuScreen& screen() const {
+        static const MenuScreen kEmpty;
+        const auto it = model_.screens.find(current_screen());
+        if (it != model_.screens.end()) return it->second;
+        static bool said = false;
+        if (!said) {
+            said = true;
+            std::fprintf(stderr, "menu: no screen '%s' in the model%s\n",
+                         current_screen().c_str(),
+                         current_screen().empty() ? " (the menu is closed)"
+                                                  : "");
+        }
+        return kEmpty;
+    }
     const std::vector<MenuItem>& items() const { return screen().items; }
     const MenuItem& selected() const { return items()[cursor_index()]; }
     std::optional<std::string> value_str(const MenuItem& it) const;

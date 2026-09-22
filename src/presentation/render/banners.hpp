@@ -28,9 +28,16 @@ public:
     // run_platform_level locals; the presenter lives in the same scope).
     // `banner_fx` is the configured effect; OLDUVAI_BANNER_FX overrides
     // BOTH banners for experimentation.
+    // `deterministic_clock` swaps SDL_GetTicks() for the logic tick clock
+    // (state.frame_counter x 1000/18 ms).  The shell sets it in the headless
+    // capture modes (--play-frames / --play-shot), where wall-clock animation
+    // makes the output irreproducible run to run -- the same classic/
+    // frame-counted vs smooth/wall-clock split PARITY_CHECKLIST T8 records.
+    // Interactive play keeps wall-clock motion at any refresh rate.
     BannerPresenter(enhance::HdText& hd_text,
                     const systems::SystemsState& state,
-                    const std::string& banner_fx);
+                    const std::string& banner_fx,
+                    bool deterministic_clock = false);
 
     // Once per logic tick: arm the GET READY fly-away on the level-start
     // rising edge of get_ready_counter (load_level sets it to 0x11).
@@ -44,9 +51,10 @@ public:
     void draw(std::vector<std::uint8_t>& b, int ow, int oh);
 
     // Overlay-skip key.  0 means "never skip": returned whenever ANYTHING
-    // would be drawn, because both banners animate off the wall clock and so
-    // change every frame while visible.  A stable non-zero value means the
-    // banner contributes nothing to the overlay this frame.
+    // would be drawn, because both banners animate off the clock (wall-clock
+    // in play, the logic tick under capture) and so change while visible.  A
+    // stable non-zero value means the banner contributes nothing to the
+    // overlay this frame.
     //
     // WHY VISIBILITY IS ENOUGH, side effect included.  draw() mutates exactly
     // one thing -- it clears gr_anim_active_ when the fly-away finishes -- and
@@ -55,7 +63,20 @@ public:
     // skipping never swallows the latch.
     std::uint64_t key() const;
 
+    // Hide both banners while a screen transition plays (owner, 2026-09-17):
+    // the slide into the food-gate screen used to carry the bobbing banner
+    // over moving scenery, and paid for it on every transition frame.  The
+    // banner appears once the new screen is up; leaving the gate screen it
+    // is already gone, since the current screen changes before the slide.
+    void set_suppressed(bool s) { suppressed_ = s; }
+
 private:
+    // The banner's "now": wall-clock in play, the logic tick clock under
+    // headless capture (see the constructor).  Uint32 to match SDL_GetTicks.
+    Uint32 now_ms() const;
+
+    bool suppressed_ = false;
+    bool deterministic_clock_ = false;
     enhance::HdText& hd_text_;
     const systems::SystemsState& state_;
     std::string gr_effect_;

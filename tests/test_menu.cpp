@@ -280,3 +280,35 @@ TEST_CASE("text row previews first line and activate returns an edit sentinel") 
     CHECK(m.rows()[0].value == std::optional<std::string>("first line"));
     CHECK(m.activate() == "__edit_text:report.description");
 }
+
+TEST_CASE("menu: a CLOSED menu answers, it does not read off the end") {
+    // REGRESSION (TrimUI, 2026-09-20).  current_screen() returned
+    // stack_.back().first with no emptiness check, and screen() fed that to
+    // the tree's only map::at.  Asking a closed menu what it shows was
+    // undefined behaviour whose symptom — on the device, not on the dev Mac —
+    // was an out_of_range escaping to run_game's handler, which tells the
+    // player their game files are corrupt.
+    auto model = make_model();
+    FakeBindings b;
+    Menu menu(model, b);
+    CHECK(!menu.is_open());
+    CHECK(menu.current_screen().empty());
+    CHECK(menu.cursor_index() == 0);
+    CHECK(menu.rows().empty());
+    CHECK(menu.header().empty());
+    menu.move(+1);          // and none of the navigation throws either
+    menu.adjust(+1);
+    menu.back();
+    CHECK(menu.activate().empty());
+    CHECK(!menu.is_open());
+}
+
+TEST_CASE("menu: an unknown screen renders as nothing, not as a throw") {
+    auto model = make_model();
+    FakeBindings b;
+    Menu menu(model, b);
+    menu.open("no-such-screen");
+    CHECK(!menu.is_open());     // open() refuses it
+    CHECK(menu.rows().empty());
+    CHECK(menu.header().empty());
+}

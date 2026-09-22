@@ -32,6 +32,7 @@
 
 namespace olduvai::enhance {
 class HdText;
+class BannerShader;
 }
 
 namespace olduvai::presentation {
@@ -117,13 +118,14 @@ private:
     bool key_was_same_ = false; // this pass: the key claimed "unchanged"
     bool verify_ = false;       // OLDUVAI_OVERLAY_VERIFY
     bool verify_init_ = false;
-    // Rows that held content at the last flush.  The clear only has to erase
-    // what was actually drawn, and the hash pass already reads every byte, so
-    // this extent costs nothing to collect and turns a full-panel 3.7 MB memset
-    // into a strip.  NO CALLER CHANGES: it is derived from the drawn bytes, so
-    // it cannot disagree with them the way a declared key can.
-    // Inclusive [dirty_lo_, dirty_hi_]; lo > hi means "nothing drawn".
-    int dirty_lo_ = 0, dirty_hi_ = -1;
+    // Per-row content flags (1 = the row holds drawn bytes), both derived
+    // from the drawn bytes at flush, so they cannot disagree with them the
+    // way a declared key can.  buf_rows_: rows the next clear must erase.
+    // tex_rows_: rows the TEXTURE shows from the last upload — a partial
+    // upload must cover them too, or text that moved (a bobbing banner)
+    // leaves its old rows behind.
+    std::vector<std::uint8_t> buf_rows_;
+    std::vector<std::uint8_t> tex_rows_;
 
     std::vector<std::uint8_t> buf_;
     SDL_Texture* tex_ = nullptr;
@@ -139,14 +141,13 @@ void draw_centered_overlay_row(std::vector<std::uint8_t>& out, int ow, int oh,
                                const enhance::HdText& font,
                                int native_baseline_y, const std::string& text);
 
-// Same centred placement, but each pixel is coloured by `shade` (see
-// HdText::draw_styled / ShadeFn) instead of a flat 235,235,235 — used for the
-// enhanced banner effects (fire / rainbow / gold / pulse).
-void draw_centered_overlay_row_styled(
-    std::vector<std::uint8_t>& out, int ow, int oh, const enhance::HdText& font,
-    int native_baseline_y, const std::string& text,
-    const std::function<void(float, float, std::uint8_t&, std::uint8_t&,
-                             std::uint8_t&)>& shade);
+// Same centred placement, each pixel coloured by a banner effect
+// (enhance/banner_shader.hpp) — the GET READY / NOT ENOUGH FOOD banners.
+void draw_centered_overlay_row_banner(std::vector<std::uint8_t>& out, int ow,
+                                      int oh, const enhance::HdText& font,
+                                      int native_baseline_y,
+                                      const std::string& text,
+                                      const enhance::BannerShader& shader);
 
 // Draw the score-tally `rows` at output resolution with a FIXED-ANCHOR layout
 // (mirrors the reference's _tally_anchors / _record_tally_rows).  The colon column

@@ -84,12 +84,13 @@ Rgba sprite_to_rgba(const Sprite& s) {
     return out;
 }
 
-}  // namespace
-
-int run_viewer(const ViewerOptions& opts) {
-    // ── load assets ──
-    std::vector<Pc1Item> pc1s;
-    std::vector<MatItem> mats;
+// Build the viewer's inventory: every .PC1 image and .MAT sprite set found in
+// the four game archives, labelled by their source archive + entry name.
+// Split out of run_viewer (BACKLOG §3.12: 67 points) — the load is a phase
+// with its own happy/empty paths, so the program reads as load → window →
+// loop, and the phase is testable on its own (viewer_shot exercises it).
+void load_viewer_assets(const ViewerOptions& opts, std::vector<Pc1Item>& pc1s,
+                        std::vector<MatItem>& mats) {
     for (const char* a : {"FILESA.CUR", "FILESB.CUR",
                           "FILESA.VGA", "FILESB.VGA"}) {
         const auto path = opts.game_dir / a;
@@ -108,6 +109,15 @@ int run_viewer(const ViewerOptions& opts) {
             }
         }
     }
+}
+
+}  // namespace
+
+int run_viewer(const ViewerOptions& opts) {
+    // ── load assets ──
+    std::vector<Pc1Item> pc1s;
+    std::vector<MatItem> mats;
+    load_viewer_assets(opts, pc1s, mats);
     if (pc1s.empty() && mats.empty()) {
         std::fprintf(stderr, "viewer: no game images found in %s\n",
                      opts.game_dir.string().c_str());
@@ -176,7 +186,8 @@ int run_viewer(const ViewerOptions& opts) {
         }
         SDL_RenderPresent(ren);
 
-        if (frames_left > 0 && --frames_left == 0) running = false;
+        if (frames_left > 0) --frames_left;
+        if (frames_left == 0) running = false;
 
         SDL_Event ev;
         while (running && SDL_PollEvent(&ev)) {

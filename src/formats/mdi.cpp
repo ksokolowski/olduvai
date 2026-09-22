@@ -117,25 +117,126 @@ int mdi_track_id(const std::string& lower_name) {
     return it == kIds.end() ? -1 : it->second;
 }
 
-std::vector<std::uint8_t> build_gm_midi(const std::vector<std::uint8_t>& raw,
-                                        int track_id, bool mt32_strict,
-                                        bool gm_translate) {
+namespace {
+
+// The MDI files are single-track SMFs: a header chunk, then one MTrk.  Fills
+// `header_len` and `track` with that track's bytes; false when the file is not
+// that shape, and the caller then passes it through untouched.
+bool first_track_bytes(const std::vector<std::uint8_t>& raw,
+                       std::size_t& header_len,
+                       std::vector<std::uint8_t>& track) {
     if (raw.size() < 14 || raw[0] != 'M' || raw[1] != 'T' || raw[2] != 'h' ||
         raw[3] != 'd') {
-        return raw;
+        return false;
     }
-    const std::size_t header_len = be32(raw, 4);
-    std::size_t pos = 8 + header_len;
+    header_len = be32(raw, 4);
+    const std::size_t pos = 8 + header_len;
     if (pos + 8 > raw.size() || raw[pos] != 'M' || raw[pos + 1] != 'T' ||
         raw[pos + 2] != 'r' || raw[pos + 3] != 'k') {
-        return raw;
+        return false;
     }
     const std::size_t track_len = be32(raw, pos + 4);
     const std::size_t track_start = pos + 8;
-    std::vector<std::uint8_t> track(
-        raw.begin() + static_cast<std::ptrdiff_t>(track_start),
-        raw.begin() + static_cast<std::ptrdiff_t>(
-            std::min(track_start + track_len, raw.size())));
+    track.assign(raw.begin() + static_cast<std::ptrdiff_t>(track_start),
+                 raw.begin() + static_cast<std::ptrdiff_t>(
+                     std::min(track_start + track_len, raw.size())));
+    return true;
+}
+
+// The channel-voice events, with the held-note bookkeeping: the source tracks
+// release notes implicitly, so every channel remembers its last sounding note
+// and a new note-on releases that one first.  `last_note` is indexed by the
+// ORIGINAL channel `ch` (see the remap comment in build_gm_midi) while the
+// bytes go out on the remapped channel `oc`.
+template <typename Emit>
+void emit_channel_event(int event_type, int oc, int ch, int d1, int d2,
+                        int (&last_note)[16], const Emit& emit) {
+    if (event_type == 0x90 && d2 != 0) {
+        // Auto-release a held note, then emit + remember.
+        if (last_note[ch] < 0x80) {
+            const std::uint8_t off[3] = {
+                static_cast<std::uint8_t>(0x80 | oc),
+                static_cast<std::uint8_t>(last_note[ch]), 0x00};
+            emit(off, 3);
+        }
+        const std::uint8_t on[3] = {static_cast<std::uint8_t>(0x90 | oc),
+                                    static_cast<std::uint8_t>(d1),
+                                    static_cast<std::uint8_t>(d2)};
+        emit(on, 3);
+        last_note[ch] = d1;
+    } else if (event_type == 0x90) {   // vel 0 = release
+        const int prev = last_note[ch];
+        if (prev < 0x80) {
+            const std::uint8_t off[3] = {
+                static_cast<std::uint8_t>(0x80 | oc),
+                static_cast<std::uint8_t>(prev), 0x00};
+            emit(off, 3);
+        }
+        last_note[ch] = 0x80;
+    } else if (event_type == 0x80) {
+        const int note = d1 != 0 ? d1 : last_note[ch];
+        if (note < 0x80) {
+            const std::uint8_t off[3] = {
+                static_cast<std::uint8_t>(0x80 | oc),
+                static_cast<std::uint8_t>(note),
+                static_cast<std::uint8_t>(d2 & 0x7F)};
+            emit(off, 3);
+            last_note[ch] = 0x80;
+        }
+    } else {
+        if (event_type == 0xC0 || event_type == 0xD0) {
+            const std::uint8_t p[2] = {
+                static_cast<std::uint8_t>(event_type | oc),
+                static_cast<std::uint8_t>(d1)};
+            emit(p, 2);
+        } else {
+            const std::uint8_t p[3] = {
+                static_cast<std::uint8_t>(event_type | oc),
+                static_cast<std::uint8_t>(d1),
+                static_cast<std::uint8_t>(d2)};
+            emit(p, 3);
+        }
+    }
+}
+
+// Close the event stream (an EOT meta, unless the source already ended with
+// one) and wrap it back into the original file's header chunk.
+std::vector<std::uint8_t> assemble_smf(const std::vector<std::uint8_t>& raw,
+                                       std::size_t header_len,
+                                       std::vector<std::uint8_t>& ev) {
+    // End-of-track meta.
+    const bool has_eot =
+        ev.size() >= 3 && ev[ev.size() - 3] == 0xFF &&
+        ev[ev.size() - 2] == 0x2F && ev[ev.size() - 1] == 0x00;
+    if (!has_eot) {
+        write_vlq(ev, 0);
+        ev.push_back(0xFF);
+        ev.push_back(0x2F);
+        ev.push_back(0x00);
+    }
+    std::vector<std::uint8_t> out(
+        raw.begin(), raw.begin() + static_cast<std::ptrdiff_t>(8 + header_len));
+    out.push_back('M');
+    out.push_back('T');
+    out.push_back('r');
+    out.push_back('k');
+    const std::uint32_t n = static_cast<std::uint32_t>(ev.size());
+    out.push_back(static_cast<std::uint8_t>(n >> 24));
+    out.push_back(static_cast<std::uint8_t>(n >> 16));
+    out.push_back(static_cast<std::uint8_t>(n >> 8));
+    out.push_back(static_cast<std::uint8_t>(n));
+    out.insert(out.end(), ev.begin(), ev.end());
+    return out;
+}
+
+}  // namespace
+
+std::vector<std::uint8_t> build_gm_midi(const std::vector<std::uint8_t>& raw,
+                                        int track_id, bool mt32_strict,
+                                        bool gm_translate) {
+    std::size_t header_len = 0;
+    std::vector<std::uint8_t> track;
+    if (!first_track_bytes(raw, header_len, track)) return raw;
 
     std::vector<std::uint8_t> ev;
     // MT-32 'R'-branch channel remap (melody 0-5 → 1-6, percussion 6-15 → 9 =
@@ -234,76 +335,9 @@ std::vector<std::uint8_t> build_gm_midi(const std::vector<std::uint8_t>& raw,
                             event_type == 0xD0 || event_type == 0xE0)) {
             continue;
         }
-        if (event_type == 0x90 && d2 != 0) {
-            // Auto-release a held note, then emit + remember.
-            if (last_note[ch] < 0x80) {
-                const std::uint8_t off[3] = {
-                    static_cast<std::uint8_t>(0x80 | oc),
-                    static_cast<std::uint8_t>(last_note[ch]), 0x00};
-                emit(off, 3);
-            }
-            const std::uint8_t on[3] = {static_cast<std::uint8_t>(0x90 | oc),
-                                        static_cast<std::uint8_t>(d1),
-                                        static_cast<std::uint8_t>(d2)};
-            emit(on, 3);
-            last_note[ch] = d1;
-        } else if (event_type == 0x90) {   // vel 0 = release
-            const int prev = last_note[ch];
-            if (prev < 0x80) {
-                const std::uint8_t off[3] = {
-                    static_cast<std::uint8_t>(0x80 | oc),
-                    static_cast<std::uint8_t>(prev), 0x00};
-                emit(off, 3);
-            }
-            last_note[ch] = 0x80;
-        } else if (event_type == 0x80) {
-            const int note = d1 != 0 ? d1 : last_note[ch];
-            if (note < 0x80) {
-                const std::uint8_t off[3] = {
-                    static_cast<std::uint8_t>(0x80 | oc),
-                    static_cast<std::uint8_t>(note),
-                    static_cast<std::uint8_t>(d2 & 0x7F)};
-                emit(off, 3);
-                last_note[ch] = 0x80;
-            }
-        } else {
-            if (event_type == 0xC0 || event_type == 0xD0) {
-                const std::uint8_t p[2] = {
-                    static_cast<std::uint8_t>(event_type | oc),
-                    static_cast<std::uint8_t>(d1)};
-                emit(p, 2);
-            } else {
-                const std::uint8_t p[3] = {
-                    static_cast<std::uint8_t>(event_type | oc),
-                    static_cast<std::uint8_t>(d1),
-                    static_cast<std::uint8_t>(d2)};
-                emit(p, 3);
-            }
-        }
+        emit_channel_event(event_type, oc, ch, d1, d2, last_note, emit);
     }
-    // End-of-track meta.
-    const bool has_eot =
-        ev.size() >= 3 && ev[ev.size() - 3] == 0xFF &&
-        ev[ev.size() - 2] == 0x2F && ev[ev.size() - 1] == 0x00;
-    if (!has_eot) {
-        write_vlq(ev, 0);
-        ev.push_back(0xFF);
-        ev.push_back(0x2F);
-        ev.push_back(0x00);
-    }
-    std::vector<std::uint8_t> out(
-        raw.begin(), raw.begin() + static_cast<std::ptrdiff_t>(8 + header_len));
-    out.push_back('M');
-    out.push_back('T');
-    out.push_back('r');
-    out.push_back('k');
-    const std::uint32_t n = static_cast<std::uint32_t>(ev.size());
-    out.push_back(static_cast<std::uint8_t>(n >> 24));
-    out.push_back(static_cast<std::uint8_t>(n >> 16));
-    out.push_back(static_cast<std::uint8_t>(n >> 8));
-    out.push_back(static_cast<std::uint8_t>(n));
-    out.insert(out.end(), ev.begin(), ev.end());
-    return out;
+    return assemble_smf(raw, header_len, ev);
 }
 
 namespace {
@@ -349,6 +383,102 @@ MdiSeqEvent decode_seq_event(const std::uint8_t* p, std::size_t n) {
 
 }  // namespace
 
+// One MTrk chunk's event stream, appended to `out`.
+//
+// Split out of parse_mdi_events (BACKLOG §3.12: 84 points), which is the
+// FILE structure — header, track table, per-track events — with the event
+// dispatch inlined into it.  The dispatch stays one function on purpose:
+// running status, meta, sysex and the channel events are one decision over
+// the same byte, and separating them would mean re-deriving `status` in
+// each piece.  A malformed stream returns false and the caller discards
+// the WHOLE file, exactly as the inlined version did.
+bool parse_mdi_track(const std::vector<std::uint8_t>& raw, std::size_t i,
+                     std::size_t te, MdiEventStream& out) {
+    std::uint32_t tick = 0;
+    int running_status = -1;
+    while (i < te) {
+        // Delta VLQ.
+        std::uint32_t delta = 0;
+        while (i < te) {
+            const std::uint8_t b = raw[i++];
+            delta = (delta << 7) | (b & 0x7F);
+            if ((b & 0x80) == 0) break;
+        }
+        tick += delta;
+        if (i >= te) break;
+
+        int status = raw[i];
+        if (status < 0x80) {
+            if (running_status < 0) return false;
+            status = running_status;
+        } else {
+            ++i;
+            running_status = status < 0xF0 ? status : -1;
+        }
+
+        if (status == 0xFF) {   // meta
+            if (i >= te) return false;
+            const std::uint8_t meta_type = raw[i++];
+            std::size_t mlen = 0;
+            while (i < te) {
+                const std::uint8_t b = raw[i++];
+                mlen = (mlen << 7) | (b & 0x7F);
+                if ((b & 0x80) == 0) break;
+            }
+            mlen = std::min(mlen, te - i);
+            if (meta_type == 0x51 && mlen == 3) {
+                MdiStreamEvent e;
+                e.tick = tick;
+                e.kind = MdiStreamEvent::Kind::Tempo;
+                e.tempo_us = (static_cast<std::uint32_t>(raw[i]) << 16) |
+                             (static_cast<std::uint32_t>(raw[i + 1]) << 8) |
+                             raw[i + 2];
+                out.events.push_back(e);
+            } else if (meta_type == 0x7F) {
+                MdiStreamEvent e;
+                e.tick = tick;
+                e.kind = MdiStreamEvent::Kind::Seq;
+                e.seq = decode_seq_event(raw.data() + i, mlen);
+                out.events.push_back(e);
+            }
+            i += mlen;
+            continue;
+        }
+        if (status == 0xF0 || status == 0xF7) {   // sysex — skip
+            std::size_t slen = 0;
+            while (i < te) {
+                const std::uint8_t b = raw[i++];
+                slen = (slen << 7) | (b & 0x7F);
+                if ((b & 0x80) == 0) break;
+            }
+            i += std::min(slen, te - i);
+            continue;
+        }
+
+        const int event_type = status & 0xF0;
+        MdiStreamEvent e;
+        e.tick = tick;
+        e.kind = MdiStreamEvent::Kind::Channel;
+        e.status = static_cast<std::uint8_t>(status);
+        if (event_type == 0x80 || event_type == 0x90 ||
+            event_type == 0xA0 || event_type == 0xB0 ||
+            event_type == 0xE0) {
+            if (i + 1 >= te) return false;
+            e.data1 = raw[i];
+            e.data2 = raw[i + 1];
+            i += 2;
+        } else if (event_type == 0xC0 || event_type == 0xD0) {
+            if (i >= te) return false;
+            e.data1 = raw[i];
+            ++i;
+        } else {
+            return false;   // unsupported status
+        }
+        out.events.push_back(e);
+    }
+    return true;
+}
+
 MdiEventStream parse_mdi_events(const std::vector<std::uint8_t>& raw) {
     MdiEventStream out;
     if (raw.size() < 14 || raw[0] != 'M' || raw[1] != 'T' || raw[2] != 'h' ||
@@ -372,89 +502,7 @@ MdiEventStream parse_mdi_events(const std::vector<std::uint8_t>& raw) {
         const std::size_t te = ts + track_len;
         pos = te;
 
-        std::size_t i = ts;
-        std::uint32_t tick = 0;
-        int running_status = -1;
-        while (i < te) {
-            // Delta VLQ.
-            std::uint32_t delta = 0;
-            while (i < te) {
-                const std::uint8_t b = raw[i++];
-                delta = (delta << 7) | (b & 0x7F);
-                if ((b & 0x80) == 0) break;
-            }
-            tick += delta;
-            if (i >= te) break;
-
-            int status = raw[i];
-            if (status < 0x80) {
-                if (running_status < 0) return MdiEventStream{};
-                status = running_status;
-            } else {
-                ++i;
-                running_status = status < 0xF0 ? status : -1;
-            }
-
-            if (status == 0xFF) {   // meta
-                if (i >= te) return MdiEventStream{};
-                const std::uint8_t meta_type = raw[i++];
-                std::size_t mlen = 0;
-                while (i < te) {
-                    const std::uint8_t b = raw[i++];
-                    mlen = (mlen << 7) | (b & 0x7F);
-                    if ((b & 0x80) == 0) break;
-                }
-                mlen = std::min(mlen, te - i);
-                if (meta_type == 0x51 && mlen == 3) {
-                    MdiStreamEvent e;
-                    e.tick = tick;
-                    e.kind = MdiStreamEvent::Kind::Tempo;
-                    e.tempo_us = (static_cast<std::uint32_t>(raw[i]) << 16) |
-                                 (static_cast<std::uint32_t>(raw[i + 1]) << 8) |
-                                 raw[i + 2];
-                    out.events.push_back(e);
-                } else if (meta_type == 0x7F) {
-                    MdiStreamEvent e;
-                    e.tick = tick;
-                    e.kind = MdiStreamEvent::Kind::Seq;
-                    e.seq = decode_seq_event(raw.data() + i, mlen);
-                    out.events.push_back(e);
-                }
-                i += mlen;
-                continue;
-            }
-            if (status == 0xF0 || status == 0xF7) {   // sysex — skip
-                std::size_t slen = 0;
-                while (i < te) {
-                    const std::uint8_t b = raw[i++];
-                    slen = (slen << 7) | (b & 0x7F);
-                    if ((b & 0x80) == 0) break;
-                }
-                i += std::min(slen, te - i);
-                continue;
-            }
-
-            const int event_type = status & 0xF0;
-            MdiStreamEvent e;
-            e.tick = tick;
-            e.kind = MdiStreamEvent::Kind::Channel;
-            e.status = static_cast<std::uint8_t>(status);
-            if (event_type == 0x80 || event_type == 0x90 ||
-                event_type == 0xA0 || event_type == 0xB0 ||
-                event_type == 0xE0) {
-                if (i + 1 >= te) return MdiEventStream{};
-                e.data1 = raw[i];
-                e.data2 = raw[i + 1];
-                i += 2;
-            } else if (event_type == 0xC0 || event_type == 0xD0) {
-                if (i >= te) return MdiEventStream{};
-                e.data1 = raw[i];
-                ++i;
-            } else {
-                return MdiEventStream{};   // unsupported status
-            }
-            out.events.push_back(e);
-        }
+        if (!parse_mdi_track(raw, ts, te, out)) return MdiEventStream{};
     }
     out.valid = true;
     return out;

@@ -5,8 +5,16 @@
 # touches them.
 * text=auto
 *.sh text eol=lf
+# Test fixtures are DATA read byte-for-byte by the gates: golden hash lists
+# (`while read -r WANT NAME` keeps a CR, so on a CRLF Windows checkout every
+# frame name ended in \r and menu_script / wide_transition reported every
+# frame "not produced" — found 2026-09-22, the first Windows run with game
+# data) and the replay .jsonl inputs.  LF everywhere.
+tests/fixtures/** text eol=lf
 scripts/hooks/* text eol=lf
 *.png binary
+*.jpg binary
+*.mp4 binary
 *.ico binary
 *.icns binary
 *.ttf binary

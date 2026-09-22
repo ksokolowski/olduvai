@@ -2,13 +2,11 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "presentation/diag/report_form.hpp"
 
-#include "enhance/parallel_rows.hpp"  // parallel_row_threads
 
 #include <cstdio>
 #include <vector>
 
 #include "presentation/diag/bug_capture.hpp"
-#include "presentation/image_out.hpp"
 #include "presentation/menu/menu_render.hpp"
 #include "presentation/diag/report_templates.hpp"
 #include "presentation/menu/settings_session.hpp"
@@ -119,19 +117,8 @@ void ReportFormService::handle_event(const SDL_Event& ev) {
 
 bool ReportFormService::service_freeze(const FreezeDeps& d) {
     if (!open_) return false;
-    d.g.state.god_mode = d.god_active;
     FrameBuffer pf{320, 200};
-    // advance_state=false: this compose is PURELY VISUAL.  Like the pause
-    // freeze, the caller `continue`s before run_frame and before the
-    // authoritative per-tick fb compose, so an advancing compose here becomes
-    // the ONLY advance of a supposedly frozen frame and drains
-    // player.club_flag once per rendered form frame (open F5 mid-swing and the
-    // club vanished).  Same fix as PauseService::service_freeze.
-    {
-        RenderTarget prt{pf.px.data(), pf.w, pf.h, 1, nullptr, nullptr};
-        prt.advance_state = false;
-        compose_frame(prt, d.g.state, d.g.render, /*draw_player=*/true);
-    }
+    d.compose(pf);
     if (!frame_ready_) {   // clean scene = the screenshot source
         frame_ = pf;
         frame_ready_ = true;
@@ -139,66 +126,21 @@ bool ReportFormService::service_freeze(const FreezeDeps& d) {
     if (save_pending_) {
         save_pending_ = false;
         open_ = false;
-        const BugAnnotations ann{bind_.get("report.tag"),
-                                 bind_.get("report.repro"),
-                                 bind_.get("report.description")};
-        // Read the present path's live state at the moment of capture — the
-        // report is otherwise silent about exactly the thing a visual bug is
-        // about (§ bug_capture.hpp's DisplayInfo note).
-        DisplayInfo di;
-        di.supplied = true;
-        SDL_GetRendererOutputSize(d.ren, &di.out_w, &di.out_h);
-        SDL_RenderGetLogicalSize(d.ren, &di.logical_w, &di.logical_h);
-        if (SDL_Window* w = d.win; w != nullptr) {
-            di.fullscreen = (SDL_GetWindowFlags(w) &
-                             SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
-        }
-        di.aspect = d.wsp.aspect();
-        di.hd = d.wsp.hd();
-        di.hd_scale = d.wsp.hd_scale();
-        di.ws_active = d.wsp.active();
-        di.ws_margin = d.wsp.margin();
-        di.ws_native_w = d.wsp.native_w();
-        di.upscale_threads = enhance::parallel_row_threads();
-
-        const std::string dir = write_bug_report(
-            d.g.state, frame_, d.g.render.entity_sprites,
-            d.display_level, d.internal_level, d.overlay_scale, ann,
-            /*has_presented=*/d.want_presented, di);
-        // screenshot_presented.png — what the player actually saw: the
-        // scene run through the live present (HD upscale + widescreen
-        // margins), which the native frame_ skips.  Re-render the (frozen)
-        // scene WITHOUT presenting so RenderReadPixels sees the backbuffer
-        // (a post-present read is black on Metal), then read the
-        // output-resolution pixels.  Only meaningful when the present path
-        // transforms the frame (HD or widescreen); classic 1x is
-        // pixel-equal to the native shot.  Empty bubble hook: the L1-secret
-        // cosmetic bubbles are immaterial to a bug shot.
-        if (!dir.empty() && d.want_presented) {
-            if (d.wsp.present_path())
-                d.wsp.present(std::function<void(RenderTarget&)>{},
-                              /*do_present=*/false);
-            else
-                d.upload_and_show(frame_, /*with_hud=*/true,
-                                  /*do_present=*/false);
-            capture_renderer_output(d.ren, dir + "/screenshot_presented.png");
-        }
+        d.write(frame_, BugAnnotations{bind_.get("report.tag"),
+                                       bind_.get("report.repro"),
+                                       bind_.get("report.description")});
         return true;   // owned the frame; no delay on the save path
     }
     if (edit_open_) {
-        draw_edit_overlay(pf, d.g.charset, edit_);
+        draw_edit_overlay(pf, d.charset, edit_);
     } else if (confirm_.is_open()) {
-        draw_confirm(pf, confirm_, d.g.charset, /*dim=*/true,
+        draw_confirm(pf, confirm_, d.charset, /*dim=*/true,
                      /*draw_text=*/true);
     } else {
-        draw_menu(pf, menu_, d.g.charset, /*dim=*/true,
-                  /*draw_text=*/true,
-                  d.g.render.entity_sprites.size() > 33
-                      ? &d.g.render.entity_sprites[33]
-                      : nullptr,
-                  &d.g.render.palette);
+        draw_menu(pf, menu_, d.charset, /*dim=*/true, /*draw_text=*/true,
+                  d.cursor, d.cursor_palette);
     }
-    d.upload_and_show(pf, /*with_hud=*/false, /*do_present=*/true);
+    d.show(pf);
     SDL_Delay(d.frame_ms);
     return true;
 }

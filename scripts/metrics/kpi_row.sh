@@ -112,6 +112,18 @@ done
 if [ "$1" = "--check" ]; then
     # Compare against the §5 headline cell for each tracked function.  The row
     # shape is:  | `fn` ... | a | b | **N** | note |
+    #
+    # WHICH cell is the headline moves: the table gains a column at each
+    # release cut (0.9.8 added one and the hardcoded 5th field then read the
+    # 0.9.7 column — i.e. the checker reported drift against a value the
+    # table no longer claimed).  Find it by its HEADER instead: the column
+    # whose heading says "now".
+    NOW_COL="$(awk '/^## 5\. KPIs to watch/{s=1}
+                    s && /^\| KPI \|/ {
+                        n = split($0, f, "|");
+                        for (i = 1; i <= n; ++i) if (f[i] ~ /now/) { print i; exit }
+                    }' "${BACKLOG}")"
+    [ -n "${NOW_COL}" ] || NOW_COL=5
     printf '%b' "${OUT}" | while read -r fn n; do
         [ "${n}" = "?" ] && continue
         # ONLY inside "## 5. KPIs to watch" — the first attempt grepped the
@@ -121,11 +133,11 @@ if [ "$1" = "--check" ]; then
         row="$(awk '/^## 5\. KPIs to watch/{s=1} s&&/^## [0-9]/&&!/^## 5\./{exit} s' \
                 "${BACKLOG}" | grep -m1 "^| \`${fn}\`" || true)"
         [ -z "${row}" ] && continue
-        # The HEADLINE cell (5th pipe field), not "the last bold number on the
-        # line" — attempt two did that and matched the NOTE column, whose
+        # The HEADLINE cell (the "now" column), not "the last bold number on
+        # the line" — attempt two did that and matched the NOTE column, whose
         # history tail ends with the current figure by construction, so it
         # agreed with itself forever.
-        claimed="$(printf '%s' "${row}" | awk -F'|' '{print $5}' |
+        claimed="$(printf '%s' "${row}" | awk -F'|' -v c="${NOW_COL}" '{print $c}' |
                    sed -n 's/[^0-9]*\([0-9][0-9]*\).*/\1/p')"
         [ -z "${claimed}" ] && continue
         if [ "${claimed}" != "${n}" ]; then

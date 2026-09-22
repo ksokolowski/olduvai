@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "systems/boss_l4.hpp"
 
+#include <algorithm>
+
 #include "systems/boss_l2.hpp"   // BossInputs
 
 namespace olduvai::systems {

@@ -50,6 +50,12 @@
 #       --enhanced --hd-profile mmpx --render-scale 2 --aspect widescreen \
 #       --window 896x400
 #
+# Last regenerated 2026-09-17 (the two HD tally cells only): the value column
+# now reserves the widest value of the whole tally, so the counting rows no
+# longer slide as the bonus counts down.  Verified against the previous binary
+# frame by frame: the three counting rows moved 1 px left, every other row and
+# the black scene are byte-identical.
+#
 # Skip (77) when game data or the binary is absent.
 
 GAME_DIR="${OLDUVAI_GAME_DATA:-${1:-$(dirname "$0")/../game_data}}"

@@ -173,3 +173,29 @@ TEST_CASE("aspect_logical: each mode's logical size") {
     CHECK(aspect_logical(2, "16:9").w == 640);
     CHECK(aspect_logical(2, "16:9").h == 400);
 }
+
+TEST_CASE("widescreen_default_w: a widescreen window for --aspect widescreen") {
+    using olduvai::presentation::widescreen_default_w;
+    // BACKLOG §3.25: the default window is the DOS aspect, and the margin is
+    // derived from the OUTPUT aspect — so `--aspect widescreen` alone
+    // computed itself out of existence (margin 0) with nothing said.  The
+    // default window now takes the desktop's aspect instead.
+    const int base = 640, h = 400;   // the integer-scaled 16:10 default
+
+    // 16:9 and 21:9 desktops: wider than the DOS window, by their own ratio.
+    CHECK(widescreen_default_w("widescreen", base, h, 1920.0 / 1080.0) == 711);
+    CHECK(widescreen_default_w("widescreen", base, h, 2560.0 / 1080.0) == 948);
+    // Past 2.8 the margin caps, so the window stops widening too (32:9).
+    CHECK(widescreen_default_w("widescreen", base, h, 3840.0 / 1080.0) == 1120);
+    CHECK(widescreen_default_w("widescreen", base, h, 10.0) == 1120);
+
+    // A 16:10 (or narrower) desktop keeps the DOS window: there is nothing
+    // wider to fill, and the window must never be NARROWER than 320x200 scaled.
+    CHECK(widescreen_default_w("widescreen", base, h, 1.6) == base);
+    CHECK(widescreen_default_w("widescreen", base, h, 4.0 / 3.0) == base);
+
+    // Every other aspect is untouched, and an unknown desktop keeps the default.
+    for (const char* a : {"keep", "4:3", "stretch", ""})
+        CHECK(widescreen_default_w(a, base, h, 1920.0 / 1080.0) == base);
+    CHECK(widescreen_default_w("widescreen", base, h, 0.0) == base);
+}

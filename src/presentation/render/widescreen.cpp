@@ -160,64 +160,71 @@ void compose_widescreen(std::vector<std::uint8_t>& out, int margin,
                    : src_px(*backdrop, wcol, y);
     };
 
+    // ── One margin pixel, either side ───────────────────────────────────────
+    //
+    // The two margins are the SAME five-step policy under a different column
+    // transform, and the file used to say so twice.  What a side supplies is
+    // its dead-end flag, its neighbour, the CENTER column this margin pixel
+    // peeks or wraps (`peek_col`), the center column it MIRRORS
+    // (`mirror_col`), and which way self_tile scans for a real band (+1 left,
+    // scanning into the screen; -1 right).  The policy itself, in order:
+    //
+    //   1. dead-end void band → drop the dirt floor (kVoidPx);
+    //   2. a real neighbour on a peek row → the neighbour's own pixels;
+    //   3. a backdrop → the tiling FOND, ground band mirrored (bg_extend);
+    //   4. surface no-backdrop (dark woods / volcanic) → the sky / tree band
+    //      CONTINUES from the screen's own columns while the GROUND band
+    //      mirrors the near floor (lava / empty);
+    //   5. otherwise (boss / secret) → mirror the screen's own edge strip,
+    //      with void seam pixels extending the nearest real band inward.
+    //
+    // Left peeks the RIGHT `margin` columns of the left neighbour and mirrors
+    // across column 0; right peeks the LEFT `margin` columns of the right
+    // neighbour and mirrors across column 319.  That asymmetry lives at the
+    // two call sites, where it is one expression each, instead of being
+    // spelled out twice around an identical chain.
+    auto margin_px = [&](bool dead_end, const FrameBuffer* neighbour,
+                         int peek_col, int mirror_col, int tile_step, int y,
+                         bool peek_row) -> const std::uint8_t* {
+        if (dead_end && in_void_band(y)) return kVoidPx;
+        if (neighbour && peek_row) return src_px(*neighbour, peek_col, y);
+        if (backdrop) return bg_extend(peek_col, mirror_col, y);
+        if (!reflect_pure && repeat_no_backdrop)
+            return in_ground_band(y) ? ground_fill(mirror_col, y)
+                                     : src_px(center, peek_col, y);
+        return self_tile(mirror_col, tile_step, y);
+    };
+    // The boss-arena darkening ramp, by distance from the mirror line: 1.0 at
+    // the mirror line, margin_edge_brightness at the outer screen edge.
+    auto edge_dim = [&](int from_outer_edge) {
+        return margin_edge_brightness +
+               (1.0 - margin_edge_brightness) *
+                   (static_cast<double>(from_outer_edge) / dim_denom);
+    };
+
     for (int y = 0; y < kH; ++y) {
         const bool peek_row = (y >= hud_rows);
         for (int x = 0; x < W; ++x) {
             const std::uint8_t* src = nullptr;
             double dim = 1.0;
             if (x < margin) {
-                // Left margin: peek the right `margin` columns of the left
-                // neighbor (HUD rows excluded); NO neighbor → MIRROR the center's
-                // own left edge strip (reflect across column 0) so detailed
-                // terrain reads as a natural symmetric continuation instead of a
-                // single smeared column.  Self-tile, no black bezel; void seam
-                // pixels extend the nearest real band rightward (self_tile).
-                if (void_ground_left && in_void_band(y))
-                    src = kVoidPx;   // dead-end: drop the dirt floor
-                else if (left && peek_row)
-                    src = src_px(*left, kCenterW - margin + x, y);
-                else if (backdrop)
-                    src = bg_extend(kCenterW - margin + x,
-                                    /*mirror*/margin - 1 - x, y);
-                else if (!reflect_pure && repeat_no_backdrop)
-                    // Surface no-backdrop (dark woods / volcanic): the sky /
-                    // tree band CONTINUES (torus-wrap the screen's right cols);
-                    // the GROUND band mirrors the near floor (lava / empty).
-                    src = in_ground_band(y)
-                              ? ground_fill(/*mirror*/margin - 1 - x, y)
-                              : src_px(center, kCenterW - margin + x, y);
-                else
-                    src = self_tile(margin - 1 - x, +1, y);  // boss/secret: mirror
+                src = margin_px(void_ground_left, left,
+                                /*peek_col=*/kCenterW - margin + x,
+                                /*mirror_col=*/margin - 1 - x,
+                                /*tile_step=*/+1, y, peek_row);
                 if (dim_margins)   // x=0 outer edge → x=margin-1 mirror line
-                    dim = margin_edge_brightness +
-                          (1.0 - margin_edge_brightness) *
-                              (static_cast<double>(x) / dim_denom);
+                    dim = edge_dim(x);
             } else if (x < margin + kCenterW) {
                 // Center copied verbatim (HUD included).
                 src = src_px(center, x - margin, y);
             } else {
-                // Right margin: peek the left `margin` columns of the right
-                // neighbor (HUD rows excluded); NO neighbor → MIRROR the center's
-                // own right edge strip (reflect across column 319).  Void seam
-                // pixels (the L1 last-screen black band) extend the nearest real
-                // band leftward instead of tiling black (self_tile).
                 const int r = x - margin - kCenterW;            // 0..margin-1
-                if (void_ground_right && in_void_band(y))
-                    src = kVoidPx;   // dead-end: drop the dirt floor
-                else if (right && peek_row)
-                    src = src_px(*right, r, y);
-                else if (backdrop)
-                    src = bg_extend(r, /*mirror*/kCenterW - 1 - r, y);
-                else if (!reflect_pure && repeat_no_backdrop)
-                    src = in_ground_band(y)
-                              ? ground_fill(kCenterW - 1 - r, y)
-                              : src_px(center, r, y);   // sky continues, ground mirrors near
-                else
-                    src = self_tile(kCenterW - 1 - r, -1, y);   // boss/secret: mirror
+                src = margin_px(void_ground_right, right,
+                                /*peek_col=*/r,
+                                /*mirror_col=*/kCenterW - 1 - r,
+                                /*tile_step=*/-1, y, peek_row);
                 if (dim_margins)   // r=0 mirror line → r=margin-1 outer edge
-                    dim = margin_edge_brightness +
-                          (1.0 - margin_edge_brightness) *
-                              (static_cast<double>(dim_denom - r) / dim_denom);
+                    dim = edge_dim(dim_denom - r);
             }
             std::uint8_t* dst = &out[(static_cast<std::size_t>(y) * W + x) * 4];
             // src is always set now (neighbor peek or same-screen edge-clamp);

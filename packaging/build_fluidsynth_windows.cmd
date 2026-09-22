@@ -101,9 +101,16 @@ rem
 rem /w itself: vendored code is not held to our warning bar (CMakeLists.txt,
 rem olduvai_silence_vendored_target) — nine C4267/C4805/C5287 out of
 rem fluid_dls.cpp and fluid_synth.c, upstream's to fix.
+rem
+rem CMP0092=NEW is what makes that /w stick.  FluidSynth's minimum CMake
+rem version predates the policy, so the MSVC defaults still carry /W3 — and
+rem CMake appends them AFTER the CFLAGS above, so /W3 won (D9025 "overriding
+rem '/w' with '/W3'", 50 times a job) and ~150 upstream warnings reached our
+rem log.  NEW drops only the /W3 from the defaults; /DWIN32 stays.
 set "CFLAGS=/DWIN32 /D_WINDOWS /w"
 set "CXXFLAGS=/DWIN32 /D_WINDOWS /w"
 cmake -S fluidsynth-%FS_VER% -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ^
+  -DCMAKE_POLICY_DEFAULT_CMP0092=NEW ^
   -Dosal=embedded -DBUILD_SHARED_LIBS=ON ^
   -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded ^
   -Denable-libsndfile=OFF -Denable-readline=OFF -Denable-network=OFF ^

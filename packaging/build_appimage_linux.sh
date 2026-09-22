@@ -240,8 +240,12 @@ for pair in "GLIBCXX_ ${GLIBCXX_MAX}" "CXXABI_ ${CXXABI_MAX}"; do
     echo ">> $1 floor OK: $1${v} (<= $2)"
     # Name what sits AT the floor too: the evidence for the declared number,
     # printed on every green run instead of re-derived at the next bump.
+    # The NAME is the field carrying "@<version>"; the last field is only
+    # readelf's version index — which is all the 0.9.7 release log showed.
     readelf --wide --dyn-syms "${appdir}/usr/bin/olduvai" 2>/dev/null \
-        | grep -F "@$1${v}" | awk '{print "     " $NF}' | head -5
+        | grep -F "@$1${v}" \
+        | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /@/) print "     " $i }' \
+        | head -5
 done
 
 # LGPL corresponding-source provision: record exactly which host libraries

@@ -1163,7 +1163,12 @@ MIDIClientRef MidiInCore::getCoreMidiClientSingleton(const std::string& clientNa
         std::ostringstream ost;
         ost << "MidiInCore::initialize: error creating OS-X MIDI client object (" << result << ").";
         errorString_ = ost.str();
-        error( RtMidiError::DRIVER_ERROR, errorString_ );
+        // olduvai local patch (see README): this function is declared throw(),
+        // and error() THROWS for a DRIVER_ERROR -- which terminates the
+        // process instead of raising something a caller can catch.  Record the
+        // message and return 0; initialize() below reports it from a context
+        // where throwing is legal.
+        CFRelease( name );
         return 0;
       }
       CFRelease( name );
@@ -1178,6 +1183,12 @@ void MidiInCore :: initialize( const std::string& clientName )
 {
   // Set up our client.
   MIDIClientRef client = getCoreMidiClientSingleton(clientName);
+  // olduvai local patch (see README): report a failed client HERE, where the
+  // throw is catchable, instead of inside the throw()-specified helper.
+  if ( client == 0 ) {
+    error( RtMidiError::DRIVER_ERROR, errorString_ );
+    return;
+  }
 
   // Save our api-specific connection information.
   CoreMidiData *data = (CoreMidiData *) new CoreMidiData;
@@ -1498,7 +1509,12 @@ MIDIClientRef MidiOutCore::getCoreMidiClientSingleton(const std::string& clientN
         std::ostringstream ost;
         ost << "MidiInCore::initialize: error creating OS-X MIDI client object (" << result << ").";
         errorString_ = ost.str();
-        error( RtMidiError::DRIVER_ERROR, errorString_ );
+        // olduvai local patch (see README): this function is declared throw(),
+        // and error() THROWS for a DRIVER_ERROR -- which terminates the
+        // process instead of raising something a caller can catch.  Record the
+        // message and return 0; initialize() below reports it from a context
+        // where throwing is legal.
+        CFRelease( name );
         return 0;
       }
       CFRelease( name );
@@ -1513,6 +1529,12 @@ void MidiOutCore :: initialize( const std::string& clientName )
 {
   // Set up our client.
   MIDIClientRef client = getCoreMidiClientSingleton(clientName);
+  // olduvai local patch (see README): report a failed client HERE, where the
+  // throw is catchable, instead of inside the throw()-specified helper.
+  if ( client == 0 ) {
+    error( RtMidiError::DRIVER_ERROR, errorString_ );
+    return;
+  }
 
   // Save our api-specific connection information.
   CoreMidiData *data = (CoreMidiData *) new CoreMidiData;

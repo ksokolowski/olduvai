@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "systems/boss_l6.hpp"
 
+#include <algorithm>
+
 #include "systems/boss_l2.hpp"   // BossInputs
 
 namespace olduvai::systems {
@@ -26,7 +28,7 @@ void advance_frame_counter(L6BossState& boss, bool smooth_motion) {
     // FREEZES at 19 so the QoL hold does not consume the EXE's post-hit
     // tail.  EXE (capstone 254f_0078): hit tick sets [0x9348]=0x13=19
     // (:01c3) and inline-draws the shocked pair (:01c9-0201); the next
-    // tick's `inc [0x9348]` (:0078) lands on 20 → the window draw
+    // tick's increment of [0x9348] (:0078) lands on 20 → the window draw
     // (:00a3-00f7) blits the base+0/base+3 pair — the animated return of
     // the arm+head strip.  The engine plays that tail on the first tick
     // after the hold expires.  With the EXE-equivalent hold of 1 the
@@ -106,7 +108,7 @@ void tick_l6_boss_post_render(L6BossState& boss) {
 //     00 00 01 00 02 00 01 00 00 00)
 //   hit reaction (:01c9-0201):
 //     part A: base + 0 (:01d1 — H1 body, NO table offset)
-//     part B: base + 6 (:01f0 `add ax,6` — H4[3] SHOCKED strip, 96x57,
+//     part B: base + 6 (:01f0 adds 6 — H4[3] SHOCKED strip, 96x57,
 //             also covers the right shoulder next to the head)
 // Engine mapping: base+0..2 → H1/H2/H3.MAT[0]; base+3..6 → H4.MAT[0..3].
 // Outside the window the EXE draws nothing and the VGA frame persists

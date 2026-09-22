@@ -50,7 +50,7 @@ fi
 
 # sha256 <file> — portable (Linux sha256sum / macOS shasum).
 sha256() {
-    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"
+    if command -v sha256sum >"${ERR}" 2>&1; then sha256sum "$1"
     else shasum -a 256 "$1"; fi | cut -d' ' -f1
 }
 
@@ -59,19 +59,23 @@ sha256() {
 # dumping the first menu frame; `timeout` is only a hang safety net).
 export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}"
 export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}"   # mute test runs
+. "$(dirname "$0")/lib/engine_err.sh"
+engine_err_init
 CFG_DIR="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
 XDG_CONFIG_HOME="${CFG_DIR}" OLDUVAI_MAINMENU_SHOT="${SHOT}" timeout 60 \
     "${BINARY}" --play --render-scale 1 --window 640x400 \
-    --game-dir "${GAME_DIR}" >/dev/null 2>&1
+    --game-dir "${GAME_DIR}" >"${ERR}" 2>&1
 rm -rf "${CFG_DIR}"
 
 if [ ! -s "${SHOT}" ]; then
     echo "mainmenu_shot: FAIL — no shot produced (menu not reached?)"
+    engine_said "${ERR}"
     rm -f "${SHOT}"
     exit 1
 fi
 
 if [ "$(sha256 "${SHOT}")" = "$(cat "${GOLDEN}")" ]; then
+    engine_err_clean "${ERR}"
     echo "mainmenu_shot: PASS"
     rm -f "${SHOT}"
     exit 0

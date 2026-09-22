@@ -8,6 +8,8 @@
 // this file produces is accepted — not a general WAV parser.
 #pragma once
 
+#include "formats/hash64.hpp"
+
 #include <string>
 
 #include <cstdint>
@@ -23,14 +25,11 @@ namespace olduvai::presentation {
 // what the cross-platform audio gate compares (tests/audio_render.sh).  It
 // outlived the HD SFX bake it was written for.
 inline std::string sfx_digest_hex(const std::vector<std::uint8_t>& d) {
-    std::uint64_t h = 1469598103934665603ULL;
-    for (const std::uint8_t b : d) {
-        h ^= b;
-        h *= 1099511628211ULL;
-    }
+    formats::Hash64 h;
+    h.mix_bytes(d.data(), d.size());
     char buf[17];
     std::snprintf(buf, sizeof(buf), "%016llx",
-                  static_cast<unsigned long long>(h));
+                  static_cast<unsigned long long>(h.value()));
     return std::string(buf);
 }
 

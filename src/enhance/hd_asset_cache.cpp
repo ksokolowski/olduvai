@@ -26,6 +26,10 @@ namespace {
 // bubbles live in the very secret room the warm exists to speed up.
 std::uint64_t key_of(const std::vector<std::uint8_t>& src, int w, int h,
                      int scale, const std::string& profile, bool bleed) {
+    // NOT formats::Hash64: the byte loop matches it, but the scalars below are
+    // mixed with the shift-and-add combine instead, and this value is a
+    // cache key with entries already written under it (hash64.hpp records
+    // this exception).
     std::uint64_t k = 1469598103934665603ull;
     for (std::uint8_t b : src) { k ^= b; k *= 1099511628211ull; }
     auto mix = [&](std::uint64_t v) {

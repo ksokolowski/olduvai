@@ -58,6 +58,29 @@ public:
     }
     void end_screen() { dump_env_ = nullptr; }
 
+    // Run ONE text screen end to end: build its HD text handle when this
+    // session has vector text, name the screen so the gate can attribute its
+    // frames, run `body`, and drop the attribution again.  Returns what body
+    // returned — false = the player quit.
+    //
+    // WHY.  The SCREENS have been shared since §3.14 (one show_loading_screen,
+    // one show_score_tally, both drivers); the four lines of wiring around
+    // them were not, and were spelled out four times — loading card and tally,
+    // in each driver — with two TextScreenHd locals per driver carried down
+    // the function to reach them.  The clone detector cannot see it: the call
+    // in the middle differs, which is exactly the shape §4b warns about (one
+    // concept, two bodies).
+    bool text_screen(const TextScreenDeps& deps, bool hd_ok,
+                     const char* dump_env, const char* dump_tag,
+                     const std::function<bool(const TextScreenHd&)>& body) {
+        TextScreenHd hd;
+        if (hd_ok) hd = make_text_screen_hd(deps, dump_env, dump_tag);
+        begin_screen(dump_env, dump_tag);
+        const bool ok = body(hd);
+        end_screen();
+        return ok;
+    }
+
     bool operator()(const FrameBuffer& f) {
         const Uint32 t0 = SDL_GetTicks();
         // ESC is inert on every screen this drives — none has a menu wired, and
@@ -71,7 +94,7 @@ public:
             const bool more =
                 capture_gate_frame(surface_->ren(), surface_->lsz(), dump_env_,
                                    dump_tag_, dump_seq_);
-            SDL_RenderPresent(surface_->ren());
+            present_output(surface_->ren());
             if (!more) return false;
         }
         // Pace by ABSORBING the compose cost, not by adding to it.

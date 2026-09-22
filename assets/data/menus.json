@@ -8,7 +8,8 @@
         { "id": "start", "type": "action", "label": "Start Game", "action": "start_game", "key": "menu.start_level", "values": [1, 2, 3, 4, 5, 6, 7], "value_labels": ["Level 1", "Level 2", "Level 3", "Level 4", "Level 5", "Level 6", "Level 7"] },
         { "id": "continue", "type": "action", "label": "Continue", "action": "continue", "hint": "load save" },
         { "id": "options", "type": "submenu", "label": "Options", "target": "options" },
-        { "id": "quit", "type": "action", "label": "Quit to Desktop", "action": "quit_desktop" }
+        { "id": "about", "type": "submenu", "label": "About", "target": "about" },
+        { "id": "quit", "type": "action", "label": "Quit", "action": "quit_desktop" }
       ]
     },
     "bug_report": {
@@ -32,10 +33,18 @@
     "audio": {
       "header": "AUDIO",
       "items": [
-        { "id": "music_device", "type": "choice", "label": "Music device", "key": "music_device", "values": ["auto", "mt32-builtin", "gm-builtin", "gm-host", "opl", "none"], "value_labels": ["Auto", "MT-32", "GM", "GM (host)", "AdLib", "Off"], "hint": "applies now" },
-        { "id": "sfx_backend", "type": "choice", "label": "SFX backend", "key": "sfx_backend", "values": ["auto", "opl", "sb-dac", "mt32-sfx", "gm-sfx", "midi"], "value_labels": ["Auto", "OPL", "SB DAC", "MT-32", "GM", "MIDI"], "hint": "applies now" },
+        { "id": "sound_card", "type": "choice", "label": "Sound card", "key": "sound_card", "values": ["auto", "sb", "adlib", "mt32", "gm", "midi", "off", "custom"], "value_labels": ["Auto", "Sound Blaster", "AdLib", "Roland MT-32", "General MIDI", "MIDI out", "Off", "Custom"], "hint": "applies now" },
         { "id": "music_volume", "type": "slider", "label": "Music volume", "key": "music_volume", "min": 0, "max": 100, "step": 5 },
         { "id": "sfx_volume", "type": "slider", "label": "SFX volume", "key": "sfx_volume", "min": 0, "max": 100, "step": 5 },
+        { "id": "audio_advanced", "type": "submenu", "label": "Advanced", "target": "audio_advanced" },
+        { "id": "back", "type": "back", "label": "Back" }
+      ]
+    },
+    "audio_advanced": {
+      "header": "ADVANCED AUDIO",
+      "items": [
+        { "id": "music_device", "type": "choice", "label": "Music device", "key": "music_device", "values": ["auto", "mt32-builtin", "gm-builtin", "gm-host", "opl", "none"], "value_labels": ["Auto", "MT-32", "GM", "GM (host)", "AdLib", "Off"], "hint": "applies now" },
+        { "id": "sfx_backend", "type": "choice", "label": "SFX backend", "key": "sfx_backend", "values": ["auto", "opl", "sb-dac", "mt32-sfx", "gm-sfx", "midi", "none"], "value_labels": ["Auto", "OPL", "SB DAC", "MT-32", "GM", "MIDI", "Off"], "hint": "applies now" },
         { "id": "back", "type": "back", "label": "Back" }
       ]
     },
@@ -82,8 +91,7 @@
         { "id": "options", "type": "submenu", "label": "Options", "target": "options" },
         { "id": "cheats", "type": "submenu", "label": "Cheats", "target": "cheats" },
         { "id": "restart_level", "type": "action", "label": "Restart Level", "action": "restart_level" },
-        { "id": "quit_title", "type": "action", "label": "Quit to Title", "action": "quit_title" },
-        { "id": "quit_desktop", "type": "action", "label": "Quit to Desktop", "action": "quit_desktop" }
+        { "id": "quit", "type": "submenu", "label": "Quit", "target": "quit" }
       ]
     },
     "pause_boss": {
@@ -92,8 +100,33 @@
         { "id": "resume", "type": "action", "label": "Resume", "action": "resume" },
         { "id": "options", "type": "submenu", "label": "Options", "target": "options" },
         { "id": "restart_level", "type": "action", "label": "Restart Fight", "action": "restart_level" },
+        { "id": "quit", "type": "submenu", "label": "Quit", "target": "quit" }
+      ]
+    },
+    "quit": {
+      "header": "QUIT",
+      "items": [
         { "id": "quit_title", "type": "action", "label": "Quit to Title", "action": "quit_title" },
-        { "id": "quit_desktop", "type": "action", "label": "Quit to Desktop", "action": "quit_desktop" }
+        { "id": "quit_desktop", "type": "action", "label": "Exit Game", "action": "quit_desktop" },
+        { "id": "back", "type": "back", "label": "Back" }
+      ]
+    },
+    "about": {
+      "header": "ABOUT",
+      "items": [
+        { "id": "about0", "type": "readout", "label": "" },
+        { "id": "about1", "type": "readout", "label": "" },
+        { "id": "about2", "type": "readout", "label": "" },
+        { "id": "about3", "type": "readout", "label": "" },
+        { "id": "about4", "type": "readout", "label": "" },
+        { "id": "about5", "type": "readout", "label": "" },
+        { "id": "about6", "type": "readout", "label": "" },
+        { "id": "about7", "type": "readout", "label": "" },
+        { "id": "about8", "type": "readout", "label": "" },
+        { "id": "about9", "type": "readout", "label": "" },
+        { "id": "about10", "type": "readout", "label": "" },
+        { "id": "about11", "type": "readout", "label": "" },
+        { "id": "back", "type": "back", "label": "Back" }
       ]
     },
     "dev": {

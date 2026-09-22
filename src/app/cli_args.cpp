@@ -6,6 +6,7 @@
 #include "parse_num.hpp"
 #include <string>
 
+#include "presentation/audio/sound_card.hpp"
 #include "presentation/menu/profile_table.hpp"
 
 namespace olduvai::app {
@@ -27,6 +28,7 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
     auto& play = args.play;
     auto& do_list_midi_ports = args.do_list_midi_ports;
     auto& play_level = args.play_level;
+    std::string sound_card;   // --sound-card, expanded after the loop
     auto& play_midi_port = args.play_midi_port;
     auto& play_replay = args.play_replay;
     auto& play_trace = args.play_trace;
@@ -181,6 +183,14 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
                     profile.c_str());
                 return {true, 2, false, false};
             }
+        } else if (arg == "--sound-card" && i + 1 < argc) {
+            sound_card = argv[++i];
+            if (olduvai::presentation::find_sound_card(sound_card) == nullptr) {
+                std::fprintf(stderr,
+                    "olduvai: --sound-card must be one of auto|sb|adlib|mt32|"
+                    "gm|midi|off (got '%s')\n", sound_card.c_str());
+                return {true, 2, false, false};
+            }
         } else if (arg == "--default-profile" && i + 1 < argc) {
             // Validated when layered, as a warning: a launcher from one
             // release paired with a binary from another must never block
@@ -240,6 +250,20 @@ ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps) 
                          arg.c_str());
             std::fprintf(stderr, "Try 'olduvai --help' for usage.\n");
             return {true, 2, false, false};
+        }
+    }
+    // --sound-card is shorthand for the two audio flags, applied AFTER the
+    // loop so an explicit --music-device / --sfx-backend wins in any order.
+    // Marking them CLI-given puts the pair above play.json, as the long
+    // flags are.
+    if (const auto* card = olduvai::presentation::find_sound_card(sound_card)) {
+        if (!ps.cli.music_device) {
+            ps.music_device = card->music;
+            ps.cli.music_device = true;
+        }
+        if (!ps.cli.sfx_backend) {
+            ps.sfx_backend = card->sfx;
+            ps.cli.sfx_backend = true;
         }
     }
     return {false, 0, false, false};

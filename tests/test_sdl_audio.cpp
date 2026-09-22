@@ -134,3 +134,28 @@ TEST_CASE("SdlAudio: --render-audio's OPL arm renders non-silent, stable PCM") {
     CHECK(peak > 1000);   // audibly non-silent: the timbre actually keyed
 }
 
+
+TEST_CASE("SdlAudio: a music device that cannot start falls back to FM") {
+    // A saved MT-32 choice whose ROMs have since gone used to mean a silent
+    // game.  A misspelt device reaches the same branch on any machine (one
+    // with ROMs installed would load them), so it stands in for the case.
+    force_dummy_audio();
+    olduvai::presentation::SdlAudio audio("mt32-bultin", "", "", "auto", 48000,
+                                          0, "", /*offline=*/true);
+    CHECK(audio.music_available());
+    CHECK(audio.active_music_backend() == "opl");
+    CHECK(audio.music_fell_back());   // --render-audio skips on this
+    CHECK(audio.sfx_enabled());   // auto pairs to the SB samples
+}
+
+TEST_CASE("SdlAudio: sfx backend none is the Sound card's Off") {
+    force_dummy_audio();
+    olduvai::presentation::SdlAudio off("none", "", "", "none", 48000, 0, "",
+                                        /*offline=*/true);
+    CHECK(!off.sfx_enabled());
+    CHECK(off.active_music_backend() == "none");   // Off is off: no fallback
+    olduvai::presentation::SdlAudio sb("opl", "", "", "sb-dac", 48000, 0, "",
+                                       /*offline=*/true);
+    CHECK(sb.sfx_enabled());
+    CHECK(!sb.music_fell_back());   // opl was asked for and is playing
+}

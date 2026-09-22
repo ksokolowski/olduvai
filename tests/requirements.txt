@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Krzysztof Sokołowski
+# Python packages the TEST side needs (never the engine).  Without them the
+# pixel-analysis gates (cave_exit_margins, level_edge_margins) SKIP, and where
+# game data is present scripts/ctest_audit.sh fails that skip.
+#   Windows CI: a uv venv built from this file (.gitea/workflows/windows.yml).
+#   Linux CI:   the distro packages python3-numpy / python3-pil (ci.yml).
+#   Locally:    uv pip install -r tests/requirements.txt  (or your distro's).
+numpy
+pillow

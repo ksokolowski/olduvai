@@ -94,7 +94,7 @@ The released AppImage targets **glibc 2.35** — Ubuntu 22.04, Linux Mint 21,
 Debian 12 and newer, and any Steam Deck (SteamOS has been 2.37+ since 3.5).
 That is pinned by building inside a digest-locked `ubuntu:22.04` container
 rather than by a runner label, because runner images are retired on GitHub's
-schedule: `ubuntu-22.04` begins deprecation 2026-09-17 and is removed
+schedule: `ubuntu-22.04` entered deprecation on 2026-09-17 and is removed
 2027-04-17, and the natural repair — bumping to `ubuntu-24.04` — would raise
 the floor to 2.39 and drop those users without anyone noticing.
 
@@ -102,6 +102,13 @@ The floor is **asserted, not assumed**: `build_appimage_linux.sh` reads the
 highest `GLIBC_` version required by every ELF it is about to pack and fails
 if it exceeds the declared maximum. Raising `OLDUVAI_GLIBC_MAX` drops distros,
 so it is a reviewed edit, not a fix for a red build.
+
+It asserts a second floor the same way: the C++ runtime. Since 0.9.7 the
+AppImage needs **`GLIBCXX_3.4.30`** — the libstdc++ of GCC 12 — because the
+threaded upscaler waits on a `std::condition_variable`, which GCC 12
+re-versioned. No supported user is dropped: Ubuntu 22.04 and Mint 21 ship
+exactly this runtime, and every distro meeting the glibc 2.35 floor ships
+GCC 12 or newer.
 
 Not covered by a 2.35 floor: RHEL/Alma/Rocky 9 (2.34) and Debian 11 (2.31).
 Going lower is not simply a matter of an older container — Debian bullseye

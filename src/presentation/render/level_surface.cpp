@@ -20,12 +20,7 @@ LevelSurface::LevelSurface(SDL_Window* win, SDL_Renderer* ren, bool hd,
     // than a failure.  Both drivers had this block, character for character
     // apart from which options struct held the font name.
     if (hd_) {
-        std::string base = ".";
-        if (char* p = SDL_GetBasePath()) {   // exe dir, or Contents/Resources/
-            base = p;
-            SDL_free(p);
-            if (!base.empty() && base.back() == '/') base.pop_back();
-        }
+        const std::string base = sdl_base_dir();   // exe dir, or Contents/Resources/
         if (!hd_text_.load(base, hd_scale_, hd_font)) {
             enhance::HdText::report_missing(base, hd_font);
         }

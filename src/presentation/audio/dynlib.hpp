@@ -37,6 +37,11 @@ inline void dyn_close(void* handle) {
 #include <dlfcn.h>
 
 namespace olduvai::presentation {
+// dlopen()ing a caller-supplied path is this wrapper's ENTIRE job, and its
+// only callers hand it the LOCAL user's own libraries (their OLDUVAI_* env,
+// the system's SDL/fluidsynth) — the taint model's "untrusted source" is the
+// same party as the destination, so there is no trust boundary to cross.
+// NOLINTNEXTLINE(clang-analyzer-optin.taint.GenericTaint)
 inline void* dyn_open(const char* name) { return ::dlopen(name, RTLD_NOW); }
 inline void* dyn_sym(void* handle, const char* symbol) {
     return ::dlsym(handle, symbol);

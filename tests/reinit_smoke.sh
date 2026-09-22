@@ -108,9 +108,12 @@ fi
 #          pre_sum post_sum post_enhanced post_smooth post_hd_profile"
 # Fields 11+ are §3.8: the live present-path derivation after run_game adopted
 # the reinit.  cut (not bare `read`) so appended fields can never spill into
-# POST_SUM via the shell's last-variable-takes-the-rest rule.
-read -r OUT_W OUT_H PRE_X PRE_Y POST_X POST_Y PRE_ENT POST_ENT PRE_SUM POST_SUM \
-    <<< "$(cut -d' ' -f1-10 "${RESULT_FILE}")"
+# POST_SUM via the shell's last-variable-takes-the-rest rule.  A here-DOC,
+# not a here-string: `<<<` is bash, and on Ubuntu /bin/sh is dash — this line
+# was a syntax error there the first time CI ran the script (2026-09-21).
+read -r OUT_W OUT_H PRE_X PRE_Y POST_X POST_Y PRE_ENT POST_ENT PRE_SUM POST_SUM <<FIELDS
+$(cut -d' ' -f1-10 "${RESULT_FILE}")
+FIELDS
 POST_ENH="$(cut -d' ' -f11 "${RESULT_FILE}")"
 POST_SMOOTH="$(cut -d' ' -f12 "${RESULT_FILE}")"
 rm -f "${RESULT_FILE}"

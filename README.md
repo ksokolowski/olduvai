@@ -30,19 +30,42 @@ copy of the game: see [Getting the game](#getting-the-game) and
 
 ## Status
 
-**Beta — 0.9.7.** The full game is playable natively — on the desktop
-and, new in this release, on two Linux handhelds: all seven levels, the
-three boss fights, caves, secret rooms, flight sequences and the ending.
-Behaviour is validated frame-by-frame against an independent reference
-implementation — a 26-scenario cross-engine corpus, with per-level golden
-traces run in CI, both engines in shared-RNG lockstep, zero tolerance.
+**Release candidate — 0.9.8.** Olduvai is feature-complete, with no known
+bugs. The full game is playable natively — on the desktop and on Linux
+handhelds: all seven levels, the three boss fights, caves, secret rooms,
+flight sequences and the ending. Behaviour is validated frame-by-frame
+against an independent reference implementation — a 26-scenario
+cross-engine corpus, with per-level golden traces run in CI, both engines
+in shared-RNG lockstep, zero tolerance.
+
+What stands between this and 1.0.0 is confirmation, not features. If
+something plays differently from the 1991 original, or anything else looks
+wrong, that is a bug — please
+[open an issue](https://github.com/ksokolowski/olduvai/issues) (F5 in the
+game writes a report you can attach).
 
 Under the hood, some parts are still convoluted — I know, and I'm not
-pretending otherwise. During beta the priority is simple: **keep what
+pretending otherwise. The priority stays simple: **keep what
 works.** The engine is being untangled steadily, one small
 behaviour-preserving change at a time — each verified frame-for-frame
 against the same reference before it lands — never a risky rewrite. The
 code gets cleaner; the game stays exactly as it played in 1991.
+
+## Screenshots
+
+<table>
+<tr>
+<td align="center"><b>Classic DOS</b> — as it was in 1991</td>
+<td align="center"><b>Enhanced HD</b> — widescreen, smooth motion, vector HUD</td>
+</tr>
+<tr>
+<td><img src="assets/screenshots/classic-l1.png" alt="Classic DOS mode, level 1" width="100%"></td>
+<td><img src="assets/screenshots/enhanced-widescreen-l1.png" alt="Enhanced HD widescreen mode, level 1" width="100%"></td>
+</tr>
+</table>
+
+Frames of this engine running a legitimately owned copy of the game — see
+[assets/screenshots](assets/screenshots/README.md).
 
 ## Features
 
@@ -57,7 +80,7 @@ sprite upscaling (OmniScale, xBR, MMPX, Eagle, smooth, retro), true
 widescreen with live level margins and panorama transitions, smooth 60 FPS
 motion interpolation, vector text and enhanced HUD, and a set of
 hand-crafted animation extensions (cave descent/emerge sequences, teleport
-clouds, descent dust, and more). It is all-or-nothing by design — see the
+clouds, descent dust, balloons that float away when a ride ends, and more). It is all-or-nothing by design — see the
 0.9.5 changelog for why. For the classic 4:3 look, add `--aspect 4:3`.
 
 **Audio.** OPL/AdLib FM synthesis is built in — an EXE-faithful AdLib
@@ -66,15 +89,19 @@ Roland MT-32 emulation is built in too (vendored libmt32emu — supply your
 own ROM images). General MIDI (FluidSynth + SoundFont) loads at runtime,
 plus host MIDI
 out for real hardware. Data-driven sound effects follow the selected
-backend.
+backend. *Options → Audio → Sound card* picks all of this in one setting
+named after the 1991 hardware — Sound Blaster, AdLib, Roland MT-32,
+General MIDI, MIDI out or Off — listing only the cards your machine can play.
 
 **In-game menus.** Title menu with direct level select on Start Game
 (left/right), a one-click Style preset (Classic DOS / Enhanced HD) in
 Options, pause menu with live-apply settings, quicksave/load, cheats,
-and a boss-fight pause — all driven by a declarative menu model shared
-with the reference engine.
+a boss-fight pause, one **Quit** that always asks first, and an **About**
+screen with the exact build — all driven by a declarative menu model
+shared with the reference engine.
 
-**Tooling.** F5 in-game bug capture with an annotation form (tag /
+**Tooling.** F5 in-game bug capture — in the levels and the boss fights —
+with an annotation form (tag /
 reproducibility / multi-line description, edited in a native text field);
 reports land in `~/olduvai/bug_reports` (override with the `bug_report_dir`
 key in `play.json` or `$OLDUVAI_BUG_DIR`).  Plus input record/replay,
@@ -161,7 +188,8 @@ menus), **X** attack, **Start** / **B** pause / back. Remap via the
 cmake --preset release && cmake --build --preset release   # → build/release/olduvai
 ```
 
-Requires CMake ≥ 3.21, a C++17 compiler and SDL2. Per-platform
+Requires CMake ≥ 3.21, a C++17 compiler and SDL2 2.0.20 or newer (the
+floor CI builds against on every push). Per-platform
 instructions, packaging (AppImage / dmg / Windows zip), the test suite and
 all build options: [docs/BUILDING.md](docs/BUILDING.md).
 
@@ -175,8 +203,17 @@ flags). Common keys: `game_dir`, `music_device` (`auto`, `opl`,
 `4:3`, `stretch`, `widescreen`), `vga_scan`, `fullscreen`, per-feature `enhance.*`
 toggles, and gamepad mapping: `pad_jump`, `pad_attack`, `pad_pause`,
 `pad_confirm`, `pad_back` (SDL button names — `a`, `b`, `x`, `y`,
-`start`, `back`, `leftshoulder`, …) plus `pad_deadzone` (default 8000). Built-in profiles: `dos` (byte-faithful), `hd` (enhanced
-widescreen).
+`start`, `back`, `leftshoulder`, …) plus `pad_deadzone` (default 8000),
+and `smooth_subframes` / `smooth_vsync` for smooth-motion pacing.
+`--sound-card` sets the music and effects backends together.
+
+Built-in profiles: `dos` (byte-faithful) and `hd` (enhanced widescreen),
+plus a handheld pair: `hd-handheld` (the `smooth` scaler at ×3, sized for
+1280×720 and 1024×600 panels, with lighter smooth-motion pacing) and
+`dos-handheld` (identical to `dos`; it keeps the menu's Style switch within
+the handheld pair). A launcher can pass its device defaults with
+`--default-profile`; it ranks below `play.json`, so choices you make in
+the menus still stick.
 
 ## How it was built
 

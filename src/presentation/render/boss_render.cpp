@@ -85,15 +85,21 @@ static inline float fsel(bool use_float, float f, int i) {
 }
 
 // Float x/y: routes through blit_sprite's float overload (HD-rounds the dest).
-// Integer callers convert implicitly and round-trip exactly, so every existing
-// fixed-position boss/scenery draw stays byte-identical; the player draws pass a
-// sub-pixel render position on the smooth-motion HD path (Part 1 follow-up).
+// Integer callers go through the int twin below, which converts explicitly and
+// round-trips exactly, so every fixed-position boss/scenery draw stays
+// byte-identical; the player draws pass a sub-pixel render position on the
+// smooth-motion HD path (Part 1 follow-up).
 
 void blit_at(RenderTarget& t, const std::vector<Sprite>& atlas, int idx,
              const std::vector<Rgb>& pal, float x, float y) {
     if (idx >= 0 && idx < static_cast<int>(atlas.size())) {
         blit_sprite(t, atlas[static_cast<std::size_t>(idx)], pal, x, y);
     }
+}
+
+void blit_at(RenderTarget& t, const std::vector<Sprite>& atlas, int idx,
+             const std::vector<Rgb>& pal, int x, int y) {
+    blit_at(t, atlas, idx, pal, static_cast<float>(x), static_cast<float>(y));
 }
 
 // ── L2 arena render ──────────────────────────────────────────────────────
@@ -138,12 +144,12 @@ void render_l2_sprites(RenderTarget& t, const BossAssets& a,
             const int base = s.direction == 0 ? kL2ProjSprRight : kL2ProjSprLeft;
             blit_at(t, a.spr,
                     base + kL2ProjAnim[static_cast<std::size_t>(s.frame)],
-                    a.palette, sfx, kL2ProjY);
+                    a.palette, sfx, static_cast<float>(kL2ProjY));
         } else if (s.ptype == 2) {
             blit_at(t, a.spr,
                     s.direction == 1 ? kL2ProjSprDyingLeft
                                      : kL2ProjSprDyingRight,
-                    a.palette, sfx, kL2ProjY);
+                    a.palette, sfx, static_cast<float>(kL2ProjY));
         }
     }
     render_boss_player_fb(t, p, a.spr, a.palette);
@@ -185,6 +191,12 @@ void blit_flip(RenderTarget& t, const std::vector<Sprite>& atlas, int idx,
         blit_sprite(t, atlas[static_cast<std::size_t>(idx)], pal, x, y,
                     flip);
     }
+}
+
+void blit_flip(RenderTarget& t, const std::vector<Sprite>& atlas, int idx,
+               const std::vector<Rgb>& pal, int x, int y, bool flip) {
+    blit_flip(t, atlas, idx, pal, static_cast<float>(x), static_cast<float>(y),
+              flip);
 }
 
 void render_l4_sprites(RenderTarget& t, const BossAssets& a,

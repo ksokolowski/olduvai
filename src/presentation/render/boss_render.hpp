@@ -48,6 +48,11 @@ void render_boss_player_fb(RenderTarget& t, const BossPlayerState& p,
 void blit_bg(RenderTarget& t, const BossAssets& a);
 void blit_at(RenderTarget& t, const std::vector<Sprite>& atlas, int idx,
              const std::vector<Rgb>& pal, float x, float y);
+// Integer twin: the fixed-position scenery draws.  Converts explicitly (exact
+// for any on-screen coordinate) instead of implicitly at 50-odd call sites,
+// which MSVC reports one C4244 each.
+void blit_at(RenderTarget& t, const std::vector<Sprite>& atlas, int idx,
+             const std::vector<Rgb>& pal, int x, int y);
 void render_l2_sprites(RenderTarget& t, const BossAssets& a,
                        const BossPlayerState& p, const L2BossState& boss);
 void render_l2_frame(RenderTarget& t, const BossAssets& a,

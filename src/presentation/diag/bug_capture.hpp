@@ -20,6 +20,13 @@
 
 #pragma once
 
+// Forward declarations, NOT <SDL.h>: src/app/main.cpp includes this header,
+// and on Windows SDL.h renames main() to SDL_main, which then needs SDL2main
+// at link time.  Including it here broke the MSVC link of olduvai.exe
+// (4d6a98f, red for two days); SDL.h belongs in the .cpp.
+struct SDL_Renderer;
+struct SDL_Window;
+
 #include <string>
 #include <vector>
 
@@ -86,6 +93,22 @@ struct DisplayInfo {
     int upscale_threads = 1;
 };
 
+// The generic half of DisplayInfo, read live from the renderer and window
+// (output and logical size, fullscreen, upscale threads; `supplied` set).
+// Each driver adds its own HD and widescreen fields.
+DisplayInfo read_display_info(SDL_Renderer* ren, SDL_Window* win);
+
+// A boss fight's own state, for a report written from the boss arena.  The
+// SystemsState passed alongside is then a synthesised snapshot (position,
+// lives, score, level), so the platform-only rows are written as n/a.
+// Default-constructed = a platform report; the section is omitted.
+struct BossInfo {
+    bool supplied = false;
+    int health = 0;        // counts down; the fight is won at 272
+    std::string phase;     // the boss's own state, one line
+    int frame = 0;         // fight frame
+};
+
 std::string write_bug_report(const systems::SystemsState& state,
                              const FrameBuffer& base_frame,
                              const std::vector<formats::Sprite>& entity_sprites,
@@ -93,7 +116,8 @@ std::string write_bug_report(const systems::SystemsState& state,
                              int overlay_scale,
                              const BugAnnotations& ann = {},
                              bool has_presented = false,
-                             const DisplayInfo& display = {});
+                             const DisplayInfo& display = {},
+                             const BossInfo& boss = {});
 
 // User-chosen bug-report root (play.json `bug_report_dir`, set by the app
 // after config merge).  "~"-prefixed values expand to the home directory.

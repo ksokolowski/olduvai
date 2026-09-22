@@ -29,7 +29,41 @@ int desktop_integer_scale(int logical_w, int logical_h);
 //   4:3     → (320*scale, 240*scale)  — CRT-like vertical stretch
 //   stretch → (0, 0)                  — disables logical scaling, fills window
 struct LogicalDims { int w; int h; };
+// The directory the executable lives in (inside a macOS bundle:
+// Contents/Resources), with trailing separators stripped — what
+// HdText::load and the asset lookups next to it expect.  "." when SDL cannot
+// answer: two of the three sites already defaulted to that, and the third
+// passed an EMPTY prefix, which turns "<base>/assets/..." into an absolute
+// "/assets/..." — a worse answer than the working directory.
+//
+// Three sites fetched this by hand (the title menu, LevelSurface, the
+// first-run screen) and trimmed it three slightly different ways: one
+// stripped repeated separators of both kinds, the others exactly one '/'.
+// shape_clones.py found them as SDL_GetBasePath -> SDL_free -> pop_back ->
+// load.  The careful version is the shared one.
+inline std::string sdl_base_dir() {
+    std::string dir;
+    if (char* p = SDL_GetBasePath()) {
+        dir = p;
+        SDL_free(p);
+    }
+    while (dir.size() > 1 && (dir.back() == '/' || dir.back() == '\\'))
+        dir.pop_back();
+    return dir.empty() ? std::string(".") : dir;
+}
+
 LogicalDims aspect_logical(int scale, const std::string& aspect);
+
+// The default window width for `aspect` at `win_h`, given the desktop's own
+// width/height ratio.  Everything but "widescreen" keeps `base_w` (the
+// integer-scaled DOS window).  Widescreen has nothing to show in a 16:10
+// window — the margin is derived from the OUTPUT aspect, so a DOS-aspect
+// window computes widescreen out of existence with no message saying so
+// (BACKLOG §3.25) — so the default window takes the DESKTOP's aspect, capped
+// at 2.8 where the margin caps too.  desktop_ratio <= 0 (unknown) keeps
+// base_w.  Pure: unit-tested in test_window_util.cpp.
+int widescreen_default_w(const std::string& aspect, int base_w, int win_h,
+                         double desktop_ratio);
 
 struct ScaledWindow {
     SDL_Window* win = nullptr;

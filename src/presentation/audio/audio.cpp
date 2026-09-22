@@ -278,8 +278,9 @@ std::string g_mt32_loaded;
 // missing SOUNDFONT in the diagnostics below.
 bool g_fluid_lib_found = false;
 
-bool add_rom_pair(const Mt32Api& api, void* ctx, const std::string& dir,
-                  Mt32Model model = Mt32Model::kAuto) {
+// The regular files in `dir`, and a case-insensitive lookup over them —
+// ROM names turn up in every case, depending on who copied them.
+std::vector<std::string> dir_files(const std::string& dir) {
     std::error_code ec;
     std::vector<std::string> entries;
     for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
@@ -287,27 +288,45 @@ bool add_rom_pair(const Mt32Api& api, void* ctx, const std::string& dir,
             entries.push_back(e.path().filename().string());
         }
     }
+    return entries;
+}
+
+std::string find_ci(const std::vector<std::string>& entries, const char* want) {
+    const std::string w(want);
+    for (const auto& e : entries) {
+        if (e.size() != w.size()) continue;
+        if (std::equal(e.begin(), e.end(), w.begin(),
+                       [](unsigned char a, unsigned char b) {
+                           return std::tolower(a) == std::tolower(b);
+                       })) {
+            return e;
+        }
+    }
+    return std::string();
+}
+
+// Whether `dir` holds a CM-32L or MT-32 ROM pair (the identities
+// add_rom_pair loads), without reading them.
+bool rom_pair_present(const std::string& dir) {
+    const std::vector<std::string> e = dir_files(dir);
+    const auto pair = [&e](const char* ctl, const char* pcm) {
+        return !find_ci(e, ctl).empty() && !find_ci(e, pcm).empty();
+    };
+    return pair("CM32L_CONTROL.ROM", "CM32L_PCM.ROM") ||
+           pair("MT32_CONTROL.ROM", "MT32_PCM.ROM");
+}
+
+bool add_rom_pair(const Mt32Api& api, void* ctx, const std::string& dir,
+                  Mt32Model model = Mt32Model::kAuto) {
+    const std::vector<std::string> entries = dir_files(dir);
     if (entries.empty()) return false;
 
-    const auto find_ci = [&entries](const char* want) {
-        const std::string w(want);
-        for (const auto& e : entries) {
-            if (e.size() != w.size()) continue;
-            if (std::equal(e.begin(), e.end(), w.begin(),
-                           [](unsigned char a, unsigned char b) {
-                               return std::tolower(a) == std::tolower(b);
-                           })) {
-                return e;
-            }
-        }
-        return std::string();
-    };
     // Only the two IDENTITIES are listed now; case is no longer part of the
     // key, so the four-spelling ladder collapses.
     const auto try_pair = [&](const char* ctl, const char* pcm,
                               const char* label) {
-        const std::string a = find_ci(ctl);
-        const std::string b = find_ci(pcm);
+        const std::string a = find_ci(entries, ctl);
+        const std::string b = find_ci(entries, pcm);
         if (a.empty() || b.empty()) return false;
         if (api.add_rom(ctx, (dir + "/" + a).c_str()) >= 0 &&
             api.add_rom(ctx, (dir + "/" + b).c_str()) >= 0) {
@@ -377,7 +396,8 @@ void* load_fluidsynth() {
 #endif
     if (h != nullptr) return h;
     if (const char* env = std::getenv("OLDUVAI_FLUIDSYNTH")) {
-        if ((h = dyn_open(env)) != nullptr) return h;
+        h = dyn_open(env);
+        if (h != nullptr) return h;
     }
     return nullptr;
 }
@@ -841,10 +861,19 @@ void SdlAudio::select_music_backend(const std::string& music_device,
                          "MT32_CONTROL.ROM + MT32_PCM.ROM (any case).\n");
         } else {
             std::fprintf(stderr,
-                         "audio: music device '%s' could not start — no "
-                         "music.  Check the device name for typos.\n",
+                         "audio: music device '%s' could not start.  Check "
+                         "the device name for typos.\n",
                          music_device_eff.c_str());
         }
+        // Then play SOMETHING: the Sound Blaster's FM music, which needs
+        // nothing but the vendored OPL core.  A saved MT-32 choice whose ROMs
+        // have since moved used to mean a silent game; the effects already
+        // fall back on their own (the VOC samples load unless a synth bake
+        // replaced them).
+        opl_music_ = std::make_unique<OplMusicPlayer>(device_rate_);
+        music_backend_ = "opl";
+        music_fell_back_ = true;
+        std::fprintf(stderr, "audio: falling back to AdLib FM music.\n");
     }
 }
 
@@ -867,9 +896,7 @@ void SdlAudio::resolve_and_bake_sfx(const std::string& sfx_backend) {
     }
     midi_sfx_ = (sfxb == "midi" || sfxb == "mt32-sfx" || sfxb == "gm-sfx");
     opl_sfx_ = (sfxb == "opl");
-
-    midi_sfx_ = (sfxb == "midi" || sfxb == "mt32-sfx" || sfxb == "gm-sfx");
-    opl_sfx_ = (sfxb == "opl");
+    sfx_off_ = (sfxb == "none" || sfxb == "off");
     if (opl_sfx_) bake_opl_sfx();
     if (midi_sfx_) bake_midi_sfx();
 }
@@ -1013,36 +1040,58 @@ void SdlAudio::reopen_device() {
 }
 
 SdlAudio::~SdlAudio() {
-    // Join the host-MIDI pump thread first (it silences the port on stop) so
-    // it can't outlive the object; the member's own dtor would also do this.
-    if (host_midi_active_) host_midi_.stop();
-    if (event_watch_installed_) SDL_DelEventWatch(audio_device_watch, this);
-    if (device_ != 0) {
-        SDL_PauseAudioDevice(device_, 1);
-        SDL_CloseAudioDevice(device_);
+    // Every statement in a destructor is on the noexcept/terminate line, and
+    // teardown here joins a pump thread, dlcloses libraries and writes a
+    // capture file.  The same class of escape ~HostMidiPlayer guards, with
+    // the same handling: swallow it, because worse-than-unrecoverable teardown
+    // problems get std::terminate for free.  join/stop() can throw
+    // (RtMidiError / std::system_error); the rest cannot in practice.
+    //
+    // stop() gets its OWN try: if it threw inside the one below, the device
+    // close and the event-watch removal would be skipped, leaving the audio
+    // callback and the watch pointing at an object being destroyed — worse
+    // than the terminate this guard replaced.
+    try {
+        // Join the host-MIDI pump thread first (it silences the port on stop)
+        // so it can't outlive the object; the member's own dtor would also do
+        // this.
+        if (host_midi_active_) host_midi_.stop();
+        // NOLINTNEXTLINE(bugprone-empty-catch)
+    } catch (...) {
     }
-    if (!capture_path_.empty()) write_capture();   // callback is stopped now
-    // OLDUVAI_AUDIO_STATS: real-time health summary (collected every run; only
-    // printed on request).  overruns > 0 or a worst_lock_wait anywhere near
-    // the budget = the RB1 dropout hazard is real on this host.
-    if (std::getenv("OLDUVAI_AUDIO_STATS") != nullptr &&
-        cb_count_.load(std::memory_order_relaxed) > 0) {
-        const double budget_ms =
-            1000.0 * device_samples_ / static_cast<double>(device_rate_);
-        std::fprintf(
-            stderr,
-            "audio-stats: callbacks=%llu overruns=%llu worst_mix=%.3fms "
-            "worst_lock_wait=%.3fms budget=%.3fms\n",
-            static_cast<unsigned long long>(
-                cb_count_.load(std::memory_order_relaxed)),
-            static_cast<unsigned long long>(
-                cb_overruns_.load(std::memory_order_relaxed)),
-            cb_worst_ns_.load(std::memory_order_relaxed) / 1e6,
-            cb_worst_wait_ns_.load(std::memory_order_relaxed) / 1e6,
-            budget_ms);
+    try {
+        if (event_watch_installed_) SDL_DelEventWatch(audio_device_watch, this);
+        if (device_ != 0) {
+            SDL_PauseAudioDevice(device_, 1);
+            SDL_CloseAudioDevice(device_);
+        }
+        if (!capture_path_.empty()) write_capture();   // callback is stopped now
+        // OLDUVAI_AUDIO_STATS: real-time health summary (collected every run;
+        // only printed on request).  overruns > 0 or a worst_lock_wait
+        // anywhere near the budget = the RB1 dropout hazard is real on this
+        // host.
+        if (std::getenv("OLDUVAI_AUDIO_STATS") != nullptr &&
+            cb_count_.load(std::memory_order_relaxed) > 0) {
+            const double budget_ms =
+                1000.0 * device_samples_ / static_cast<double>(device_rate_);
+            std::fprintf(
+                stderr,
+                "audio-stats: callbacks=%llu overruns=%llu worst_mix=%.3fms "
+                "worst_lock_wait=%.3fms budget=%.3fms\n",
+                static_cast<unsigned long long>(
+                    cb_count_.load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(
+                    cb_overruns_.load(std::memory_order_relaxed)),
+                cb_worst_ns_.load(std::memory_order_relaxed) / 1e6,
+                cb_worst_wait_ns_.load(std::memory_order_relaxed) / 1e6,
+                budget_ms);
+        }
+        // The melodic synth (its context/handles + dlopen'd lib) tears itself
+        // down when synth_ destructs, after the SDL device is closed above.
+        // Empty is the handling, as in ~HostMidiPlayer.
+        // NOLINTNEXTLINE(bugprone-empty-catch)
+    } catch (...) {
     }
-    // The melodic synth (its context/handles + dlopen'd lib) tears itself
-    // down when synth_ destructs, after the SDL device is closed above.
 }
 
 void SdlAudio::write_capture() {
@@ -1059,7 +1108,7 @@ void SdlAudio::write_capture() {
         std::fclose(f);
     }
     std::fprintf(stderr, "audio-capture: %.1f s at %d Hz -> %s\n",
-                 static_cast<double>(capture_.size() / 2) / device_rate_,
+                 static_cast<double>(capture_.size()) / 2.0 / device_rate_,
                  device_rate_, capture_path_.c_str());
 }
 
@@ -1090,7 +1139,7 @@ void SdlAudio::load_sfx(const std::string& id,
 }
 
 void SdlAudio::play_sfx(const std::string& id) {
-    if (device_ == 0) return;
+    if (device_ == 0 || sfx_off_) return;
     std::lock_guard<std::mutex> lock(mu_);
     // All SFX (OPL, SB-DAC VOC, and the MIDI backends baked at construction)
     // are pre-rendered PCM in sfx_ — play them as independent polyphonic waves,
@@ -1291,5 +1340,37 @@ int audio_device_watch(void* ud, SDL_Event* ev) {
     return 0;
 }
 }  // namespace
+
+SoundCardAvail probe_sound_cards(const std::string& rom_dir,
+                                 const std::string& soundfont) {
+    static std::map<std::string, SoundCardAvail> cache;
+    const std::string key = rom_dir + '\n' + soundfont;
+    if (const auto it = cache.find(key); it != cache.end()) return it->second;
+
+    SoundCardAvail a;
+    // MT-32: the library binds, and some search dir holds a ROM PAIR (the
+    // same two identities add_rom_pair loads, any case).  Names only — the
+    // ROMs are not read.
+    {
+        Mt32Api api;
+        void* lib = nullptr;
+        if (bind_mt32_api(api, lib)) {
+            for (const auto& dir : rom_search_dirs(rom_dir)) {
+                if (rom_pair_present(dir)) { a.mt32 = true; break; }
+            }
+        }
+        dyn_close(lib);
+    }
+    // GM: FluidSynth loads, and a SoundFont is found (not loaded).
+    {
+        void* lib = load_fluidsynth();
+        a.gm = lib != nullptr && !find_soundfont(soundfont).empty();
+        dyn_close(lib);
+    }
+    // External MIDI: host MIDI compiled in and at least one output port.
+    a.midi = !host_midi_list_ports().empty();
+    cache[key] = a;
+    return a;
+}
 
 }  // namespace olduvai::presentation

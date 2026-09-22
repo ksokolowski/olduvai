@@ -59,6 +59,18 @@ std::vector<std::uint8_t> lzss_decompress(const std::uint8_t* data,
     if (expected > kMaxOutput) {
         throw LzssError("LZSS header declares implausible output size");
     }
+    // ...and bounded by the INPUT, not only by a constant.  The densest
+    // token is a back-reference: 11 bits for at most 5 bytes, so a genuine
+    // stream cannot declare more than (size-4)*8*5/11 bytes; the slack covers
+    // the zero bits an exhausted reader supplies past the final byte.
+    // Without this a 34-byte input asked for 16 MiB of zero-fill, one bit at
+    // a time — 0.7 s per input under ASan, which starved the fuzzer (it fell
+    // to 13 exec/s) and is the same stall for a corrupt game file.
+    const std::uint64_t max_from_input =
+        (static_cast<std::uint64_t>(size - 4) * 8u * 5u) / 11u + 64u;
+    if (expected > max_from_input) {
+        throw LzssError("LZSS header declares more output than the input can encode");
+    }
 
     BitReader bits(data + 4, size - 4);
 

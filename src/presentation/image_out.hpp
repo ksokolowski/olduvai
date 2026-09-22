@@ -41,6 +41,12 @@ void maybe_dump_steady(const void* pixels, int w, int h);
 // No-op when unset.
 void maybe_dump_output(SDL_Renderer* ren);
 
+// maybe_dump_output, then SDL_RenderPresent — for every present site that has
+// no presenter of its own (the boss arena, the shared text screens).  Before
+// it, OLDUVAI_DUMP_OUTPUT reached only the platform presenters, so no boss
+// frame and no HD loading card or tally could be dumped (BACKLOG §3.32).
+void present_output(SDL_Renderer* ren);
+
 // Every frame-dump hook above (and the widescreen steady dump) appends
 // "<file> <SDL performance counter>" to <dir>/frames.txt, so a clip can be
 // timed against an OLDUVAI_AUDIO_CAPTURE recording (audio.hpp) instead of

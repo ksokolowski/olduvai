@@ -6,6 +6,8 @@
 // loop, constant and comment matches the in-loop lambdas they replace.
 #include "presentation/sequence/transition_players.hpp"
 
+#include "presentation/sequence/transition_geometry.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -200,41 +202,13 @@ void play_transition(TransitionShellCtx& ctx, const FrameBuffer& oldf,
     for (int f2 = 1;; ++f2) {
         const double p = smooth_t ? wall_progress(t0, dur, 1.0 / total) : 0.0;
         const double pos = smooth_t ? p * total : static_cast<double>(f2);
-        const bool arc_phase = pos > n;
         const double t = std::min(1.0, pos / n);
-        int odx = 0, ody = 0, ndx = 0, ndy = 0;
-        if (is_slide) {
-            // Secret entry ('D'): old UP, new from bottom.
-            // Secret exit ('U'):  old DOWN, new from top.
-            // Pan distance = full buffer height (HD or 200).
-            if (kind == 3) {   // 'D'
-                ody = -static_cast<int>(t * buf_h_t);
-                ndy = buf_h_t + ody;
-            } else {           // 'U'
-                ody = static_cast<int>(t * buf_h_t);
-                ndy = ody - buf_h_t;
-            }
-        } else {
-            // Surface pan: distance = full buffer width/height.
-            switch (dir) {
-                case 'R':
-                    odx = -static_cast<int>(t * buf_w_t);
-                    ndx = buf_w_t + odx;
-                    break;
-                case 'L':
-                    odx = static_cast<int>(t * buf_w_t);
-                    ndx = odx - buf_w_t;
-                    break;
-                case 'D':
-                    ody = -static_cast<int>(t * buf_h_t);
-                    ndy = buf_h_t + ody;
-                    break;
-                default:   // 'U'
-                    ody = static_cast<int>(t * buf_h_t);
-                    ndy = ody - buf_h_t;
-                    break;
-            }
-        }
+        // Secret slides (3 entry / 4 exit) pan by the buffer height; every
+        // other kind is a surface pan in `dir`.  Distances are this buffer's
+        // own size, HD or native (transition_geometry.hpp).
+        const TransitionShift sh =
+            transition_shift(kind, dir, t, buf_w_t, buf_h_t);
+        const int odx = sh.odx, ody = sh.ody, ndx = sh.ndx, ndy = sh.ndy;
         std::fill(work.px.begin(), work.px.end(), 0);
         for (std::size_t i = 3; i < work.px.size(); i += 4) {
             work.px[i] = 255;
@@ -250,25 +224,12 @@ void play_transition(TransitionShellCtx& ctx, const FrameBuffer& oldf,
         // scale 1 it writes at native coords (unchanged classic behaviour).
         if (kind == 4) {
             constexpr int spr2 = systems::kSprPlayerJump;
-            int px2, py2;
-            if (!arc_phase) {
-                // PAN — baked into the surface at its bottom: ride in with
-                // the surface roll ('U' pan native ndy = (t-1)*200).  The
-                // sprite stays glued to the surface so it never pops to a
-                // fixed screen spot.
-                px2 = arc_sx;
-                py2 = bake_y +
-                      static_cast<int>(std::lround((t - 1.0) * 200.0));
-            } else {
-                // ARC — surface static: land from the bake point to the
-                // surface resume (arc_ex, arc_ey), no end snap.
-                const double ta = std::min(1.0, (pos - n) / n_arc);
-                px2 = static_cast<int>(std::lround(
-                    arc_sx + (arc_ex - arc_sx) * ta));
-                const double lin = bake_y + (arc_ey - bake_y) * ta;
-                py2 = static_cast<int>(std::lround(
-                    lin - kArcPeak * 4.0 * ta * (1.0 - ta)));
-            }
+            // Both phases' positions: transition_geometry.hpp, which the
+            // wide player calls with the same arguments.
+            const ArcOverlay ao =
+                arc_overlay_pos(pos, t, n, n_arc, arc_sx, arc_ex, arc_ey,
+                                bake_y, kArcPeak);
+            const int px2 = ao.x, py2 = ao.y;
             // Harness: trace the OVERLAY's drawn position vs the player's
             // real resume position (arc_ex,arc_ey).  |overlay[f2=1] -
             // resume| is the start-of-slide pop; overlay[last] must equal
@@ -437,30 +398,20 @@ void play_transition_wide(TransitionShellCtx& ctx,
             const double p =
                 smooth_t ? wall_progress(t0, dur, 1.0 / total) : 0.0;
             const double pos = smooth_t ? p * total : static_cast<double>(f2);
-            const bool arc_phase = pos > ns;
             const double t = std::min(1.0, pos / ns);
-            int ody = 0, ndy = 0;
-            if (kind == 3) { ody = -static_cast<int>(t * H); ndy = H + ody; }
-            else           { ody =  static_cast<int>(t * H); ndy = ody - H; }
+            // Native units: blit_shifted_w multiplies by hd_scale itself.
+            const TransitionShift sh = transition_shift(kind, dir, t, W, H);
+            const int ody = sh.ody, ndy = sh.ndy;
             std::fill(work.begin(), work.end(), 0);
             for (std::size_t i = 3; i < work.size(); i += 4) work[i] = 255;
             blit_shifted_w(work, hd_old, 0, ody);
             blit_shifted_w(work, hd_new, 0, ndy);
             if (kind == 4) {
                 constexpr int spr2 = systems::kSprPlayerJump;
-                int px2, py2;
-                if (!arc_phase) {
-                    px2 = arc_sx;
-                    py2 = bake_y +
-                          static_cast<int>(std::lround((t - 1.0) * 200.0));
-                } else {
-                    const double ta = std::min(1.0, (pos - ns) / n_arc);
-                    px2 = static_cast<int>(std::lround(
-                        arc_sx + (arc_ex - arc_sx) * ta));
-                    const double lin = bake_y + (arc_ey - bake_y) * ta;
-                    py2 = static_cast<int>(std::lround(
-                        lin - kArcPeak * 4.0 * ta * (1.0 - ta)));
-                }
+                const ArcOverlay ao =
+                    arc_overlay_pos(pos, t, ns, n_arc, arc_sx, arc_ex,
+                                    arc_ey, bake_y, kArcPeak);
+                const int px2 = ao.x, py2 = ao.y;
                 if (spr2 < static_cast<int>(arc_spr_mat.size())) {
                     RenderTarget wrt{work.data(), Wh, Hh, ctx.hd_scale,
                                      ctx.hd_cache, ctx.hd_profile};
@@ -486,13 +437,8 @@ void play_transition_wide(TransitionShellCtx& ctx,
         const double p = smooth_t ? wall_progress(t0, dur, 1.0 / n)
                                   : static_cast<double>(f2) / n;
         const double t = std::min(1.0, p);
-        int odx = 0, ody = 0, ndx = 0, ndy = 0;
-        switch (dir) {
-            case 'R': odx = -static_cast<int>(t * W); ndx = W + odx; break;
-            case 'L': odx =  static_cast<int>(t * W); ndx = odx - W; break;
-            case 'D': ody = -static_cast<int>(t * H); ndy = H + ody; break;
-            default:  ody =  static_cast<int>(t * H); ndy = ody - H; break;
-        }
+        const TransitionShift sh = transition_shift(kind, dir, t, W, H);
+        const int odx = sh.odx, ody = sh.ody, ndx = sh.ndx, ndy = sh.ndy;
         std::fill(work.begin(), work.end(), 0);
         for (std::size_t i = 3; i < work.size(); i += 4) work[i] = 255;
         blit_shifted_w(work, hd_old, odx, ody);
@@ -523,6 +469,66 @@ void play_transition_wide(TransitionShellCtx& ctx,
 constexpr int kStripW = 4 * 320;
 constexpr int kStripH = 200;
 
+namespace {
+
+// Blit each REAL slot's straddling edge tiles across its boundary and record
+// the strip-x [lo, hi) bands an overhang actually landed on.  Split out of
+// pan_bridge_seams: it builds the real-slot asset set, spills each slot's
+// edge tiles into the adjacent slot, and hands back the bands the later
+// authored-redraw + player-box passes are restricted to.  `real_slots` is
+// derived from the slot0/slot3 real flags (slots 1 and 2 are always real);
+// the caller owns `srt` (a RenderTarget over the strip) and appends into
+// `slot_assets` / `bands`.
+void pan_bridge_collect_overhangs(
+    TransitionShellCtx& ctx, int lo, bool slot0_real, bool slot3_real,
+    presentation::RenderTarget& srt,
+    std::vector<std::pair<int, presentation::LevelRenderAssets>>& slot_assets,
+    std::vector<std::pair<int, int>>& bands) {
+    std::vector<std::pair<int, int>> real_slots = {{1, lo + 1}, {2, lo + 2}};
+    if (slot0_real) real_slots.push_back({0, lo});
+    if (slot3_real) real_slots.push_back({3, lo + 3});
+    for (const auto& slot_scr : real_slots) {
+        // Named locals, not a structured binding, so the spill lambda below
+        // can capture `slot` under C++17 (capturing a structured binding is
+        // a C++20 extension).
+        const int slot = slot_scr.first;
+        const int scr = slot_scr.second;
+        presentation::LevelRenderAssets ra;
+        systems::SystemsState sst;
+        ctx.build_assets(scr, ra, sst);
+        auto spill = [&](bool right_edge) {
+            srt.origin_x = slot * 320;
+            srt.clip_x_lo = right_edge ? (slot + 1) * 320 : -(1 << 28);
+            srt.clip_x_hi = right_edge ? (1 << 28) : slot * 320;
+            int ext_lo = 1 << 28, ext_hi = -(1 << 28);
+            for (const auto& tp :
+                 presentation::tile_patterns::seam_straddling_tiles(
+                     ra.tiles, ra.tile_sprites, right_edge)) {
+                if (tp.sprite_idx < 0 ||
+                    tp.sprite_idx >= static_cast<int>(ra.tile_sprites.size()))
+                    continue;
+                const auto& spr =
+                    ra.tile_sprites[static_cast<std::size_t>(tp.sprite_idx)];
+                presentation::blit_sprite(srt, spr, ra.palette, tp.x, tp.y);
+                const int sx = slot * 320;
+                if (right_edge) {
+                    ext_lo = std::min(ext_lo, sx + 320);
+                    ext_hi = std::max(ext_hi, sx + tp.x + spr.width);
+                } else {
+                    ext_lo = std::min(ext_lo, sx + tp.x);
+                    ext_hi = std::max(ext_hi, sx);
+                }
+            }
+            if (ext_hi > ext_lo) bands.emplace_back(ext_lo, ext_hi);
+        };
+        spill(/*right_edge=*/true);
+        spill(/*right_edge=*/false);
+        slot_assets.emplace_back(slot, std::move(ra));
+    }
+}
+
+}  // namespace
+
 // Seam-column continuity across the panorama strip (tile_patterns).
 // Same laws as the steady wide compose: a trunk/pillar straddling a
 // screen edge must not cut at a slot boundary mid-pan (the
@@ -544,58 +550,13 @@ void pan_bridge_seams(TransitionShellCtx& ctx,
                       const FrameBuffer& new_center, bool slot0_real,
                       bool slot3_real) {
     {
-        std::vector<std::pair<int, int>> real_slots = {{1, lo + 1},
-                                                       {2, lo + 2}};
-        if (slot0_real) real_slots.push_back({0, lo});
-        if (slot3_real) real_slots.push_back({3, lo + 3});
         std::vector<std::pair<int, presentation::LevelRenderAssets>>
             slot_assets;
         std::vector<std::pair<int, int>> bands;   // strip-x [lo, hi)
         presentation::RenderTarget srt{strip.data(), kStripW, kStripH, 1,
                                        nullptr, nullptr};
-        for (const auto& slot_scr : real_slots) {
-            // Named locals, not a structured binding, so the spill lambda below
-            // can capture `slot` under C++17 (capturing a structured binding is
-            // a C++20 extension).
-            const int slot = slot_scr.first;
-            const int scr = slot_scr.second;
-            presentation::LevelRenderAssets ra;
-            systems::SystemsState sst;
-            ctx.build_assets(scr, ra, sst);
-            auto spill = [&](bool right_edge) {
-                srt.origin_x = slot * 320;
-                srt.clip_x_lo =
-                    right_edge ? (slot + 1) * 320 : -(1 << 28);
-                srt.clip_x_hi =
-                    right_edge ? (1 << 28) : slot * 320;
-                int ext_lo = 1 << 28, ext_hi = -(1 << 28);
-                for (const auto& tp :
-                     presentation::tile_patterns::seam_straddling_tiles(
-                         ra.tiles, ra.tile_sprites, right_edge)) {
-                    if (tp.sprite_idx < 0 ||
-                        tp.sprite_idx >=
-                            static_cast<int>(ra.tile_sprites.size()))
-                        continue;
-                    const auto& spr =
-                        ra.tile_sprites[static_cast<std::size_t>(
-                            tp.sprite_idx)];
-                    presentation::blit_sprite(srt, spr, ra.palette,
-                                              tp.x, tp.y);
-                    const int sx = slot * 320;
-                    if (right_edge) {
-                        ext_lo = std::min(ext_lo, sx + 320);
-                        ext_hi = std::max(ext_hi, sx + tp.x + spr.width);
-                    } else {
-                        ext_lo = std::min(ext_lo, sx + tp.x);
-                        ext_hi = std::max(ext_hi, sx);
-                    }
-                }
-                if (ext_hi > ext_lo) bands.emplace_back(ext_lo, ext_hi);
-            };
-            spill(/*right_edge=*/true);
-            spill(/*right_edge=*/false);
-            slot_assets.emplace_back(slot, std::move(ra));
-        }
+        pan_bridge_collect_overhangs(ctx, lo, slot0_real, slot3_real, srt,
+                                     slot_assets, bands);
         // Authored seam holes bridged across adjacent REAL slots —
         // the same tile_patterns::seam_row_bridges the steady view
         // uses (the L7 S1|S2 jumppad rail), so a hole doesn't

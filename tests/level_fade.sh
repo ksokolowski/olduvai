@@ -15,7 +15,7 @@
 #
 # Golden = hash, not image: the frames contain decoded game artwork and the
 # content policy (CONTRIBUTING.md) keeps that out of the tree. On failure the
-# dumped BMPs are kept for eyeballing and the directory is printed.
+# dumped PNGs are kept for eyeballing and the directory is printed.
 #
 # Determinism, same reasoning as mainmenu_shot.sh:
 #  - OLDUVAI_FORCE_LEVEL_COMPLETE=8 seeds the intercept at a fixed frame, so
@@ -76,7 +76,7 @@ for mode in classic wide; do
         >/dev/null 2>&1
     rm -rf "${CFG}"
 
-    n=$(find "${DUMP}" -name 'levelfade_*.bmp' | wc -l | tr -d ' ')
+    n=$(find "${DUMP}" -name 'levelfade_*.png' | wc -l | tr -d ' ')
     if [ "${n}" -eq 0 ]; then
         echo "level_fade: FAIL (${mode}) — no frames dumped; the intercept was"
         echo "  never reached.  OLDUVAI_FORCE_LEVEL_COMPLETE wiring?"
@@ -85,7 +85,7 @@ for mode in classic wide; do
         continue
     fi
 
-    GOT=$(cat "${DUMP}"/levelfade_*.bmp | sha256)
+    GOT=$(cat "${DUMP}"/levelfade_*.png | sha256)
     GOLDEN_FILE="${FIXDIR}/level_fade_${mode}.sha256"
     if [ ! -f "${GOLDEN_FILE}" ]; then
         echo "level_fade: FAIL (${mode}) — no golden at ${GOLDEN_FILE}"

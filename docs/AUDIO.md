@@ -1,7 +1,34 @@
 # Audio backends — the choice matrix
 
-Two independent knobs: `--music-device` and `--sfx-backend` (config keys
-`music_device` / `sfx_backend`). Defaults are `auto` for both.
+## Sound card — the one choice most players want
+
+*Options → Audio → Sound card* (CLI `--sound-card`) names the sound setup the
+way a 1991 player knew it. Each card sets the two knobs below as a pair:
+
+| Sound card | `--sound-card` | Music | SFX |
+|---|---|---|---|
+| Auto (default) | `auto` | best available: MT-32 → GM → OPL | paired to the music |
+| Sound Blaster | `sb` | `opl` (FM) | `sb-dac` (digital samples) |
+| AdLib | `adlib` | `opl` (FM) | `opl` (FM) |
+| Roland MT-32 | `mt32` | `mt32-builtin` | `mt32-sfx` |
+| General MIDI | `gm` | `gm-builtin` | `gm-sfx` |
+| MIDI out | `midi` | `gm-host` (an external MIDI device) | `midi` |
+| Off | `off` | `none` | `none` |
+
+The menu lists only the cards this machine can play: Roland MT-32 needs your
+ROMs, General MIDI a SoundFont and FluidSynth, MIDI out a MIDI output port.
+The card is not stored on its own — play.json keeps the two keys, and a pair no
+card names (made under *Audio → Advanced*, or by hand) shows as **Custom**. An
+explicit `--music-device` / `--sfx-backend` beats `--sound-card`.
+
+If a saved device cannot start — an MT-32 choice whose ROMs have moved — the
+music falls back to the AdLib FM driver and the effects to the digital
+samples, with a line on stderr, instead of a silent game.
+
+## The two knobs
+
+`--music-device` and `--sfx-backend` (config keys `music_device` /
+`sfx_backend`, menu *Audio → Advanced*). Defaults are `auto` for both.
 
 ## Music devices
 
@@ -95,7 +122,8 @@ engine's own rendering and does need one.
 | `auto` | pairs to the music device | MT-32 music → `mt32-sfx`, GM music → `gm-sfx`, otherwise → `sb-dac` |
 | `sb-dac` | the game's digital VOC samples | band-limited (windowed-sinc) upsampling + ~2 ms edge declick (`resample.hpp`) — the samples are 4 kHz recordings; this removes the imaging and per-trigger pop the analog SB output stage never produced |
 | `opl` | FM synthesis, walked from the EXE's AdLib branch (`opl_sfx.cpp`, same Nuked-OPL3 core as music) | the 3 FM effects the EXE 'A' branch has; ids without an AdLib record fall through to VOC |
-| `mt32-sfx` / `gm-sfx` | catalog note events baked to PCM through the active synth | |
+| `mt32-sfx` / `gm-sfx` | catalog note events baked to PCM through the active synth | without that synth, the digital samples play |
+| `none` | — | no sound effects (the Sound card's Off) |
 
 ## What the original EXE did (mode byte `DS:0x8db5`)
 
@@ -124,10 +152,10 @@ rather than the original's exact notes.
 
 | Goal | Flags |
 |---|---|
-| Best out-of-the-box (default) | *(none — auto: GM/SC-55 music + digital SFX)* |
-| Pure 1991 AdLib nostalgia | `--music-device opl --sfx-backend opl` |
-| Sound Blaster memories | `--music-device opl` *(digital SFX by auto-pair)* |
-| Authentic Roland | `--music-device mt32-builtin --rom-dir <roms>` |
+| Best out-of-the-box (default) | *(none — auto: the best synth found, effects paired to it: GM music gets GM effects)* |
+| Pure 1991 AdLib nostalgia | `--sound-card adlib` |
+| Sound Blaster memories | `--sound-card sb` |
+| Authentic Roland | `--sound-card mt32 --rom-dir <roms>` |
 
 ## Enhanced SFX (enhanced mode only)
 

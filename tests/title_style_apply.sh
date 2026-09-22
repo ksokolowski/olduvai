@@ -54,6 +54,8 @@ sha256() {
 
 export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}"
 export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}"   # mute test runs
+. "$(dirname "$0")/lib/engine_err.sh"
+engine_err_init
 
 CFG_DIR="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
 OUT1="$(mktemp -d /tmp/title_style1.XXXXXX)"
@@ -65,12 +67,13 @@ cleanup() { rm -rf "${CFG_DIR}" "${OUT1}" "${OUT2}"; }
 run_walk() {
     XDG_CONFIG_HOME="${CFG_DIR}" OLDUVAI_MENU_SCRIPT="$1" \
         OLDUVAI_MENU_SCRIPT_DIR="$2" timeout 60 \
-        "${BINARY}" --play --game-dir "${GAME_DIR}" >/dev/null 2>&1
+        "${BINARY}" --play --game-dir "${GAME_DIR}" >"${ERR}" 2>&1
 }
 
 run_walk "down down enter right esc enter wait wait shot quit" "${OUT1}"
 if [ ! -s "${OUT1}/000.png" ]; then
     echo "title_style_apply: FAIL — no shot from the apply walk (menu not reached?)"
+    engine_said "${ERR}"
     cleanup; exit 1
 fi
 if [ ! -f "${CFG_DIR}/olduvai/play.json" ]; then
@@ -81,6 +84,7 @@ fi
 run_walk "down down enter esc wait wait shot quit" "${OUT2}"
 if [ ! -s "${OUT2}/000.png" ]; then
     echo "title_style_apply: FAIL — no shot from the booted-enhanced walk"
+    engine_said "${ERR}"
     cleanup; exit 1
 fi
 

@@ -193,3 +193,17 @@ TEST_CASE("unsqz: malformed input throws") {
     packed[3] = 0x00;
     CHECK_THROWS_AS(unsqz(packed), SqzError);
 }
+
+TEST_CASE("unsqz: non-literal after reset cannot loop the chain (fuzz find)") {
+    // fuzz-smoke's first run with real coverage (2026-09-22): a 9-bit
+    // non-literal accepted after the implicit reset became prev_code, the
+    // dictionary chained into stale slots, and the unwind ran off the end
+    // of its 4096-entry stack (ASan: stack-buffer-overflow).  Must throw.
+    const std::vector<std::uint8_t> crash = {
+        0x02, 0x18, 0x88, 0x88, 0x89, 0x88, 0x08, 0x00, 0x00, 0x04, 0x09,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xB1,
+        0x00, 0x40, 0x88, 0x05, 0x37, 0x00, 0x7E, 0x0F, 0x5D, 0x9A, 0xD3,
+        0x88
+    };
+    CHECK_THROWS_AS(unsqz(crash), SqzError);
+}

@@ -67,32 +67,81 @@ static inline float fsel(bool use_float, float f, int i) {
     return use_float ? f : static_cast<float>(i);
 }
 
+// Moving platform: two 16-px tile pieces at the oscillating y.
+// The EXE queues sentinel sprite 1000 (Objects_Update PLATFORM handler
+// 2A04:0c73) and the flush special-cases it into FUN_263c_0931, which
+// picks the tile pair BY LEVEL: capstone 263c:0936-0x094b
+// tests the level word [0x9c6c] against 3 → Dark Woods uses 1-based tiles 13/15 = ELEML3[12]
+// and [14] (16x9 planks), every other level 1-based 1/3 = ELEMLx[0]
+// and [2].  Raw EXE bytes at file 0x18cf1 verified.  Drawing [0]/[2]
+// unconditionally (cyxx-derived) attached L3's 16x55 ground pillars
+// to the moving planks.
+static void draw_moving_platform(RenderTarget& t,
+                                 const systems::SystemsState& state,
+                                 const LevelRenderAssets& a, const Entity& e) {
+    const std::size_t ta = state.current_level == 3 ? 12u : 0u;
+    const std::size_t tb = state.current_level == 3 ? 14u : 2u;
+    if (a.tile_sprites.size() > tb) {
+        const float pcy = fsel(t.use_float_pos, e.f_current_y,
+                               e.current_y);
+        const float pbx =
+            fsel(t.use_float_pos, e.fx, e.x);   // x usually static
+        blit_sprite(t, a.tile_sprites[ta], a.palette, pbx, pcy);
+        blit_sprite(t, a.tile_sprites[tb], a.palette, pbx + 16, pcy);
+    }
+}
+
+// One entity's sprite and everything drawn WITH it: the two-part L3 snake and
+// L7 pteriyaki (body and head placed independently, which is why the shared
+// sprite is not blitted on that path until the head goes down), the launcher
+// the entity was fired from, and a chimp's rock while it is in flight.
+static void draw_entity_composite(RenderTarget& t,
+                                  const LevelRenderAssets& a,
+                                  const Entity& e, int spr_idx,
+                                  float draw_x, float draw_y, bool flip) {
+    const auto& spr_mat = a.entity_sprites;
+    const bool separate_body_head =
+        e.obj_type == ObjType::SnakeL3 && e.body_sprite >= 0;
+    if (!separate_body_head) {
+        blit_sprite(t, spr_mat[static_cast<std::size_t>(spr_idx)],
+                    a.palette, draw_x, draw_y, flip);
+    }
+    if (e.obj_type == ObjType::PteriyakiL7 && e.body_sprite >= 0 &&
+        e.body_sprite < static_cast<int>(spr_mat.size())) {
+        blit_sprite(t, spr_mat[static_cast<std::size_t>(e.body_sprite)],
+                    a.palette, e.body_x, e.body_y);
+    } else if (separate_body_head &&
+               e.body_sprite < static_cast<int>(spr_mat.size())) {
+        blit_sprite(t, spr_mat[static_cast<std::size_t>(e.body_sprite)],
+                    a.palette, e.body_x, e.body_y);
+        blit_sprite(t, spr_mat[static_cast<std::size_t>(spr_idx)],
+                    a.palette, e.head_x, e.head_y);
+    }
+    if (e.launcher_spr >= 0 &&
+        e.launcher_spr < static_cast<int>(spr_mat.size())) {
+        blit_sprite(t, spr_mat[static_cast<std::size_t>(e.launcher_spr)],
+                    a.palette, e.init_x, e.init_y);
+    }
+    // Chimp projectile in flight.
+    if ((e.obj_type == ObjType::Chimp || e.obj_type == ObjType::ChimpL5) &&
+        e.throw_flag != 0) {
+        constexpr int kSprChimpThrow = 95;
+        if (kSprChimpThrow < static_cast<int>(spr_mat.size())) {
+            blit_sprite(t, spr_mat[kSprChimpThrow], a.palette,
+                        fsel(t.use_float_pos, e.f_throw_x, e.throw_x),
+                        fsel(t.use_float_pos, e.f_throw_y, e.throw_y));
+        }
+    }
+}
+
 void draw_entity_list(RenderTarget& t, systems::SystemsState& state,
                       const LevelRenderAssets& a) {
     // 3. Entities.
     const auto& spr_mat = a.entity_sprites;
     for (const Entity& e : state.entities) {
         if (!e.active || !e.visible) continue;
-        // Moving platform: two 16-px tile pieces at the oscillating y.
-        // The EXE queues sentinel sprite 1000 (Objects_Update PLATFORM handler
-        // 2A04:0c73) and the flush special-cases it into FUN_263c_0931, which
-        // picks the tile pair BY LEVEL: capstone 263c:0936-0x094b
-        // `cmp [0x9c6c],3` → Dark Woods uses 1-based tiles 13/15 = ELEML3[12]
-        // and [14] (16x9 planks), every other level 1-based 1/3 = ELEMLx[0]
-        // and [2].  Raw EXE bytes at file 0x18cf1 verified.  Drawing [0]/[2]
-        // unconditionally (cyxx-derived) attached L3's 16x55 ground pillars
-        // to the moving planks.
         if (e.obj_type == ObjType::Platform) {
-            const std::size_t ta = state.current_level == 3 ? 12u : 0u;
-            const std::size_t tb = state.current_level == 3 ? 14u : 2u;
-            if (a.tile_sprites.size() > tb) {
-                const float pcy = fsel(t.use_float_pos, e.f_current_y,
-                                       e.current_y);
-                const float pbx =
-                    fsel(t.use_float_pos, e.fx, e.x);   // x usually static
-                blit_sprite(t, a.tile_sprites[ta], a.palette, pbx, pcy);
-                blit_sprite(t, a.tile_sprites[tb], a.palette, pbx + 16, pcy);
-            }
+            draw_moving_platform(t, state, a, e);
             continue;
         }
         const int spr_idx = e.sprite;
@@ -128,38 +177,7 @@ void draw_entity_list(RenderTarget& t, systems::SystemsState& state,
         if (bottom_aligned(e.obj_type)) draw_y = by - spr_h;
         const bool flip = is_ko_frame ? false : e.facing_left;
 
-        const bool separate_body_head =
-            e.obj_type == ObjType::SnakeL3 && e.body_sprite >= 0;
-        if (!separate_body_head) {
-            blit_sprite(t, spr_mat[static_cast<std::size_t>(spr_idx)],
-                        a.palette, draw_x, draw_y, flip);
-        }
-        if (e.obj_type == ObjType::PteriyakiL7 && e.body_sprite >= 0 &&
-            e.body_sprite < static_cast<int>(spr_mat.size())) {
-            blit_sprite(t, spr_mat[static_cast<std::size_t>(e.body_sprite)],
-                        a.palette, e.body_x, e.body_y);
-        } else if (separate_body_head &&
-                   e.body_sprite < static_cast<int>(spr_mat.size())) {
-            blit_sprite(t, spr_mat[static_cast<std::size_t>(e.body_sprite)],
-                        a.palette, e.body_x, e.body_y);
-            blit_sprite(t, spr_mat[static_cast<std::size_t>(spr_idx)],
-                        a.palette, e.head_x, e.head_y);
-        }
-        if (e.launcher_spr >= 0 &&
-            e.launcher_spr < static_cast<int>(spr_mat.size())) {
-            blit_sprite(t, spr_mat[static_cast<std::size_t>(e.launcher_spr)],
-                        a.palette, e.init_x, e.init_y);
-        }
-        // Chimp projectile in flight.
-        if ((e.obj_type == ObjType::Chimp || e.obj_type == ObjType::ChimpL5) &&
-            e.throw_flag != 0) {
-            constexpr int kSprChimpThrow = 95;
-            if (kSprChimpThrow < static_cast<int>(spr_mat.size())) {
-                blit_sprite(t, spr_mat[kSprChimpThrow], a.palette,
-                            fsel(t.use_float_pos, e.f_throw_x, e.throw_x),
-                            fsel(t.use_float_pos, e.f_throw_y, e.throw_y));
-            }
-        }
+        draw_entity_composite(t, a, e, spr_idx, draw_x, draw_y, flip);
     }
 
 }
@@ -238,7 +256,7 @@ void draw_hazards_and_popups(RenderTarget& t, systems::SystemsState& state,
         blit_sprite(t, spr_mat[kSprFallingStone], a.palette,
                     fsel(t.use_float_pos, state.fireball_fx, state.fireball_x),
                     fsel(t.use_float_pos, state.fireball_fy, state.fireball_y),
-                    /*flip=*/state.fireball_flag == 2);
+                    /*flip_h=*/state.fireball_flag == 2);
     }
     for (const auto& b : state.score_bonuses) {
         if (b.active_this_frame &&
@@ -256,9 +274,9 @@ void draw_death_halo(RenderTarget& t, systems::SystemsState& state,
     const auto& spr_mat = a.entity_sprites;
     // 4b. Death halo (+ wing on L5) rising from the death position.
     if (state.death_halo_active) {
-        constexpr int kSprDeathHalo = 117, kSprDeathWing = 124;
-        if (kSprDeathHalo < static_cast<int>(spr_mat.size())) {
-            blit_sprite(t, spr_mat[kSprDeathHalo], a.palette,
+        constexpr int kSprDeathWing = 124;
+        if (kSprBalloonBunch < static_cast<int>(spr_mat.size())) {
+            blit_sprite(t, spr_mat[kSprBalloonBunch], a.palette,
                         fsel(t.use_float_pos, state.death_halo_fx,
                              state.death_halo_x),
                         fsel(t.use_float_pos, state.death_halo_fy,
@@ -298,6 +316,154 @@ void draw_l5_glider_flyaway(RenderTarget& t, systems::SystemsState& state,
 
 }
 
+// Post-hit invulnerability halo/shield overlay.  // FUN_27f7_12c7
+// Visibility (capstone 0x12ff-0x130b): skip the blink-off phase —
+// show = (hit_counter > 15) OR (hit_blink != 0).
+// L5 glider branch (DS:0x989c != 0): sprite 0x8d at (x+6, y+10)
+// (capstone 0x134d / 0x1346); otherwise frames 127+hit_blink at
+// (x-5, y-11), x another -4 while climbing (capstone 0x132b).
+static void draw_player_halo(RenderTarget& t, const systems::SystemsState& state,
+                             const LevelRenderAssets& a, float px, float py) {
+    const systems::PlayerState& p = state.player;
+    if (p.hit_counter <= 0) return;
+    if (p.hit_counter <= 15 && p.hit_blink == 0) return;
+    const auto& spr_mat = a.entity_sprites;
+    int idx;
+    float hx, hy;
+    if (state.glider_active && state.current_level == 5) {
+        idx = kSprHaloLevel5;
+        hx = px + 6;
+        hy = py + 10;
+    } else {
+        idx = kSprPlayerHalo1 + p.hit_blink;
+        hx = px - 5 - (p.climbing != 0 ? 4 : 0);
+        hy = py - 11;
+    }
+    if (idx >= 0 && idx < static_cast<int>(spr_mat.size())) {
+        blit_sprite(t, spr_mat[static_cast<std::size_t>(idx)],
+                    a.palette, hx, hy);
+    }
+}
+
+// Flight composites replace the walk sprite while alive in flight —
+// the halo overlay still applies (only the base sprite is swapped).
+// Returns true when it drew the player, i.e. the body draw below is done.
+static bool draw_flight_composite(RenderTarget& t,
+                                  const systems::SystemsState& state,
+                                  const LevelRenderAssets& a,
+                                  float px, float py) {
+    const auto& spr_mat = a.entity_sprites;
+    if (!state.glider_active || state.player.death_counter != 0) return false;
+    if (state.current_level == 1 &&
+        kSprPlayerWithBalloons < static_cast<int>(spr_mat.size())) {
+        blit_sprite(t, spr_mat[kSprPlayerWithBalloons], a.palette,
+                    px, py - 30);
+        draw_player_halo(t, state, a, px, py);
+        return true;
+    }
+    if (state.current_level == 5) {
+        // RIDING glider = flight body sprite 116 (0x75), which INCLUDES the
+        // caveman on the glider — NOT 117 (0x76), the empty detached body
+        // drawn during the screen-12 fly-away.  EXE Player_UpdateAndDraw
+        // branch E (capstone 0x1c39) / reference _GLIDER_FLIGHT_BODY_SPR.
+        // (olduvai previously used 117 here → glider looked riderless.)
+        constexpr int kGliderFlightBody = 116, kGliderChute = 124;
+        if (kGliderFlightBody < static_cast<int>(spr_mat.size())) {
+            blit_sprite(t, spr_mat[kGliderFlightBody], a.palette, px, py);
+        }
+        if (kGliderChute < static_cast<int>(spr_mat.size())) {
+            blit_sprite(t, spr_mat[kGliderChute], a.palette,
+                        px + 21, py);
+        }
+        draw_player_halo(t, state, a, px, py);
+        return true;
+    }
+    return false;
+}
+
+// What the body draw shows this tick: normally the physics sprite, but the
+// cave-EMERGE animation and the teleport POSE bookend ticks both override it.
+struct PlayerBodyPose {
+    int sprite;       // sprite index to blit
+    int dx;           // extra x offset (ink centring for the override)
+    bool overridden;  // an override pose — never flipped
+    int dim_num;      // palette scale numerator, of 3 (3 = full bright)
+};
+
+// Cave-EMERGE animation — intentional divergence (owner ruling
+// 2026-07-05, same class as the in-game-font tally screens): the
+// DOS EXE restores from a cave with a bare fade and no emerge
+// frames; the owner deems that a DOS oversight vs the Amiga port.
+// After exit_cave the player renders kSprPlayerTurn (134,
+// front-facing; catalog-verified PLAYER_TURN, FUN_27f7_1b51
+// 0x1da1/0x1e2b store sprite 0x87 in a local).  Enhanced v2 pacing (matches
+// the Enhanced #20 teleport idiom): 9 ticks = 3 dim stages held 3
+// ticks each (1/3 → 2/3 → full thirds of the palette), player
+// frozen meanwhile (frame_runner gate).  Classic: 2 lit ticks,
+// draw-only, physics/input untouched.  +2 aligns the ink centre
+// (13) with STAND's (15).
+static PlayerBodyPose player_body_pose(const systems::SystemsState& state,
+                                       bool tel_pose) {
+    const systems::PlayerState& p = state.player;
+    PlayerBodyPose pose{p.sprite, 0, false, 3};
+    if ((state.cave_emerge_frames <= 0 && !tel_pose) || p.death_counter != 0)
+        return pose;
+    pose.sprite = systems::kSprPlayerTurn;
+    pose.dx = 2;
+    pose.overridden = true;
+    // Enhanced v2 3-stage reveal, 3-tick holds: frames 9-7 →
+    // 1/3, 6-4 → 2/3, 3-1 → full (thirds formula, clamped so the
+    // teleport POSE ticks — frames == 0 — stay full-bright).
+    if (state.enhanced_active && state.cave_emerge_frames > 0)
+        pose.dim_num = std::min(
+            3, 1 + (systems::kCaveEmergeTicksEnhanced -
+                    state.cave_emerge_frames) /
+                       systems::kCaveEmergeStageHold);
+    return pose;
+}
+
+static std::vector<formats::Rgb> dimmed_palette(
+    const std::vector<formats::Rgb>& pal, int num) {
+    std::vector<formats::Rgb> out = pal;
+    for (auto& c : out) {
+        c.r = static_cast<std::uint8_t>(c.r * num / 3);
+        c.g = static_cast<std::uint8_t>(c.g * num / 3);
+        c.b = static_cast<std::uint8_t>(c.b * num / 3);
+    }
+    return out;
+}
+
+// Weapon overlay + the club_flag decrement (the decrement lives in
+// the weapon DRAW, after rendering).  // FUN_27f7_1f72
+//
+// The DRAW must run in every pass (so the club sprite overflows into
+// the widescreen margin too), but the STATE MUTATIONS — the death/
+// cave-warp clear and the post-draw decrement — must fire EXACTLY ONCE
+// per gameplay frame.  The single authoritative advance is the main fb
+// compose (advance_state defaults true); the widescreen entity-overflow
+// pass sets t.advance_state = false so its draw shows the SAME club_flag
+// (identical sprite) without double-advancing it.
+static void draw_weapon_overlay(RenderTarget& t, systems::SystemsState& state,
+                                const LevelRenderAssets& a,
+                                float px, float py) {
+    const auto& spr_mat = a.entity_sprites;
+    systems::PlayerState& p = state.player;
+    if (p.death_counter != 0 || p.cave_warp_freeze != 0) {
+        if (t.advance_state) p.club_flag = 0;
+    } else if (p.club_flag > 0) {
+        const auto& tbl = state.halo_flight_flag ? kAxeTbl : kClubTbl;
+        const auto& f = tbl[static_cast<std::size_t>(2 - p.club_flag)];
+        int wdx = f.dx;
+        if (p.facing_left) wdx = -wdx;
+        if (f.spr < static_cast<int>(spr_mat.size())) {
+            blit_sprite(t, spr_mat[static_cast<std::size_t>(f.spr)],
+                        a.palette, px + wdx, py + f.dy,
+                        p.facing_left != 0);
+        }
+        if (t.advance_state) --p.club_flag;
+    }
+}
+
 void draw_player_overlay(RenderTarget& t, systems::SystemsState& state,
                       const LevelRenderAssets& a, bool draw_player) {
     const auto& spr_mat = a.entity_sprites;
@@ -318,59 +484,7 @@ void draw_player_overlay(RenderTarget& t, systems::SystemsState& state,
     // HD-rounded — 1-HD-pixel motion granularity instead of the 4-HD-pixel snap.
     const float px = t.use_float_pos ? t.player_fx : static_cast<float>(p.x);
     const float py = t.use_float_pos ? t.player_fy : static_cast<float>(p.y);
-    // Post-hit invulnerability halo/shield overlay.  // FUN_27f7_12c7
-    // Visibility (capstone 0x12ff-0x130b): skip the blink-off phase —
-    // show = (hit_counter > 15) OR (hit_blink != 0).
-    // L5 glider branch (DS:0x989c != 0): sprite 0x8d at (x+6, y+10)
-    // (capstone 0x134d / 0x1346); otherwise frames 127+hit_blink at
-    // (x-5, y-11), x another -4 while climbing (capstone 0x132b).
-    const auto draw_halo_overlay = [&]() {
-        if (p.hit_counter <= 0) return;
-        if (p.hit_counter <= 15 && p.hit_blink == 0) return;
-        int idx;
-        float hx, hy;
-        if (state.glider_active && state.current_level == 5) {
-            idx = kSprHaloLevel5;
-            hx = px + 6;
-            hy = py + 10;
-        } else {
-            idx = kSprPlayerHalo1 + p.hit_blink;
-            hx = px - 5 - (p.climbing != 0 ? 4 : 0);
-            hy = py - 11;
-        }
-        if (idx >= 0 && idx < static_cast<int>(spr_mat.size())) {
-            blit_sprite(t, spr_mat[static_cast<std::size_t>(idx)],
-                        a.palette, hx, hy);
-        }
-    };
-    // Flight composites replace the walk sprite while alive in flight —
-    // the halo overlay still applies (only the base sprite is swapped).
-    if (state.glider_active && p.death_counter == 0) {
-        if (state.current_level == 1 &&
-            kSprPlayerWithBalloons < static_cast<int>(spr_mat.size())) {
-            blit_sprite(t, spr_mat[kSprPlayerWithBalloons], a.palette,
-                        px, py - 30);
-            draw_halo_overlay();
-            return;
-        }
-        if (state.current_level == 5) {
-            // RIDING glider = flight body sprite 116 (0x75), which INCLUDES the
-            // caveman on the glider — NOT 117 (0x76), the empty detached body
-            // drawn during the screen-12 fly-away.  EXE Player_UpdateAndDraw
-            // branch E (capstone 0x1c39) / reference _GLIDER_FLIGHT_BODY_SPR.
-            // (olduvai previously used 117 here → glider looked riderless.)
-            constexpr int kGliderFlightBody = 116, kGliderChute = 124;
-            if (kGliderFlightBody < static_cast<int>(spr_mat.size())) {
-                blit_sprite(t, spr_mat[kGliderFlightBody], a.palette, px, py);
-            }
-            if (kGliderChute < static_cast<int>(spr_mat.size())) {
-                blit_sprite(t, spr_mat[kGliderChute], a.palette,
-                            px + 21, py);
-            }
-            draw_halo_overlay();
-            return;
-        }
-    }
+    if (draw_flight_composite(t, state, a, px, py)) return;
     // Enhanced #20 — teleport cloud phases: on the POSE bookend ticks
     // (depart 12-10, arrive 3-1) the player renders as PLAYER_TURN via
     // the shared 134 override below; on cloud/empty ticks the player is
@@ -392,90 +506,31 @@ void draw_player_overlay(RenderTarget& t, systems::SystemsState& state,
                     state.teleport_in_ticks <= 3);
         if (!tel_pose) return;
     }
-    if (p.sprite >= 0 && p.sprite < static_cast<int>(spr_mat.size())) {
-        // Cave-EMERGE animation — intentional divergence (owner ruling
-        // 2026-07-05, same class as the in-game-font tally screens): the
-        // DOS EXE restores from a cave with a bare fade and no emerge
-        // frames; the owner deems that a DOS oversight vs the Amiga port.
-        // After exit_cave the player renders kSprPlayerTurn (134,
-        // front-facing; catalog-verified PLAYER_TURN, FUN_27f7_1b51
-        // 0x1da1/0x1e2b `mov [bp-2], 0x87`).  Enhanced v2 pacing (matches
-        // the Enhanced #20 teleport idiom): 9 ticks = 3 dim stages held 3
-        // ticks each (1/3 → 2/3 → full thirds of the palette), player
-        // frozen meanwhile (frame_runner gate).  Classic: 2 lit ticks,
-        // draw-only, physics/input untouched.  +2 aligns the ink centre
-        // (13) with STAND's (15).
-        int draw_sprite = p.sprite;
-        int emerge_dx = 0;
-        bool emerge_active = false;
-        int emerge_dim_num = 3;   // palette scale numerator (of 3)
-        if ((state.cave_emerge_frames > 0 || tel_pose) &&
-            p.death_counter == 0) {
-            draw_sprite = systems::kSprPlayerTurn;
-            emerge_dx = 2;
-            emerge_active = true;
-            // Enhanced v2 3-stage reveal, 3-tick holds: frames 9-7 →
-            // 1/3, 6-4 → 2/3, 3-1 → full (thirds formula, clamped so the
-            // teleport POSE ticks — frames == 0 — stay full-bright).
-            if (state.enhanced_active && state.cave_emerge_frames > 0)
-                emerge_dim_num = std::min(
-                    3, 1 + (systems::kCaveEmergeTicksEnhanced -
-                            state.cave_emerge_frames) /
-                               systems::kCaveEmergeStageHold);
-        }
-        // Cave-descent sprites (back view, 44-46) never flip either:
-        // FUN_27f7_1b51's descent block (1b63-1b8b) is one unconditional
-        // enqueue — `xor di, di` at 1b58 zeroes the flag; no facing branch.
-        // The art is left-packed (ink 0-21; the +4 at 1b7f centres it), so
-        // mirroring shifts the figure +10 px right — the owner-reported
-        // "snap right on re-enter after a left-facing cave exit".
-        const bool never_flip =
-            emerge_active ||
-            p.death_counter > 0 || draw_sprite == kSprPlayerGhost1 ||
-            draw_sprite == kSprPlayerGhost1 + 1 ||
-            (draw_sprite >= systems::kSprCaveDescent1 &&
-             draw_sprite <= systems::kSprCaveDescent1 + 2);
-        const bool flip = never_flip ? false : (p.facing_left != 0);
-        std::vector<formats::Rgb> dim_pal;
-        const std::vector<formats::Rgb>* pal = &a.palette;
-        if (emerge_dim_num < 3) {
-            dim_pal = a.palette;
-            for (auto& c : dim_pal) {
-                c.r = static_cast<std::uint8_t>(c.r * emerge_dim_num / 3);
-                c.g = static_cast<std::uint8_t>(c.g * emerge_dim_num / 3);
-                c.b = static_cast<std::uint8_t>(c.b * emerge_dim_num / 3);
-            }
-            pal = &dim_pal;
-        }
-        blit_sprite(t, spr_mat[static_cast<std::size_t>(draw_sprite)],
-                    *pal, px + p.dx + emerge_dx, py + p.dy, flip);
-        draw_halo_overlay();
-
-        // Weapon overlay + the club_flag decrement (the decrement lives in
-        // the weapon DRAW, after rendering).  // FUN_27f7_1f72
-        //
-        // The DRAW must run in every pass (so the club sprite overflows into
-        // the widescreen margin too), but the STATE MUTATIONS — the death/
-        // cave-warp clear and the post-draw decrement — must fire EXACTLY ONCE
-        // per gameplay frame.  The single authoritative advance is the main fb
-        // compose (advance_state defaults true); the widescreen entity-overflow
-        // pass sets t.advance_state = false so its draw shows the SAME club_flag
-        // (identical sprite) without double-advancing it.
-        if (p.death_counter != 0 || p.cave_warp_freeze != 0) {
-            if (t.advance_state) p.club_flag = 0;
-        } else if (p.club_flag > 0) {
-            const auto& tbl = state.halo_flight_flag ? kAxeTbl : kClubTbl;
-            const auto& f = tbl[static_cast<std::size_t>(2 - p.club_flag)];
-            int wdx = f.dx;
-            if (p.facing_left) wdx = -wdx;
-            if (f.spr < static_cast<int>(spr_mat.size())) {
-                blit_sprite(t, spr_mat[static_cast<std::size_t>(f.spr)],
-                            a.palette, px + wdx, py + f.dy,
-                            p.facing_left != 0);
-            }
-            if (t.advance_state) --p.club_flag;
-        }
+    if (p.sprite < 0 || p.sprite >= static_cast<int>(spr_mat.size())) return;
+    const PlayerBodyPose pose = player_body_pose(state, tel_pose);
+    // Cave-descent sprites (back view, 44-46) never flip either:
+    // FUN_27f7_1b51's descent block (1b63-1b8b) is one unconditional
+    // enqueue — the flip flag is zeroed at 1b58; no facing branch.
+    // The art is left-packed (ink 0-21; the +4 at 1b7f centres it), so
+    // mirroring shifts the figure +10 px right — the owner-reported
+    // "snap right on re-enter after a left-facing cave exit".
+    const bool never_flip =
+        pose.overridden ||
+        p.death_counter > 0 || pose.sprite == kSprPlayerGhost1 ||
+        pose.sprite == kSprPlayerGhost1 + 1 ||
+        (pose.sprite >= systems::kSprCaveDescent1 &&
+         pose.sprite <= systems::kSprCaveDescent1 + 2);
+    const bool flip = never_flip ? false : (p.facing_left != 0);
+    std::vector<formats::Rgb> dim_pal;
+    const std::vector<formats::Rgb>* pal = &a.palette;
+    if (pose.dim_num < 3) {
+        dim_pal = dimmed_palette(a.palette, pose.dim_num);
+        pal = &dim_pal;
     }
+    blit_sprite(t, spr_mat[static_cast<std::size_t>(pose.sprite)],
+                *pal, px + p.dx + pose.dx, py + p.dy, flip);
+    draw_player_halo(t, state, a, px, py);
+    draw_weapon_overlay(t, state, a, px, py);
 }
 
 void draw_entities(RenderTarget& t, systems::SystemsState& state,

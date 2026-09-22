@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
@@ -110,6 +111,54 @@ void show_game_over_screen(const std::filesystem::path& game_dir,
     SDL_DestroyTexture(gtex);
 }
 
+// The win ending's two assets, decoded and ready to draw: COOL3.PC1 as an
+// RGBA background, COOL2.MAT's first sprite (the rising caveman) and the
+// scene's palette.  Nothing here draws or sequences.
+//
+// Split out of show_win_ending (BACKLOG §3.12: 95 points, and three quarters
+// of them were this — four validation exits and a pixel loop ahead of the
+// sequence the function is named for).  Each failure keeps its own message:
+// "assets missing" and "no sprites" are different problems for whoever reads
+// the log, and collapsing them into one would lose that.
+struct WinEndingScene {
+    FrameBuffer bg;
+    formats::Sprite sprite;
+    std::vector<formats::Rgb> palette;
+};
+
+std::optional<WinEndingScene> load_win_ending_scene(
+    const formats::CurArchive& eva) {
+    if (!eva.contains("COOL3.PC1") || !eva.contains("COOL2.MAT")) {
+        std::fprintf(stderr, "ending: assets missing (COOL3.PC1 / "
+                             "COOL2.MAT not in FILESA.VGA)\n");
+        return std::nullopt;
+    }
+    const formats::Pc1Image bg = formats::parse_pc1(eva.get("COOL3.PC1").data);
+    if (bg.width != 320) {
+        std::fprintf(stderr, "ending: COOL3.PC1 unexpected width\n");
+        return std::nullopt;
+    }
+    const std::vector<formats::Sprite> mat_sprites =
+        formats::MatFile(eva.get("COOL2.MAT").data, "COOL2.MAT").sprites();
+    if (mat_sprites.empty()) {
+        std::fprintf(stderr, "ending: COOL2.MAT has no sprites\n");
+        return std::nullopt;
+    }
+    WinEndingScene scene;
+    scene.sprite = mat_sprites[0];
+    for (std::size_t i = 0; i < bg.pixels.size() && i < 320u * 200u; ++i) {
+        const std::uint8_t idx = bg.pixels[i];
+        const formats::Rgb c =
+            (idx < bg.palette.size()) ? bg.palette[idx] : formats::Rgb{};
+        scene.bg.px[i * 4] = c.r;
+        scene.bg.px[i * 4 + 1] = c.g;
+        scene.bg.px[i * 4 + 2] = c.b;
+        scene.bg.px[i * 4 + 3] = 255;
+    }
+    scene.palette.assign(bg.palette.begin(), bg.palette.end());
+    return scene;
+}
+
 void show_win_ending(const std::filesystem::path& game_dir, SdlAudio& audio,
                      ScaledWindow& sw, int hd_scale,
                      const std::string& hd_profile, bool smooth_motion,
@@ -125,42 +174,15 @@ void show_win_ending(const std::filesystem::path& game_dir, SdlAudio& audio,
     // Game_WinSequence (FUN_2bd7_0183): COOL3.PC1 family cave scene + COOL2.MAT
     // caveman rising y=198→73 at -2/frame; smooth-motion interpolates the
     // scroll.  Missing assets → silent return (§F6).  IIFE = structured cleanup.
+    const std::optional<WinEndingScene> scene = load_win_ending_scene(eva);
+    if (!scene) {
+        audio.stop_music();
+        return;
+    }
     [&]() {
-        if (!eva.contains("COOL3.PC1") || !eva.contains("COOL2.MAT")) {
-            std::fprintf(stderr, "ending: assets missing (COOL3.PC1 / "
-                                 "COOL2.MAT not in FILESA.VGA)\n");
-            audio.stop_music();
-            return;
-        }
-        const formats::Pc1Image bg =
-            formats::parse_pc1(eva.get("COOL3.PC1").data);
-        if (bg.width != 320) {
-            std::fprintf(stderr, "ending: COOL3.PC1 unexpected width\n");
-            audio.stop_music();
-            return;
-        }
-        const std::vector<formats::Sprite> mat_sprites =
-            formats::MatFile(eva.get("COOL2.MAT").data, "COOL2.MAT").sprites();
-        if (mat_sprites.empty()) {
-            std::fprintf(stderr, "ending: COOL2.MAT has no sprites\n");
-            audio.stop_music();
-            return;
-        }
-        const formats::Sprite& sprite = mat_sprites[0];
-
-        // Build the RGBA background once.
-        FrameBuffer bg_fb;
-        for (std::size_t i = 0; i < bg.pixels.size() && i < 320u * 200u; ++i) {
-            const std::uint8_t idx = bg.pixels[i];
-            const formats::Rgb c =
-                (idx < bg.palette.size()) ? bg.palette[idx] : formats::Rgb{};
-            bg_fb.px[i * 4] = c.r;
-            bg_fb.px[i * 4 + 1] = c.g;
-            bg_fb.px[i * 4 + 2] = c.b;
-            bg_fb.px[i * 4 + 3] = 255;
-        }
-        const std::vector<formats::Rgb> pal(bg.palette.begin(),
-                                            bg.palette.end());
+        const formats::Sprite& sprite = scene->sprite;
+        const FrameBuffer& bg_fb = scene->bg;
+        const std::vector<formats::Rgb>& pal = scene->palette;
         // OLDUVAI_ENDING_SHOT: dump a composited frame via readback, then
         // quit (the OLDUVAI_MAINMENU_SHOT headless-verify pattern).
         // OLDUVAI_ENDING_SHOT_FRAME=<n> selects WHICH rise step (y -= 2 per
@@ -209,26 +231,28 @@ void show_win_ending(const std::filesystem::path& game_dir, SdlAudio& audio,
         bool aborted = false;
         int prev_y = kYStart;
         int logic_step = 0;
+        // The VSYNC fill is the one the two frame loops use
+        // (smooth_present.hpp), which this loop had spelled out by hand.
+        // Its discrete path is NOT interchangeable here and is left alone:
+        // the helper skips the delay after its LAST sub-frame (the frame
+        // loop's own tick delay covers it), while this sequence delays after
+        // every one — adopting it would have run the non-vsync rise about
+        // 50% fast, and no gate can see pacing.  Measured, not assumed.
+        SmoothPacer pacer{e_vsync, 3, kFrameMs, 0};
         for (int y = kYStart; y >= kYEnd && !aborted; y -= kDY) {
             rise_step = logic_step++;
+            const int y0 = prev_y, y1 = y;
             if (smooth && e_vsync) {
-                const Uint32 t0 = SDL_GetTicks();
-                while (!aborted) {
-                    const Uint32 el = SDL_GetTicks() - t0;
-                    const float a = el >= kFrameMs
-                                        ? 1.0f
-                                        : static_cast<float>(el) /
-                                              static_cast<float>(kFrameMs);
+                smooth_fill_tick(pacer, [&](float a, int) {
+                    if (aborted) return;
                     const int ly =
-                        prev_y +
-                        static_cast<int>(std::lround((y - prev_y) * a));
+                        y0 + static_cast<int>(std::lround((y1 - y0) * a));
                     aborted = !render_at(ly, 0);
-                    if (SDL_GetTicks() - t0 >= kFrameMs) break;
-                }
+                });
             } else if (smooth) {
                 constexpr Uint32 kSubMs = kFrameMs / 3;
                 for (int sub = 1; sub <= 3 && !aborted; ++sub) {
-                    const int lerp_y = prev_y + (y - prev_y) * sub / 3;
+                    const int lerp_y = y0 + (y1 - y0) * sub / 3;
                     aborted = !render_at(lerp_y, kSubMs);
                 }
             } else {

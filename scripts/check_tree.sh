@@ -125,6 +125,22 @@ if [ -n "$homoglyphs" ]; then
     fail=1
 fi
 
+# 6. Disassembly text in comments.  CONTRIBUTING's content policy: cite an
+#    OFFSET and say in prose what happens there — never the instruction
+#    itself, "not even in comments".  Seven quoted instructions had crept in
+#    (two in one day, 2026-09-21) because nothing checked.  Narrow on purpose:
+#    an x86 mnemonic WITH operands inside backticks, or a `word/byte ptr`
+#    size operator anywhere — prose like "the jump table" or "cmp" alone
+#    stays legal.  (`int` is left out: it matches C++ declarations.)
+mnem='(mov|movzx|movsx|xor|and|or|add|sub|adc|sbb|cmp|test|inc|dec|neg|not|shl|shr|sar|sal|rol|ror|imul|mul|idiv|div|lea|les|lds|push|pop|call|lcall|ret|retf|jmp|ljmp|j[a-z]{1,3}|loop|rep[a-z]*|stos[bw]?|lods[bw]?|movs[bw]?|xchg|cbw|cwd)'
+disasm=$(git grep -nE "\`$mnem +[^\`]+\`|\b(word|byte|dword) ptr\b" -- \
+         'src/*.cpp' 'src/*.hpp' 'src/*.h' 'tests/*.cpp' 'tests/*.hpp' || true)
+if [ -n "$disasm" ]; then
+    echo "check_tree: disassembly text in a comment (cite the offset, describe it in prose):" >&2
+    echo "$disasm" >&2
+    fail=1
+fi
+
 if [ "$fail" -eq 0 ]; then
     echo "check_tree: OK"
 fi

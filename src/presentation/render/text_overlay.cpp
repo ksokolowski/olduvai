@@ -30,36 +30,49 @@ struct OvTimer {
 };
 }  // namespace
 
-// 64-bit-word FNV-1a.  Byte-at-a-time would cost more than the upload it
-// saves; a word at a time is ~8x fewer operations, and this only ever decides
-// whether to skip -- a collision costs one stale overlay frame, at 2^-64.
+// One pass over the drawn bytes: mark every row that carries content in
+// `used` (1/0 per row) and, when `hv` is non-null, fold the bytes into a
+// 64-bit-word FNV-1a hash (instrumented / verify runs only — it decides
+// whether an upload can be skipped; a collision costs one stale overlay
+// frame, at 2^-64).  A word at a time: byte-at-a-time would cost more than
+// the upload it saves.
 namespace {
-// Hash the buffer AND record which rows carry content, in one pass over the
-// bytes we are already obliged to read.  `lo`/`hi` come back as an inclusive
-// row range, or lo > hi when the buffer is entirely transparent.
-std::uint64_t hash_buf(const std::vector<std::uint8_t>& b, int w, int h_px,
-                       int& lo, int& hi) {
-    std::uint64_t hv = 1469598103934665603ull;
+void scan_rows(const std::vector<std::uint8_t>& b, int w, int h_px,
+               std::vector<std::uint8_t>& used, std::uint64_t* hv) {
     const std::size_t row_bytes = static_cast<std::size_t>(w) * 4;
+    const std::size_t words = row_bytes / 8;
     const unsigned char* p = b.data();
-    lo = h_px; hi = -1;
+    used.assign(static_cast<std::size_t>(h_px), 0);
+    // formats::Hash64's mix, fused by hand into this per-frame pixel pass
+    // because the same walk also computes each row's used/unused flag
+    // (racc).  Splitting it out would make two passes of one (hash64.hpp
+    // records this exception).
+    std::uint64_t h = 1469598103934665603ull;
     for (int y = 0; y < h_px; ++y) {
         const unsigned char* r = p + static_cast<std::size_t>(y) * row_bytes;
         std::uint64_t racc = 0;
-        const std::size_t words = row_bytes / 8;
-        for (std::size_t i = 0; i < words; ++i) {
-            std::uint64_t wv;
-            std::memcpy(&wv, r + i * 8, 8);
-            racc |= wv;
-            hv = (hv ^ wv) * 1099511628211ull;
+        if (hv != nullptr) {
+            for (std::size_t i = 0; i < words; ++i) {
+                std::uint64_t wv;
+                std::memcpy(&wv, r + i * 8, 8);
+                racc |= wv;
+                h = (h ^ wv) * 1099511628211ull;
+            }
+            for (std::size_t i = words * 8; i < row_bytes; ++i) {
+                racc |= r[i];
+                h = (h ^ r[i]) * 1099511628211ull;
+            }
+        } else {
+            for (std::size_t i = 0; i < words; ++i) {
+                std::uint64_t wv;
+                std::memcpy(&wv, r + i * 8, 8);
+                racc |= wv;
+            }
+            for (std::size_t i = words * 8; i < row_bytes; ++i) racc |= r[i];
         }
-        for (std::size_t i = words * 8; i < row_bytes; ++i) {
-            racc |= r[i];
-            hv = (hv ^ r[i]) * 1099511628211ull;
-        }
-        if (racc != 0) { if (y < lo) lo = y; hi = y; }
+        used[static_cast<std::size_t>(y)] = racc != 0 ? 1 : 0;
     }
-    return hv;
+    if (hv != nullptr) *hv = h;
 }
 }  // namespace
 
@@ -69,11 +82,10 @@ void TextOverlay::ensure(SDL_Renderer* ren, int ow, int oh) {
         // content at the last flush can be dirty, so only those need erasing;
         // everything else is already zero and has been since the last resize.
         OvTimer t(clear_ms, perf_ms, stats_on);
-        if (dirty_hi_ >= dirty_lo_) {
-            const std::size_t row = static_cast<std::size_t>(w_) * 4;
-            std::fill(buf_.begin() + static_cast<std::ptrdiff_t>(dirty_lo_ * row),
-                      buf_.begin() + static_cast<std::ptrdiff_t>((dirty_hi_ + 1) * row),
-                      static_cast<std::uint8_t>(0));
+        const std::size_t row = static_cast<std::size_t>(w_) * 4;
+        for (int y = 0; y < h_ && y < static_cast<int>(buf_rows_.size()); ++y) {
+            if (buf_rows_[static_cast<std::size_t>(y)] == 0) continue;
+            std::memset(buf_.data() + static_cast<std::size_t>(y) * row, 0, row);
         }
         return;
     }
@@ -84,7 +96,8 @@ void TextOverlay::ensure(SDL_Renderer* ren, int ow, int oh) {
     w_ = ow;
     h_ = oh;
     tex_has_content_ = false;   // fresh texture: the next flush MUST upload
-    dirty_lo_ = 0; dirty_hi_ = -1;   // freshly zeroed by the assign below
+    buf_rows_.assign(static_cast<std::size_t>(oh), 0);  // zeroed below
+    tex_rows_.assign(static_cast<std::size_t>(oh), 0);
     buf_.assign(static_cast<std::size_t>(ow) * oh * 4, 0);  // transparent
     tex_ = create_stream_tex(ren, ow, oh);
     if (tex_ != nullptr) {
@@ -142,32 +155,60 @@ void TextOverlay::flush(SDL_Renderer* ren, int logical_w, int logical_h) {
     }
 
     bool need_upload = true;
-    if (stats_on || verify_) {
-        // Instrumented or verifying: hash the drawn bytes.  This also yields
-        // the dirty row extent for the next clear.
+    {
+        // Which rows carry content — needed by the upload below and by the
+        // next clear.  Instrumented / verifying runs also hash, to skip an
+        // identical upload.  Before this, the shipping path memset and
+        // uploaded the WHOLE panel on every redraw (3.7 MB each at 1280x720,
+        // every frame an animated banner or the tally was up).
         OvTimer t(hash_ms, perf_ms, stats_on);
-        const std::uint64_t h = hash_buf(buf_, w_, h_, dirty_lo_, dirty_hi_);
-        if (verify_ && key_was_same_ && tex_has_content_ && h != last_hash_) {
-            std::fprintf(stderr,
-                "overlay-verify: a key claimed UNCHANGED but the drawn bytes "
-                "differ -- that key is missing an input.\n");
+        if (stats_on || verify_) {
+            std::uint64_t h = 0;
+            scan_rows(buf_, w_, h_, buf_rows_, &h);
+            if (verify_ && key_was_same_ && tex_has_content_ &&
+                h != last_hash_) {
+                std::fprintf(stderr,
+                    "overlay-verify: a key claimed UNCHANGED but the drawn "
+                    "bytes differ -- that key is missing an input.\n");
+            }
+            need_upload = !(tex_has_content_ && h == last_hash_);
+            last_hash_ = h;
+        } else {
+            scan_rows(buf_, w_, h_, buf_rows_, nullptr);
         }
-        need_upload = !(tex_has_content_ && h == last_hash_);
-        last_hash_ = h;
-    } else {
-        // Shipping path: no hash, so the dirty extent is unknown and the next
-        // clear must assume the whole buffer.  That costs a full memset on the
-        // ~5% of calls that redraw, against a 3.7 MB read on every one of them
-        // -- which is the trade the key exists to make.
-        dirty_lo_ = 0;
-        dirty_hi_ = h_ - 1;
     }
 
     if (!need_upload) {
         if (stats_on && uploads_skipped != nullptr) ++*uploads_skipped;
     } else {
         OvTimer t(upload_ms, perf_ms, stats_on);
-        SDL_UpdateTexture(tex_, nullptr, buf_.data(), w_ * 4);
+        if (!tex_has_content_) {
+            // A fresh texture holds garbage: the first upload is the panel.
+            SDL_UpdateTexture(tex_, nullptr, buf_.data(), w_ * 4);
+        } else {
+            // Upload runs of rows that hold content now OR held it in the
+            // texture (those must be overwritten with their cleared bytes, or
+            // moved text — a bobbing banner — leaves its old rows behind).
+            // A HUD at the top and a banner mid-screen are two short runs,
+            // not the span between them.
+            const std::size_t row = static_cast<std::size_t>(w_) * 4;
+            int y = 0;
+            while (y < h_) {
+                const auto dirty = [&](int yy) {
+                    const auto i = static_cast<std::size_t>(yy);
+                    return buf_rows_[i] != 0 || tex_rows_[i] != 0;
+                };
+                if (!dirty(y)) { ++y; continue; }
+                int end = y;
+                while (end + 1 < h_ && dirty(end + 1)) ++end;
+                const SDL_Rect rows{0, y, w_, end - y + 1};
+                SDL_UpdateTexture(tex_, &rows,
+                                  buf_.data() + static_cast<std::size_t>(y) * row,
+                                  w_ * 4);
+                y = end + 1;
+            }
+        }
+        tex_rows_ = buf_rows_;
         tex_has_content_ = true;
     }
     OvTimer t(blit_ms, perf_ms, stats_on);
@@ -189,16 +230,16 @@ void draw_centered_overlay_row(std::vector<std::uint8_t>& out, int ow, int oh,
     font.draw(out, ow, oh, x, baseline_y, text, 235, 235, 235);
 }
 
-void draw_centered_overlay_row_styled(
-    std::vector<std::uint8_t>& out, int ow, int oh, const enhance::HdText& font,
-    int native_baseline_y, const std::string& text,
-    const std::function<void(float, float, std::uint8_t&, std::uint8_t&,
-                             std::uint8_t&)>& shade) {
+void draw_centered_overlay_row_banner(std::vector<std::uint8_t>& out, int ow,
+                                      int oh, const enhance::HdText& font,
+                                      int native_baseline_y,
+                                      const std::string& text,
+                                      const enhance::BannerShader& shader) {
     const int w = font.measure(text);
     const int x = ow / 2 - w / 2;
     const int baseline_y =
         static_cast<int>(native_baseline_y * (oh / 200.0) + 0.5);
-    font.draw_styled(out, ow, oh, x, baseline_y, text, shade);
+    font.draw_banner(out, ow, oh, x, baseline_y, text, shader);
 }
 
 void draw_tally_rows_overlay(std::vector<std::uint8_t>& out, int ow, int oh,
@@ -233,7 +274,8 @@ void draw_tally_rows_overlay(std::vector<std::uint8_t>& out, int ow, int oh,
     //             change, not counter noise.
     int unit_w = font.measure("888888");
     for (const auto& row : rows) {
-        if (row.align == 2) unit_w = std::max(unit_w, font.measure(row.text));
+        if (row.align == 2 || row.align == 3)   // 3 = a width reservation
+            unit_w = std::max(unit_w, font.measure(row.text));
     }
     const int content_w = label_w + gap + unit_w;
     const int left = ow / 2 - content_w / 2;
@@ -241,6 +283,7 @@ void draw_tally_rows_overlay(std::vector<std::uint8_t>& out, int ow, int oh,
     const int value_x = colon_x + gap;    // values left-aligned, starting here
 
     for (const auto& row : rows) {
+        if (row.align == 3) continue;   // reservation only — not drawn
         const int baseline_y =
             static_cast<int>(row.native_baseline_y * (oh / 200.0) + 0.5);
         int x;

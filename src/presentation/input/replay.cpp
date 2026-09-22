@@ -70,8 +70,13 @@ systems::FrameInputs InputReplay::at(int frame) const {
     return in;
 }
 
+// Binary mode, both writers: "w" is TEXT mode on Windows and turned every
+// '\n' into CRLF, so a trace or recording made there differed byte for byte
+// from the same run anywhere else — which the zero-tolerance oracle diff and
+// the record->replay round-trip gate both compare (found 2026-09-22, the
+// first Windows CI run with game data).  LF on every platform.
 bool TraceWriter::open(const std::string& path) {
-    f_ = std::fopen(path.c_str(), "w");
+    f_ = std::fopen(path.c_str(), "wb");
     return f_ != nullptr;
 }
 
@@ -98,7 +103,7 @@ void TraceWriter::write(int frame, const systems::SystemsState& s) {
 }
 
 bool InputRecorder::open(const std::string& path) {
-    f_ = std::fopen(path.c_str(), "w");
+    f_ = std::fopen(path.c_str(), "wb");
     return f_ != nullptr;
 }
 
@@ -149,6 +154,25 @@ void TraceWriter::write_boss(int frame, const systems::BossPlayerState& p,
         "\"cave_warp_freeze\":0,\"sprite_queue_count\":0}\n",
         frame, p.x, p.y, p.facing_left ? 1 : 0, p.walk_frame, p.club_flag,
         boss_health, p.lives, p.score, p.death_counter, p.timer);
+}
+
+void RunCapture::open(const std::string& replay_path,
+                      const std::string& trace_path,
+                      const std::string& record_inputs_path) {
+    if (!replay_path.empty() && !replay.load(replay_path)) {
+        // load() returns false when the file has zero input events — almost
+        // always because a --trace file (one FrameState object per line, no
+        // key/action/time_ms) was passed to --replay by mistake.  Silence here
+        // reads as "replay does nothing"; say what to do instead.
+        std::fprintf(stderr,
+            "olduvai: --replay '%s' contained no input events — nothing to "
+            "replay.  This file is likely a --trace capture (game state), not "
+            "inputs.  Record a replayable session with --record-inputs "
+            "<file>, then --replay that file.\n",
+            replay_path.c_str());
+    }
+    if (!trace_path.empty()) trace.open(trace_path);
+    if (!record_inputs_path.empty()) input_rec.open(record_inputs_path);
 }
 
 }  // namespace olduvai::presentation

@@ -162,6 +162,41 @@ public:
     // them, a duplicate shape the clone detector cannot see.
     void show_wide_up(const std::vector<std::uint8_t>& up, bool draw_lives,
                       bool do_present);
+    // Compose ONE wide native frame (RGBA, `wide_w()` x 200) from the clean
+    // arena background, with `draw` painting this frame's sprites at origin
+    // M so edge-crossers overflow into the margins.  Native, not upscaled:
+    // the post-victory fade darkens it per frame and the paused backdrop
+    // wants it as a FrameBuffer.  Empty when widescreen is inactive — the
+    // caller then has a 320 path to fall back to (§3.31).
+    std::vector<std::uint8_t> compose_wide_native(
+        const std::function<void(RenderTarget&)>& draw);
+    // Upscale one such frame and show it.  `draw_hud` off is the fade, which
+    // has no HUD over it.
+    void show_wide_native(const std::vector<std::uint8_t>& wide,
+                          bool draw_lives = true, bool do_present = true,
+                          bool draw_hud = true);
+    // Make SDL's logical canvas the wide one (and the caller's mirror with
+    // it — see BossWidescreen::rebuild_if_resized on why both must move).
+    void use_wide_logical();
+    // The last native frame this presenter showed wide: the post-victory
+    // fade's source, because the fight's `fb` still holds the fight.  The
+    // present family records it; a sequence that composes its own wide frame
+    // (the L2 flash, the L6 finish) hands over the NATIVE frame it drew.
+    const FrameBuffer& last_wide_native() const;
+    void keep_fade_source(const FrameBuffer& nat);
+    // The wide canvas this presenter composes into: 320 + 2*margin.  For
+    // callers that size a buffer; nobody outside needs the margin itself.
+    int wide_w() const;
+    // Widescreen is SELECTED (enhanced, aspect widescreen, margin > 0) —
+    // the question "should this sequence take its wide path at all".
+    bool wide_on() const;
+    // ...and its canvas is live (the wide texture exists).  A resize can
+    // drop the texture under a running sequence, which is why the two are
+    // separate questions and every caller of the second has a 320 fallback.
+    bool wide_ready() const;
+    // Recompute after a resize / Alt+Enter (the present family does this
+    // itself; a sequence that composes by hand asks here).
+    void rebuild_if_resized();
     void present_wide(bool draw_lives = true, bool do_present = true);
     // Present a NATIVE 320x200 frame (a victory-sequence frame) at the wide
     // width, mirrored like the fight.  Falls back to a plain 320 upscale if a

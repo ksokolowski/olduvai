@@ -76,4 +76,17 @@ private:
     bool prev_[5] = {false, false, false, false, false};
 };
 
+// The three per-run harness files every level driver opens: the --replay
+// input script, the --trace output and the --record-inputs output.  Both
+// drivers built these by hand, and the warning for an empty replay had
+// already drifted apart between them.  Empty paths leave that part inactive.
+struct RunCapture {
+    InputReplay replay;
+    TraceWriter trace;
+    InputRecorder input_rec;
+
+    void open(const std::string& replay_path, const std::string& trace_path,
+              const std::string& record_inputs_path);
+};
+
 }  // namespace olduvai::presentation

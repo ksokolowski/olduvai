@@ -91,12 +91,12 @@ without written permission.
 - CI rejects forbidden trailers and denylisted content on every push
   (`scripts/check_tree.sh`, `scripts/check_commit_range.sh`).
 
-## Engineering direction (beta)
+## Engineering direction (release candidate)
 
 The fun is the invariant. The game plays the way the 1991 original did, and
-no cleanup is allowed to change that. Parts of the engine are still
-convoluted — that is acknowledged, not hidden — and the direction through
-beta is to untangle them incrementally, behaviour-first:
+no cleanup is allowed to change that. The engine is feature-complete; parts
+of it are still convoluted — that is acknowledged, not hidden — and the
+direction toward 1.0.0 is to untangle them incrementally, behaviour-first:
 
 - **Byte-identical, gate-verified moves.** A refactor preserves emitted
   behaviour exactly — same gameplay math, RNG consumption/order,

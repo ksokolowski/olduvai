@@ -18,6 +18,7 @@
 
 #include "core/build_id.hpp"
 #include "core/types.hpp"
+#include "enhance/parallel_rows.hpp"
 #include "presentation/diag/debug_overlay.hpp"
 #include "presentation/image_out.hpp"
 
@@ -180,7 +181,7 @@ void write_report_md(const fs::path& path,
                      int display_level, int internal_level,
                      const std::string& captured_at,
                      const BugAnnotations& ann, bool has_presented,
-                     const DisplayInfo& display) {
+                     const DisplayInfo& display, const BossInfo& boss) {
     std::ofstream f(path);
     if (!f) return;
     const auto& p = state.player;
@@ -206,16 +207,37 @@ void write_report_md(const fs::path& path,
     f << "|-------|-------|\n";
     f << "| Display level | " << display_level << " |\n";
     f << "| Internal level | " << internal_level << " |\n";
-    f << "| Screen | " << state.current_screen << " |\n";
-    f << "| Player position | (" << p.x << ", " << p.y << ") |\n";
-    f << "| Cave / secret | " << cave_str << " / " << secret_str << " |\n";
-    f << "| Energy / Lives | " << p.energy << " / " << p.lives << " |\n";
-    f << "| Food | " << state.food_count << " / 45 |\n";
-    f << "| Score | " << state.score << " |\n";
-    f << "| Timer | " << state.timer << " |\n";
-    f << "| Frame counter | " << state.frame_counter << " |\n";
-    f << "| Active entities | " << ents.size() << " |\n";
-    f << "| God mode | " << (state.god_mode ? "yes" : "no") << " |\n\n";
+    if (boss.supplied) {
+        // A boss arena has no screens, caves, food, timer or entity table;
+        // the synthesised snapshot would print zeros that read as data.
+        const char* na = "n/a (boss arena)";
+        f << "| Screen | " << na << " |\n";
+        f << "| Player position | (" << p.x << ", " << p.y << ") |\n";
+        f << "| Cave / secret | " << na << " |\n";
+        f << "| Lives | " << p.lives << " |\n";
+        f << "| Food | " << na << " |\n";
+        f << "| Score | " << state.score << " |\n";
+        f << "| Timer | " << na << " |\n";
+        f << "| Frame counter | " << na << " |\n";
+        f << "| Active entities | " << na << " |\n\n";
+        f << "## Boss fight\n\n";
+        f << "| Field | Value |\n|-------|-------|\n";
+        f << "| Boss health | " << boss.health << " (won at 272) |\n";
+        f << "| Phase | " << (boss.phase.empty() ? "-" : boss.phase)
+          << " |\n";
+        f << "| Fight frame | " << boss.frame << " |\n\n";
+    } else {
+        f << "| Screen | " << state.current_screen << " |\n";
+        f << "| Player position | (" << p.x << ", " << p.y << ") |\n";
+        f << "| Cave / secret | " << cave_str << " / " << secret_str << " |\n";
+        f << "| Energy / Lives | " << p.energy << " / " << p.lives << " |\n";
+        f << "| Food | " << state.food_count << " / 45 |\n";
+        f << "| Score | " << state.score << " |\n";
+        f << "| Timer | " << state.timer << " |\n";
+        f << "| Frame counter | " << state.frame_counter << " |\n";
+        f << "| Active entities | " << ents.size() << " |\n";
+        f << "| God mode | " << (state.god_mode ? "yes" : "no") << " |\n\n";
+    }
 
     // Display / present path.  A visual report is not actionable without it:
     // "widescreen gone" is a claim about ws_active and ws_margin, and neither
@@ -267,8 +289,11 @@ void write_report_md(const fs::path& path,
     if (has_presented)
         f << "- ![as seen (HD/widescreen)](screenshot_presented.png)\n";
     f << "- ![game (native)](screenshot.png)\n";
-    f << "- ![collision overlay](screenshot_collision.png)\n";
-    f << "- ![entity overlay](screenshot_entities.png)\n\n";
+    if (!boss.supplied) {
+        f << "- ![collision overlay](screenshot_collision.png)\n";
+        f << "- ![entity overlay](screenshot_entities.png)\n";
+    }
+    f << "\n";
     f << "## What happened\n\n";
     if (!ann.description.empty())
         f << ann.description << "\n\n";
@@ -365,7 +390,8 @@ std::string write_bug_report(const systems::SystemsState& state,
                              int display_level, int internal_level,
                              int overlay_scale, const BugAnnotations& ann,
                              bool has_presented,
-                             const DisplayInfo& display) {
+                             const DisplayInfo& display,
+                             const BossInfo& boss) {
     const std::string ts = timestamp_dir();
     const std::string iso = timestamp_iso();
 
@@ -406,25 +432,42 @@ std::string write_bug_report(const systems::SystemsState& state,
     // 1. Clean gameplay frame.
     save_fb_png(base_frame, (root / "screenshot.png").string());
 
-    // 2. Collision overlay (on a copy so the live frame is untouched).
-    {
-        FrameBuffer copy = base_frame;
-        draw_debug_collision(copy, state, shot_scale);
-        save_fb_png(copy, (root / "screenshot_collision.png").string());
-    }
-    // 3. Entity overlay.
-    {
-        FrameBuffer copy = base_frame;
-        draw_debug_entities(copy, state, entity_sprites, shot_scale);
-        save_fb_png(copy, (root / "screenshot_entities.png").string());
+    // 2-3. The collision and entity overlays read the platform level's
+    // bitmap and entity table; a boss arena has neither, so they are skipped.
+    if (!boss.supplied) {
+        // 2. Collision overlay (on a copy so the live frame is untouched).
+        {
+            FrameBuffer copy = base_frame;
+            draw_debug_collision(copy, state, shot_scale);
+            save_fb_png(copy, (root / "screenshot_collision.png").string());
+        }
+        // 3. Entity overlay.
+        {
+            FrameBuffer copy = base_frame;
+            draw_debug_entities(copy, state, entity_sprites, shot_scale);
+            save_fb_png(copy, (root / "screenshot_entities.png").string());
+        }
     }
 
     write_report_md(root / "report.md", state, ents, display_level,
-                    internal_level, iso, ann, has_presented, display);
+                    internal_level, iso, ann, has_presented, display, boss);
 
     std::printf("bug report: %s\n", root.string().c_str());
     std::fflush(stdout);
     return root.string();
+}
+
+DisplayInfo read_display_info(SDL_Renderer* ren, SDL_Window* win) {
+    DisplayInfo di;
+    di.supplied = true;
+    SDL_GetRendererOutputSize(ren, &di.out_w, &di.out_h);
+    SDL_RenderGetLogicalSize(ren, &di.logical_w, &di.logical_h);
+    if (win != nullptr) {
+        di.fullscreen =
+            (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+    }
+    di.upscale_threads = enhance::parallel_row_threads();
+    return di;
 }
 
 }  // namespace olduvai::presentation

@@ -65,6 +65,38 @@ int main() {
     d2.open("T", {}, "Requires restart");
     CHECK(d2.note() == "Requires restart");
 
+    // Question mode: ask() opens on No (the left button), labels No/Yes.
+    {
+        ConfirmDialog q;
+        int yes_calls = 0;
+        q.ask("Exit game?", [&] { ++yes_calls; });
+        CHECK(q.is_open());
+        CHECK(q.is_question());
+        CHECK(q.title() == "Exit game?");
+        CHECK(q.changes().empty());
+        CHECK(std::string(q.left_label()) == "No");
+        CHECK(std::string(q.right_label()) == "Yes");
+        // Default answer is No: the callback does not run.
+        CHECK(!q.answer_yes());
+        CHECK(!q.is_open());
+        CHECK(yes_calls == 0);
+        // Move to Yes: the callback runs exactly once and the dialog closes.
+        q.ask("Exit game?", [&] { ++yes_calls; });
+        q.move(1);
+        CHECK(q.answer_yes());
+        CHECK(!q.is_open());
+        CHECK(yes_calls == 1);
+        // open() after ask() is the Apply/Discard dialog again.
+        q.ask("Exit game?", [&] { ++yes_calls; });
+        q.open("Apply changes?", {});
+        CHECK(!q.is_question());
+        CHECK(q.apply_selected());
+        CHECK(std::string(q.left_label()) == "Apply");
+        CHECK(std::string(q.right_label()) == "Discard");
+        CHECK(!q.answer_yes());   // not a question: never runs a callback
+        CHECK(yes_calls == 1);
+    }
+
     if (fails == 0) std::puts("confirm_dialog: OK");
     return fails == 0 ? 0 : 1;
 }

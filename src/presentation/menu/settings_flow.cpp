@@ -2,9 +2,61 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "presentation/menu/settings_flow.hpp"
 
+#include <functional>
 #include <utility>
 
+#include "presentation/audio/sound_card.hpp"
+
 namespace olduvai::presentation {
+
+namespace {
+
+// The Confirm dialog's row for a Sound-card pick: fold the pick's one or two
+// audio rows (music_device / sfx_backend) into a single "Sound card" row.
+// Split out of build_display_changes (BACKLOG §3.12: 62 points) — it is a
+// distinct transform with its own contract, not another arm of the label-
+// resolution loop above it, and it reads as such once it names its inputs.
+// When nothing folds (no audio keys, or a pick that maps to no single card)
+// `rows` passes through untouched.
+std::vector<StagedChange> fold_sound_card_rows(
+    std::vector<StagedChange> rows, const SettingsSession& sess,
+    const std::function<std::string(const std::string&)>& value_of,
+    const std::function<const MenuItem*(const std::string&)>& find_item,
+    const std::function<std::string(const MenuItem&, const std::string&)>&
+        resolve_value) {
+    const StagedChange* music = nullptr;
+    const StagedChange* sfx = nullptr;
+    for (const auto& ch : sess.changes()) {
+        if (ch.key == "music_device") music = &ch;
+        if (ch.key == "sfx_backend") sfx = &ch;
+    }
+    if (music == nullptr && sfx == nullptr) return rows;
+    const std::string m_new = value_of("music_device");
+    const std::string s_new = value_of("sfx_backend");
+    const std::string card_new = sound_card_for(m_new, s_new);
+    const std::string card_old = sound_card_for(
+        music != nullptr ? music->old_value : m_new,
+        sfx != nullptr ? sfx->old_value : s_new);
+    if (card_new == kCustomSoundCard) return rows;
+    StagedChange row{"sound_card", "Sound card", card_old, card_new};
+    if (const MenuItem* item = find_item("sound_card")) {
+        row.label = item->label;
+        row.old_value = resolve_value(*item, card_old);
+        row.new_value = resolve_value(*item, card_new);
+    }
+    std::vector<StagedChange> folded;
+    bool placed = false;
+    for (auto& r : rows) {
+        if (r.key == "music_device" || r.key == "sfx_backend") {
+            if (!placed) { folded.push_back(row); placed = true; }
+            continue;
+        }
+        folded.push_back(std::move(r));
+    }
+    return folded;
+}
+
+}  // namespace
 
 std::set<std::string> options_subtree_screens(const MenuModel& model,
                                               const std::string& root) {
@@ -25,8 +77,9 @@ std::set<std::string> options_subtree_screens(const MenuModel& model,
     return out;
 }
 
-std::vector<StagedChange> build_display_changes(const SettingsSession& sess,
-                                                const MenuModel& model) {
+std::vector<StagedChange> build_display_changes(
+    const SettingsSession& sess, const MenuModel& model,
+    const std::function<std::string(const std::string&)>& value_of) {
     auto find_item = [&](const std::string& key) -> const MenuItem* {
         for (const auto& [sname, scr] : model.screens)
             for (const auto& it : scr.items)
@@ -53,6 +106,11 @@ std::vector<StagedChange> build_display_changes(const SettingsSession& sess,
         }
         out.push_back(std::move(disp));
     }
+
+    // A Sound card pick: fold its one or two audio rows into one card row.
+    if (value_of)
+        out = fold_sound_card_rows(std::move(out), sess, value_of, find_item,
+                                   resolve_value);
     return out;
 }
 
@@ -83,7 +141,7 @@ void SettingsFlow::track_screen(const std::string& menu_screen) {
             }
         }
         dialog_.open("Apply changes?",
-                     build_display_changes(session_, model_),
+                     build_display_changes(session_, model_, hooks_.value_of),
                      hooks_.confirm_note
                          ? hooks_.confirm_note(any_reinit, any_persist)
                          : std::string{});
@@ -93,6 +151,16 @@ void SettingsFlow::track_screen(const std::string& menu_screen) {
 
 SettingsFlow::KeyOutcome SettingsFlow::handle_key(Key k) {
     if (!dialog_.is_open()) return KeyOutcome::kIgnored;
+    if (dialog_.is_question()) {
+        switch (k) {
+            case Key::kPrev:   dialog_.move(-1); return KeyOutcome::kConsumed;
+            case Key::kNext:   dialog_.move(1);  return KeyOutcome::kConsumed;
+            case Key::kAccept: dialog_.answer_yes(); return KeyOutcome::kAnswered;
+            case Key::kCancel: dialog_.close();      return KeyOutcome::kAnswered;
+            case Key::kNone:
+            default:           return KeyOutcome::kConsumed;
+        }
+    }
     switch (k) {
         case Key::kPrev:
             dialog_.move(-1);          // left/up → towards Apply

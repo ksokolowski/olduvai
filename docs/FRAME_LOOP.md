@@ -52,8 +52,12 @@ the shell loop (`presentation/game_app.cpp`).
 - **8** surface transitions — **secret entry takes priority**; the
   per-level transition handler runs only if no trap fired.
   **8a** cave-warp animation (never while inside a cave).
-  **8b** level-complete intercept — the pseudo-exit screen never binds
-  or renders.
+  **8b** level-complete intercept — **leave the loop**: the pseudo-exit
+  screen never binds or renders, and the completing frame is neither
+  composed, presented nor traced. The fade to black and the score tally run
+  AFTER the loop, on the platform and boss drivers alike (§3.29; before
+  that the platform tally ran inside the loop and the rest of the iteration
+  re-presented the finished level for one frame).
 - **8c** secret-room bubble scatter: while `secret_flag`, exactly one
   627-draw LCG pass per gameplay frame (3 draws × 209 iterations),
   entry frame inclusive and nothing at bind time.  Native runs it in

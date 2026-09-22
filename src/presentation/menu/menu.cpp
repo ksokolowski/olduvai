@@ -33,7 +33,7 @@ std::optional<std::string> Menu::value_str(const MenuItem& it) const {
     // level select.  Displays like a choice; plain action rows keep the hint.
     if (it.type == "choice" ||
         (it.type == "action" && !it.key.empty() && !it.values.empty())) {
-        const std::string cur = bind_.get(it.key);
+        std::string cur = bind_.get(it.key);
         if (!it.value_labels.empty()) {  // friendly display name for the token
             auto p = std::find(it.values.begin(), it.values.end(), cur);
             if (p != it.values.end()) {

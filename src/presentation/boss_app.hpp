@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 
+#include "presentation/audio/sound_card.hpp"
 #include "presentation/enhance_flags.hpp"
 #include "presentation/window_util.hpp"
 
@@ -41,7 +42,7 @@ struct BossRunResult {
     long score = 0;
     bool quit = false;
     bool restart = false;        // Pause -> Restart Fight (redo this level)
-    bool quit_program = false;   // Pause -> Quit to Desktop
+    bool quit_program = false;   // Pause -> Exit Game
     // Set iff a reinit-class display/audio Option (or aspect) was Applied in
     // the boss pause; run_game applies it after the fight (see above).
     std::optional<BossReinit> reinit;
@@ -67,6 +68,8 @@ struct BossEnhanceOptions {
     // applies after the fight).
     std::string music_device = "auto";
     std::string sfx_backend = "auto";
+    // Which Sound card choices this machine can play (probe_sound_cards).
+    SoundCardAvail sound_avail;
     // The session's profile family, for the boss pause menu's Style preset.
     std::string profile_family = "desktop";
     // Persist a (config-key, value) pair to play.json — INJECTED from the app

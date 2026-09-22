@@ -104,7 +104,8 @@
       "configurePreset": "asan",
       "environment": {
         "ASAN_OPTIONS": "detect_stack_use_after_return=1",
-        "UBSAN_OPTIONS": "print_stacktrace=1"
+        "UBSAN_OPTIONS": "print_stacktrace=1",
+        "LSAN_OPTIONS": "suppressions=${sourceDir}/tests/lsan.supp:print_suppressions=0"
       },
       "output": {
         "outputOnFailure": true

@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "presentation/audio/game_music.hpp"
 #include "presentation/input/gamepad.hpp"
 
 #include <SDL.h>
@@ -31,6 +32,7 @@
 #include "presentation/render/game_render.hpp"
 #include "presentation/render/tile_patterns.hpp"
 #include "presentation/render/hud_render.hpp"
+#include "presentation/menu/about_info.hpp"
 #include "presentation/menu/dialog_key_map.hpp"
 #include "presentation/sequence/l3_end_level.hpp"
 #include "presentation/menu/menu.hpp"
@@ -113,7 +115,7 @@ void run_title_menu(TitleMenuCtx& ctx) {
             create_stream_tex(sw.ren, 320 * hd_scale, 200 * hd_scale);
         // Owner UX 2026-07-05: ESC during the intro is the QUICK PATH to
         // the main menu (it used to quit).  Window-close still quits;
-        // quitting now lives in the menu (Quit to Desktop).
+        // quitting now lives in the menu (Exit Game).
         bool intro_to_menu = false;
         // Headless menu-shot hook: skip straight past the title cards to the
         // menu (they hold for ~30 s with no keyboard to skip them, and the
@@ -167,6 +169,8 @@ void run_title_menu(TitleMenuCtx& ctx) {
         };
         formats::CurArchive iva(prepare::slurp_file(opts.game_dir / "FILESA.VGA"));
         formats::CurArchive ifa(prepare::slurp_file(opts.game_dir / "FILESA.CUR"));
+        const std::vector<std::uint8_t>* const intro_mdi =
+            ifa.contains("INTRO.MDI") ? &ifa.get("INTRO.MDI").data : nullptr;
         auto show = [&](const char* name, int hold_frames) {
             if (quit_requested || intro_to_menu || shot_mode || script_mode ||
                 !iva.contains(name))
@@ -175,9 +179,7 @@ void run_title_menu(TitleMenuCtx& ctx) {
                             hold_frames, ipresent, iskip);
         };
         show("TITUS.PC1", 3 * 18);              // publisher logo
-        if (audio_opt->music_available() && ifa.contains("INTRO.MDI")) {
-            audio_opt->play_music(ifa.get("INTRO.MDI").data, formats::mdi_track_id("intro.mdi"));
-        }
+        play_mdi(&*audio_opt, intro_mdi, "INTRO.MDI");
         show("TITRE1.PC1", 20 * 18);            // title card (skippable)
         show("TITRE2.PC1", 10 * 18);
         // ── BULLE "dreaming caveman" attract hold (owner UX 2026-07-05):
@@ -281,6 +283,7 @@ void run_title_menu(TitleMenuCtx& ctx) {
                 mbind.enhanced = rt.enhanced; mbind.persist = &opts.persist;
                 mbind.rt = &rt;
                 mbind.session = &main_session;
+                mbind.sound_avail = probe_sound_cards(rt.rom_dir, rt.soundfont);
                 SettingsSeed seed;
                 seed.enhanced = rt.enhanced;
                 seed.hd_profile = rt.hd_profile;
@@ -331,8 +334,21 @@ void run_title_menu(TitleMenuCtx& ctx) {
                                 want_start = true;
                             }
                     }},
-                    {"quit_desktop", [&] { want_quit = true; }},
+                    {"quit_desktop", [&] {
+                        main_confirm.ask("Exit game?", [&] { want_quit = true; });
+                    }},
                 };
+                // About: the build's own facts, written into the model's
+                // readout rows before the Menu reads it.
+                {
+                    SDL_version sv;
+                    SDL_GetVersion(&sv);
+                    const std::string sdl = "SDL " + std::to_string(sv.major) +
+                                            "." + std::to_string(sv.minor) +
+                                            "." + std::to_string(sv.patch);
+                    fill_about_screen(*mm, about_lines(about_build(sdl),
+                                                       kAboutChars));
+                }
                 Menu menu(*mm, mbind, acts);
                 menu.open("main");
                 // Enhanced mode: render the menu text with the SAME cartoony
@@ -341,11 +357,7 @@ void run_title_menu(TitleMenuCtx& ctx) {
                 // draw_menu).  Mirrors run_platform_level's use_hd_text gate.
                 // fbase is hoisted out of the if(hd) block so the apply block
                 // can re-call menu_font.load() without re-querying SDL.
-                std::string fbase = ".";
-                if (char* p = SDL_GetBasePath()) {
-                    fbase = p; SDL_free(p);
-                    if (!fbase.empty() && fbase.back() == '/') fbase.pop_back();
-                }
+                const std::string fbase = sdl_base_dir();
                 enhance::HdText menu_font;
                 if (hd) {
                     menu_font.load(fbase, hd_scale, rt.hd_font);
@@ -446,9 +458,7 @@ void run_title_menu(TitleMenuCtx& ctx) {
                                           rt.audio_buffer, rt.midi_port);
                         load_all_sfx(*audio_opt);
                         mbind.audio = &*audio_opt;
-                        if (audio_opt->music_available() && ifa.contains("INTRO.MDI")) {
-                            audio_opt->play_music(ifa.get("INTRO.MDI").data, formats::mdi_track_id("intro.mdi"));
-                        }
+                        play_mdi(&*audio_opt, intro_mdi, "INTRO.MDI");
                     }
                 };
                 // Discard: revert staged changes, undo live previews.
@@ -466,6 +476,9 @@ void run_title_menu(TitleMenuCtx& ctx) {
                     }
                 };
                 main_hooks.reopen_options = [&]() { menu.open("options"); };
+                main_hooks.value_of = [&mbind](const std::string& k) {
+                    return mbind.get(k);
+                };
                 main_hooks.confirm_note = [](bool any_reinit, bool any_persist) {
                     if (any_reinit || !any_persist)
                         return std::string("Apply settings now.");
@@ -485,7 +498,7 @@ void run_title_menu(TitleMenuCtx& ctx) {
                         if (menu_script_idx >= menu_script.size()) {
                             want_quit = true;   // auto-exit at end of script
                         } else {
-                            const std::string tok =
+                            const std::string& tok =
                                 menu_script[menu_script_idx++];
                             if (tok == "quit") want_quit = true;
                             else if (tok == "wait") { /* idle one frame */ }
@@ -506,31 +519,27 @@ void run_title_menu(TitleMenuCtx& ctx) {
                         if (ev.type == SDL_QUIT) want_quit = true;
                         else if (ev.type == SDL_KEYDOWN) {
                             const auto sym = ev.key.keysym.sym;
-                            // ── Confirm dialog intercepts all key input ──────
-                            // SettingsFlow resolves move/apply/discard/cancel
-                            // through the main-menu hooks above (OL-B1).
-                            if (main_confirm.is_open()) {
-                                main_flow.handle_key(flow_key_from_sym(sym));
-                                // Failed window/texture rebuild during apply:
-                                // stop draining events against a torn-down
-                                // renderer (matches the old inline break).
-                                if (quit_requested) break;
-                                // Dialog consumed this event.
-                            } else {
-                                // ── Normal menu input ────────────────────────
-                                if (sym == SDLK_ESCAPE) {
-                                    menu.back();
-                                    if (!menu.is_open()) menu.open("main");  // ESC at root stays
-                                } else {
-                                    menu_nav_keydown(menu, sym);
-                                }
-                            }
+                            // Same routing as both pause menus
+                            // (dialog_key_map.hpp); ESC at the ROOT re-opens
+                            // "main" instead of closing — there is nothing
+                            // behind the title menu.
+                            const bool dialog_took =
+                                menu_dialog_keydown(sym, main_confirm,
+                                                    main_flow, menu,
+                                                    [&] { menu.open("main"); });
+                            // Failed window/texture rebuild during an apply:
+                            // stop draining events against a torn-down
+                            // renderer (matches the old inline break).
+                            if (dialog_took && quit_requested) break;
                         }
                     }
                     // ── Options-subtree exit detection (§8.6) ──────────────
                     // When the user backs out from Options to "main" and there
                     // are staged changes, open the Save & Apply / Discard dialog.
-                    if (!main_confirm.is_open())
+                    // is_open() as well: both pause sites check it, this one
+                    // did not, and a closed menu's current_screen() used to
+                    // be undefined behaviour (menu.hpp).
+                    if (menu.is_open() && !main_confirm.is_open())
                         main_flow.track_screen(menu.current_screen());
                     // ── Close-without-apply revert ──────────────────────────
                     // If Start Game / Quit fires with unconfirmed staged changes,
@@ -602,17 +611,17 @@ void run_title_menu(TitleMenuCtx& ctx) {
                     if (menu_use_vector) {
                         int ow = 0, oh = 0;
                         if (menu_overlay.begin(sw.ren, menu_font, ow, oh)) {
-                            int mfx = -1, mfy = -1, mfw = -1, mfh = -1;
-                            if (mm_margin > 0) {
-                                mfx = mm_margin * ow / mld.w;
-                                mfw = 320 * hd_scale * ow / mld.w;
-                                mfy = 0;
-                                mfh = oh;
-                            }
+                            // The picture's rect in the output (§3.23); in
+                            // widescreen the centre 320 at mm_margin.
+                            const MenuFrame pic =
+                                mm_margin > 0
+                                    ? MenuFrame::picture(ow, oh, mld.w, mld.h,
+                                                         mm_margin,
+                                                         320 * hd_scale)
+                                    : MenuFrame::picture(ow, oh, mld.w, mld.h);
                             if (main_confirm.is_open())
                                 draw_confirm_vector(menu_overlay.buffer(), ow, oh,
-                                                    menu_font, main_confirm,
-                                                    MenuFrame{mfx, mfy, mfw, mfh});
+                                                    menu_font, main_confirm, pic);
                             else
                                 draw_menu_vector(menu_overlay.buffer(), ow, oh,
                                                  menu_font, menu,
@@ -621,7 +630,7 @@ void run_title_menu(TitleMenuCtx& ctx) {
                                                  (shot_mode || script_mode)
                                                      ? 0.0f
                                                      : SDL_GetTicks() / 1000.0f,
-                                                 MenuFrame{mfx, mfy, mfw, mfh});
+                                                 pic);
                             menu_overlay.flush(sw.ren, mld.w, mld.h);
                         }
                     }

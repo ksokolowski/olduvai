@@ -38,7 +38,8 @@
 # Regenerate after an intentional change:
 #   OLDUVAI_FORCE_WIN=40 OLDUVAI_REAL_SHOT=1 OLDUVAI_WS_FORCE_MARGIN=48 \
 #   SDL_VIDEODRIVER=dummy ./build/release/olduvai --play --level 6 \
-#       --game-dir <dir> --enhanced --aspect widescreen --window 896x400 \
+#       --game-dir <dir> --enhanced --hd-profile mmpx --aspect widescreen \
+#       --window 896x400 \
 #       --play-shot <out> --play-shot-frame 60
 #
 # GOLDEN RE-BLESSED 2026-09-07 — the old hash pinned a DEFECT, not a frame.
@@ -72,18 +73,21 @@ sha256() {
 
 export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}"
 export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}"
+. "$(dirname "$0")/lib/engine_err.sh"
+engine_err_init
 CFG_DIR="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
 SHOT="$(mktemp /tmp/boss_l6_victory.XXXXXX).png"
 
 XDG_CONFIG_HOME="${CFG_DIR}" OLDUVAI_FORCE_WIN=40 OLDUVAI_REAL_SHOT=1 \
     OLDUVAI_WS_FORCE_MARGIN=48 timeout 180 "${BINARY}" --play --level 6 \
-    --game-dir "${GAME_DIR}" --enhanced --aspect widescreen \
+    --game-dir "${GAME_DIR}" --enhanced --hd-profile mmpx --aspect widescreen \
     --window 896x400 \
-    --play-shot "${SHOT}" --play-shot-frame 60 >/dev/null 2>&1
+    --play-shot "${SHOT}" --play-shot-frame 60 >"${ERR}" 2>&1
 rm -rf "${CFG_DIR}"
 
 if [ ! -s "${SHOT}" ]; then
     echo "boss_l6_victory: FAIL — no shot produced; the victory drop was not reached."
+    engine_said "${ERR}"
     echo "  Check OLDUVAI_FORCE_WIN still sets won, and that the l6_vf == 8"
     echo "  capture branch in boss_app's L6 victory drop loop still exists."
     rm -f "${SHOT}"
@@ -92,6 +96,7 @@ fi
 GOT="$(sha256 < "${SHOT}")"
 if [ ! -f "${GOLDEN}" ]; then
     echo "boss_l6_victory: FAIL — no golden at ${GOLDEN} (got ${GOT})"
+    engine_said "${ERR}"
     rm -f "${SHOT}"
     exit 1
 fi

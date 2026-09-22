@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Krzysztof Sokołowski
+# LeakSanitizer suppressions for the asan test preset (CMakePresets.json).
+#
+# Allocations made INSIDE dlopen are third-party library constructors, never
+# our code: probing the optional synths dlopens libfluidsynth (and, through
+# it, glib), whose init keeps small one-time allocations for the life of the
+# process — 96 bytes, reported under "<unknown module>" because the probe
+# dlcloses the library afterwards.  Seen first on 2026-09-22, when CI gained
+# libfluidsynth3 and the Linux lane (the only one where LSan runs; it is off
+# on macOS) started loading it.  Narrow on purpose: a leak whose allocating
+# stack does not pass through dlopen is still reported.
+leak:dlopen
+# ...and the same class one call later: new_fluid_synth runs libinstpatch's
+# ipatch_init, which registers GObject types/param-specs for the life of the
+# process (glib never frees type-system data).  136 bytes each, all under
+# ipatch_init — again not ours, and again only visible where LSan runs.
+leak:ipatch_init
+# ...and a third, on newer distros (first seen 2026-09-22 on Ubuntu 26.04,
+# FluidSynth 2.4.8): that FluidSynth links SDL3, reached through sdl2-compat,
+# and creating its settings object registers its SDL audio driver, keeping a
+# 16-byte SDL allocation for the life of the process.  It failed audio_render
+# (gm-builtin) and report_form — the latter SILENTLY, because the engine's
+# non-zero exit at shutdown tripped the script's `set -e` before any FAIL line.
+# CI's older image has neither SDL3 nor this path, so only a newer desktop sees it.
+# WIDER than the two above, and it matters: any leak whose stack passes through
+# new_fluid_settings is hidden — which would include us failing to free the
+# settings object.  We do free it (audio.cpp, the error path and the dtor), so
+# today this hides only FluidSynth's own allocation; keep those two calls.
+leak:new_fluid_settings

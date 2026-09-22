@@ -145,14 +145,17 @@ void draw_enhanced_hud_bars(std::vector<std::uint8_t>& rgba, int buf_w, int buf_
 }
 
 void draw_enhanced_hud_text(std::vector<std::uint8_t>& rgba, int out_w, int out_h,
-                            const HdText& text, const EnhancedHudLayout& layout) {
-    // Native x scales by out_w/320, native baseline by out_h/200.  The font is
-    // already sized to the output cap height by the caller.
-    const double sx = out_w / 320.0;
-    const double sy = out_h / 200.0;
+                            const HdText& text, const EnhancedHudLayout& layout,
+                            int fx, int fy, int fw, int fh) {
+    // Native x scales by fw/320, native baseline by fh/200, offset into the
+    // picture's rect.  The font is already sized for the picture by the
+    // caller.
+    if (fw <= 0 || fh <= 0) { fx = 0; fy = 0; fw = out_w; fh = out_h; }
+    const double sx = fw / 320.0;
+    const double sy = fh / 200.0;
     for (const auto& t : layout.texts) {
-        const int x = static_cast<int>(t.x * sx + 0.5);
-        const int y = static_cast<int>(t.baseline_y * sy + 0.5);
+        const int x = fx + static_cast<int>(t.x * sx + 0.5);
+        const int y = fy + static_cast<int>(t.baseline_y * sy + 0.5);
         text.draw(rgba, out_w, out_h, x, y, t.str, t.r, t.g, t.b);
     }
 }

@@ -251,6 +251,10 @@ void update_death(SystemsState& state);
 void trigger_death(SystemsState& state);
 void hit_player(SystemsState& state, int damage = 2);
 void respawn(SystemsState& state);
+// How far the balloon bunch rises per logic tick — the death halo
+// (FUN_27f7_1921, 8 px per frame), and the Enhanced fly-away after a landing
+// (presentation/render/rising_balloons.hpp) that reuses it.
+constexpr int kBalloonRisePerTick = 8;
 void init_death_halo(SystemsState& state);   // death_counter == 1
 void tick_death_halo(SystemsState& state);   // death_counter > 1
 

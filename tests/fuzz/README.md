@@ -44,7 +44,8 @@ only the harness + this README.
 
 ## Findings so far (2026-07-10, first run)
 
-Seven bugs on hostile input, all fixed at the root. Two formats reached deep
+Seven bugs on hostile input, all fixed at the root (two more followed — see
+below). Two formats reached deep
 decode paths: `.MDI` (music) and `.PC1` (IFF/ILBM images).
 
 `.MDI` — `formats::write_vlq` (mdi.cpp) + `MidiSequencer::load` (midi_seq.cpp):
@@ -73,3 +74,24 @@ decode paths: `.MDI` (music) and `.PC1` (IFF/ILBM images).
 Regression: golden_trace + opl_music (real-`.MDI` playback) + the PC1 decode
 tests pin that every clamp/bound/cap is inert on valid data. Confirmation
 re-fuzz: 248k runs, 0 new artifacts after the last fix.
+
+## Findings since (2026-09-22, CI `fuzz-smoke`)
+
+Two more, after the harness was given coverage of the parsers themselves and
+began running on every push. Nine in total, all fixed at the root.
+
+- #8 LZSS stall — an exhausted reader keeps supplying zero bits, so ~30 payload
+  bytes could demand the 16 MiB declared-size cap of zero-fill, one bit at a
+  time (775 ms for a 34-byte input; a corrupt game file stalled the same way).
+  A genuine stream cannot declare more than `(size-4)*8*5/11` bytes — the
+  densest token is an 11-bit back-reference of at most 5 bytes — so anything
+  beyond that (+64 slack) now throws. The real archives' densest entry sits at
+  0.91 of the bound. Fuzzer throughput went from 89 to 22,735 exec/s.
+- #9 `unsqz` stack-buffer-overflow — the decoder for `PREH.SQZ`, a
+  user-supplied file. After a dictionary reset the next code was taken as a
+  literal unchecked, so a crafted stream could chain entries into a loop that
+  ran the unwind off its 4096-entry stack. The post-reset code must now be a
+  literal (or another reset), and the unwind is bounded unconditionally.
+  `sqz_parity` still decodes the real `PREH.SQZ` byte-exact.
+
+Both crash inputs are unit tests.

@@ -56,6 +56,8 @@ fi
 
 export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}"
 export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}"
+. "$(dirname "$0")/lib/engine_err.sh"
+engine_err_init
 OUT_DIR="$(mktemp -d /tmp/boss_classic_hud.XXXXXX)"
 
 # One classic boss frame.  $1 = output path, $2 = extra flag (may be empty).
@@ -68,7 +70,7 @@ capture() {
     XDG_CONFIG_HOME="${CFG_DIR}" timeout 90 \
         "${BINARY}" --play --level 2 \
         --play-shot "$1" --play-shot-frame 60 \
-        --game-dir "${GAME_DIR}" $2 >/dev/null 2>&1
+        --game-dir "${GAME_DIR}" $2 >"${ERR}" 2>&1
     rm -rf "${CFG_DIR}"
 }
 
@@ -78,6 +80,7 @@ capture "${OUT_DIR}/lives99.bmp" "--god"
 for f in lives3 lives99; do
     if [ ! -s "${OUT_DIR}/${f}.bmp" ]; then
         echo "boss_classic_hud: FAIL — no ${f} shot produced (boss not reached?)"
+        engine_said "${ERR}"
         rm -rf "${OUT_DIR}"
         exit 1
     fi

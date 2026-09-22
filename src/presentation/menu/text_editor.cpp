@@ -80,7 +80,7 @@ void TextEditor::del() {
     if (col_ < static_cast<int>(line.size())) {
         line.erase(static_cast<std::size_t>(col_), 1);
     } else if (row_ + 1 < static_cast<int>(lines_.size())) {
-        line += lines_[static_cast<std::size_t>(row_ + 1)];
+        line += lines_[static_cast<std::size_t>(row_) + 1];
         lines_.erase(lines_.begin() + row_ + 1);
     }
 }

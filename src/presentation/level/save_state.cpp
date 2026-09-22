@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "presentation/level/save_state.hpp"
 
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -129,7 +130,9 @@ void apply_header(const SaveHeader& h, systems::SystemsState& st) {
     st.glider_active = h.glider_active != 0;
     st.glider_x = h.glider_x; st.glider_y = h.glider_y;
     st.halo_flight_flag = h.halo_flight_flag;
-    st.score = h.score; st.next_life_score = h.next_life_score;
+    // Range-checked at load (deserialize): both fit a 32-bit long.
+    st.score = static_cast<long>(h.score);
+    st.next_life_score = static_cast<long>(h.next_life_score);
     st.food_count = h.food_count; st.bonus_trigger = h.bonus_trigger;
     st.l3a_phase_counter = h.l3a_phase_counter;
     st.fireball_flag = h.fireball_flag;
@@ -177,6 +180,13 @@ std::optional<SaveState> deserialize(const std::vector<std::uint8_t>& b) {
     if (s.hdr.level < 1 || s.hdr.level > 7) return std::nullopt;
     if (s.hdr.current_level < 1 || s.hdr.current_level > 7) return std::nullopt;
     if (s.hdr.current_screen < 0 || s.hdr.current_screen > 2999)
+        return std::nullopt;
+    // The score is a 32-bit dword in the EXE (DS:0x97ee/0x97f0) and a `long`
+    // here — 32-bit on Windows.  The file field is 64-bit, so reject what the
+    // state cannot hold instead of truncating it differently per platform.
+    constexpr std::int64_t kScoreMax = INT32_MAX;
+    if (s.hdr.score < 0 || s.hdr.score > kScoreMax) return std::nullopt;
+    if (s.hdr.next_life_score < 0 || s.hdr.next_life_score > kScoreMax)
         return std::nullopt;
     if (!get_snaps(b, pos, s.entities)) return std::nullopt;
     std::uint32_t nstore = 0;

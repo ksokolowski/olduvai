@@ -3,8 +3,11 @@
 # Copyright (C) 2026 Krzysztof Sokołowski
 # The honest local gate — the full suite, on a machine that HAS the game files.
 #
-# WHY THIS EXISTS.  20 of the 31 registered tests need the user's own game
-# files, and no CI runner has them, so CI really exercises 11.  Worse, `ctest`
+# WHY THIS EXISTS.  20 of the 31 registered tests needed the user's own game
+# files, and no CI runner had them, so CI really exercised 11.  (Since
+# 2026-09-21 the gitea LINUX runner mounts them and runs the same audit —
+# scripts/ctest_audit.sh; the Windows runner and GitHub still do not, and
+# the slow label and the Mac toolchain are still only here.)  Worse, `ctest`
 # counts a skip as a pass and prints "100% tests passed out of 31" — the suite
 # reads fully green on a machine where most of it never ran.  That gap is the
 # measured reason duplication keeps recurring: every `slurp` copy sits on an
@@ -12,8 +15,8 @@
 # always-green test touches either (docs/internal/BACKLOG.md §1).
 #
 # So on a machine WITH assets, a SKIP of an asset-gated test is a FAILURE.  That
-# is the whole idea: the owner's machine is the only place those can run, so a
-# silent skip there means the gate ran nowhere at all.  (A test that needs no
+# is the whole idea: where the files are, a silent skip means the gate ran
+# nowhere at all.  (A test that needs no
 # game files and skips for a platform reason is printed, not counted.)
 #
 #   scripts/gate_local.sh              release + asan, full suite, strict
@@ -57,70 +60,46 @@ PLATFORM_SKIPS=""
 
 # run_ctest <summary-name> <preset> [extra ctest args...]
 #
-# One copy of the skip audit, which is the point of this whole script: on a
-# machine WITH the game files a SKIP means the gate ran nowhere at all, so it
-# is a failure unless acknowledged.  Both call sites (the build lanes and the
-# `slow` label below) need identical handling, and this repo has paid for
-# "three copies of one policy" before (BACKLOG §3.14a) — so it is a function.
-#
-# NOT `ctest ... | tee "${LOG}"`.  In a pipeline `$?` is the status of the LAST
-# command — tee — which is always 0, so a real ctest failure read as success.
-# This gate shipped with exactly that bug and reported "release: OK / asan: OK"
-# for a run whose log said "30 - ending_shot (Failed)".  PIPESTATUS would fix
-# it in bash; this is /bin/sh, so redirect and print afterwards.
+# Both call sites (the build lanes and the `slow` label below) need identical
+# handling, and this repo has paid for "three copies of one policy" before
+# (BACKLOG §3.14a) — so the run and the skip audit are ONE script,
+# scripts/ctest_audit.sh, shared with CI; this function only keeps the summary.
+# The three lints CI's build-and-lint runs BEFORE it builds anything.  This
+# gate ran none of them: it is the test gate, and the difference was invisible
+# until a layering violation (a shared header placed in core/, which is ABOVE
+# prepare) went green here and red there for four commits — while the pre-push
+# hook dutifully reported the red run each time.  A local gate that does not
+# cover CI's cheap checks is a gate that teaches you to trust the wrong green.
+run_lints() {
+    printf '\n\033[1m═══ lints (what CI runs first) ═══\033[0m\n'
+    sh "${ROOT}/scripts/check_tree.sh" || return 1
+    sh "${ROOT}/scripts/check_layers.sh" || return 1
+    sh "${ROOT}/scripts/check_commit_range.sh" HEAD || return 1
+    # GCC over the changed TUs.  CI builds with GCC and MSVC; this machine is
+    # clang + libc++, and the difference that bites is transitive includes
+    # (check_gcc.sh's header says which ones did).  It needs the compile
+    # database, so it skips loudly on a fresh tree and runs on every later
+    # gate — which is when it matters, because by then something is changed.
+    sh "${ROOT}/scripts/check_gcc.sh" || return 1
+}
+
 run_ctest() {
     _name="$1"; shift
     _preset="$1"; shift
-    LOG="$(mktemp -t olduvai_gate_XXXXXX)"
-    if ctest --preset "${_preset}" --output-on-failure "$@" > "${LOG}" 2>&1; then
-        CTEST_RC=0
-    else
-        CTEST_RC=$?
-    fi
-    cat "${LOG}"
+    _out="$(mktemp -t olduvai_gate_XXXXXX)"
+    # The run and the skip audit are scripts/ctest_audit.sh — one copy, which
+    # CI's asset-bearing jobs call too.  ALLOW travels as the env it reads.
+    OLDUVAI_GATE_ALLOW_SKIP="${ALLOW}" OLDUVAI_AUDIT_OUT="${_out}" \
+        sh "${ROOT}/scripts/ctest_audit.sh" "${_preset}" "$@"
+    _rc=$?
+    UNEXPECTED="$(sed -n 's/^unexpected: //p' "${_out}" | tr '\n' ' ')"
+    PLATFORM="$(sed -n 's/^platform: //p' "${_out}" | tr '\n' ' ')"
+    rm -f "${_out}"
 
-    # ctest marks skips as "***Skipped", whatever SKIP_RETURN_CODE produced it.
-    SKIPPED="$(grep -oE '[A-Za-z_0-9]+ \.+ *\*\*\*Skipped' "${LOG}" \
-               | awk '{print $1}' | sort -u | tr '\n' ' ')"
-    rm -f "${LOG}"
-
-    # WHICH skips count.  A skip of an `assets`-labelled test — the label
-    # CMakeLists.txt DERIVES from SKIP_RETURN_CODE 77, "needs the owner's game
-    # files" — means it ran nowhere, since this machine is the only one that
-    # has them: a failure.  Any other skip is the test's own verdict that THIS
-    # platform cannot express its scenario, and the always-green CI lane is
-    # where it runs.  port_bundle is the case: it exits 78 on a case-insensitive
-    # disk that cannot hold the two-case ROM names it models, and counting that
-    # made every Mac run FAIL while the comment beside the test promised
-    # otherwise.  Printed and summarised, never counted.
-    #
-    # Fails CLOSED: if the label query breaks or lists nothing, every skip
-    # counts, as it always did — a broken lookup must not make the gate lenient.
-    ASSET_TESTS="$(ctest --preset "${_preset}" -N -L assets 2>/dev/null \
-                   | sed -n 's/^ *Test *#[0-9]*: *//p' | tr '\n' ' ')"
-
-    UNEXPECTED=""
-    PLATFORM=""
-    for t in ${SKIPPED}; do
-        case " ${ALLOW} " in
-            *" ${t} "*) echo "gate_local: acknowledged skip — ${t}"; continue ;;
-        esac
-        case " ${ASSET_TESTS:-} " in
-            "  ") UNEXPECTED="${UNEXPECTED}${t} " ;;
-            *" ${t} "*) UNEXPECTED="${UNEXPECTED}${t} " ;;
-            *) echo "gate_local: platform skip — ${t} (needs no game files; not counted)"
-               PLATFORM="${PLATFORM}${t} " ;;
-        esac
-    done
-    if [ -n "${SKIPPED}" ] && [ -z "${ASSET_TESTS}" ]; then
-        echo "gate_local: WARNING — could not list the assets-labelled tests;" \
-             "counting every skip (fail closed)"
-    fi
-
-    if [ ${CTEST_RC} -ne 0 ]; then
-        SUMMARY="${SUMMARY}\n  ${_name}: FAIL — ctest exited ${CTEST_RC}"
+    if [ ${_rc} -eq 1 ]; then
+        SUMMARY="${SUMMARY}\n  ${_name}: FAIL — ctest failed"
         STATUS=1
-    elif [ -n "${UNEXPECTED}" ]; then
+    elif [ ${_rc} -ne 0 ]; then
         SUMMARY="${SUMMARY}\n  ${_name}: FAIL — skipped on an asset machine: ${UNEXPECTED}"
         STATUS=1
     elif [ -n "${PLATFORM}" ]; then
@@ -130,6 +109,12 @@ run_ctest() {
         SUMMARY="${SUMMARY}\n  ${_name}: OK"
     fi
 }
+
+if ! run_lints; then
+    echo ""
+    echo "gate_local: FAILED — a lint CI runs first said no; nothing was built."
+    exit 1
+fi
 
 for lane in ${LANES}; do
     echo ""

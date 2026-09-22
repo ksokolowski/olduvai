@@ -91,7 +91,7 @@ or icon.
   the original game's full speed. Switch under *Options → Style* in the pause
   menu; your choice is remembered at the next launch. Enhanced on the A12 is
   smooth but a little slower than the original.
-- **Quit** with *Quit to Desktop* in the pause menu — it returns to KNULLI.
+- **Quit** with *Quit → Exit Game → Yes* in the pause menu — it returns to KNULLI.
 
 ## Music
 
@@ -106,7 +106,10 @@ chip) with digital sound effects — which needs nothing extra.
   then Sound Blaster. General MIDI needs the firmware's FluidSynth library,
   which the A12's KNULLI has.
 
-All options are in [AUDIO.md](AUDIO.md).
+To choose instead of taking the order above, pick a **Sound card** under
+*Options → Audio*: Sound Blaster, AdLib, Roland MT-32 or General MIDI (the
+last two appear once their ROMs or SoundFont are in place), or Off. All
+options are in [AUDIO.md](AUDIO.md).
 
 ## If something goes wrong
 

@@ -85,7 +85,6 @@ void tick_dead(Entity& e) {
     } else {
         e.active = false;
     }
-    return;
 }
 
 // ── KO: counter counts DOWN from 40 ──
@@ -100,7 +99,6 @@ void tick_ko(Entity& e, const MonsterCtx& c) {
         e.state = static_cast<int>(MonsterState::HeadingPlayer);
         e.state_counter = 0;
     }
-    return;
 }
 
 // ── RESET: activate when the player is near the monster's Y ──
@@ -114,7 +112,6 @@ void tick_reset(Entity& e, const MonsterCtx& c) {
     e.direction = (e.x + 20 >= px) ? 1 : 0;
     e.visible = true;
     e.sprite = e.init_spr;
-    return;
 }
 
 // ── SPAWN: 2-frame spawn animation ──
@@ -125,7 +122,6 @@ void tick_spawn(Entity& e) {
         e.state = static_cast<int>(MonsterState::HeadingPlayer);
         e.state_counter = 0;
     }
-    return;
 }
 
 // Edge or obstacle ahead: clamp into the walkable band, reverse, then step
@@ -212,7 +208,6 @@ void tick_heading_player(Entity& e, const MonsterCtx& c) {
     e.facing_left = (e.direction != 0);
 
     request_fireball_if_in_line(e, c);
-    return;
 }
 
 // ── RUNNING_AWAY ──
@@ -274,7 +269,6 @@ void tick_running_away(Entity& e, const MonsterCtx& c) {
             e.ko_counter = 40;
         }
     }
-    return;
 }
 
 }  // namespace

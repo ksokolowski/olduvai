@@ -29,7 +29,8 @@ TEST_CASE("built_in_menu_model: the shipped menus.json yields the expected scree
 
     const std::set<std::string> expected = {
         "main", "options", "audio", "video", "cheats", "cheat_bonus",
-        "pause", "pause_boss", "dev", "bug_report"};
+        "pause", "pause_boss", "dev", "bug_report", "quit", "about",
+        "audio_advanced"};
     CHECK(ids == expected);
     CHECK(m.screens.at("main").header == "OLDUVAI");
 }
@@ -73,4 +74,50 @@ TEST_CASE("built_in_menu_model: bindings survive generation") {
         }
     }
     CHECK(found_vol);
+}
+
+TEST_CASE("built_in_menu_model: one Quit entry, and About on the title menu") {
+    const MenuModel m = built_in_menu_model();
+
+    // Both pause menus: a single Quit submenu, no top-level quit actions.
+    for (const char* sid : {"pause", "pause_boss"}) {
+        int quit_submenus = 0;
+        for (const auto& it : m.screens.at(sid).items) {
+            CHECK(it.action != "quit_title");
+            CHECK(it.action != "quit_desktop");
+            if (it.id == "quit") {
+                CHECK(it.type == "submenu");
+                CHECK(it.target == "quit");
+                CHECK(it.label == "Quit");
+                ++quit_submenus;
+            }
+        }
+        CHECK(quit_submenus == 1);
+    }
+
+    // The Quit screen: to title, exit, back — the action ids the three
+    // drivers already bind.
+    const auto& q = m.screens.at("quit").items;
+    REQUIRE(q.size() == 3);
+    CHECK(q[0].action == "quit_title");
+    CHECK(q[1].action == "quit_desktop");
+    CHECK(q[1].label == "Exit Game");
+    CHECK(q[2].type == "back");
+
+    // Title menu ends Options, About, Quit.
+    const auto& mi = m.screens.at("main").items;
+    REQUIRE(mi.size() >= 3);
+    CHECK(mi[mi.size() - 3].id == "options");
+    CHECK(mi[mi.size() - 2].id == "about");
+    CHECK(mi[mi.size() - 2].target == "about");
+    CHECK(mi.back().id == "quit");
+    CHECK(mi.back().label == "Quit");
+    CHECK(mi.back().action == "quit_desktop");
+
+    // About: readouts (filled at runtime), then Back.
+    const auto& a = m.screens.at("about").items;
+    REQUIRE(a.size() >= 2);
+    for (std::size_t i = 0; i + 1 < a.size(); ++i)
+        CHECK(a[i].type == "readout");
+    CHECK(a.back().type == "back");
 }

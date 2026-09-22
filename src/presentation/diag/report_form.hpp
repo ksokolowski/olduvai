@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// F5 in-game bug-report form — the per-frame service glue, extracted
-// verbatim from run_platform_level (CC3 phase 2, seam 1).  Owns the form's
-// state (fields menu, confirm dialog, description editor, the stashed
-// pre-form frame) and its input handling; the freeze-frame servicing runs
-// through service_freeze() with the presentation plumbing passed narrowly.
-// The controllers themselves (Menu, ConfirmDialog, EditOverlay,
+// F5 in-game bug-report form — shared by the platform level and the boss
+// arena (BACKLOG §3.30).  Owns the form's state (fields menu, confirm dialog,
+// description editor, the stashed pre-form frame) and its input handling;
+// the freeze-frame servicing runs through service_freeze(), with the frozen
+// scene, the present and the report's contents supplied by the driver as
+// callbacks.  The controllers themselves (Menu, ConfirmDialog, EditOverlay,
 // report_templates, write_bug_report) live where they always did — this is
 // orchestration only.  Ordering is part of the frame-loop contract: the
-// report_form / menu_script golden gates prove the extraction byte-exact.
+// report_form / menu_script golden gates pin the platform side byte-exact.
 
 #pragma once
 
@@ -21,10 +21,9 @@
 
 #include "presentation/menu/confirm_dialog.hpp"
 #include "presentation/render/game_render.hpp"
-#include "presentation/level/level_state.hpp"
 #include "presentation/menu/menu.hpp"
 #include "presentation/menu/text_overlay_edit.hpp"
-#include "presentation/render/widescreen_presenter.hpp"
+#include "presentation/diag/bug_capture.hpp"
 
 namespace olduvai::presentation {
 
@@ -53,31 +52,32 @@ public:
     // (kNone), so save/cancel handling is not needed here.
     void inject_text(const std::string& txt);
 
-    // Per-call plumbing for the freeze-frame service — everything is a live
-    // local of run_platform_level.
+    // What a level driver supplies to the freeze-frame service.  The form
+    // itself is driver-agnostic; the frozen scene, the present and the
+    // report's CONTENTS are the driver's (a platform level and a boss arena
+    // differ in all three).
     struct FreezeDeps {
-        Loaded& g;
-        bool god_active;
-        int display_level;
-        int internal_level;
-        int overlay_scale;
-        bool want_presented;      // hd || wsp.present_path()
-        WidescreenPresenter& wsp;
-        SDL_Renderer* ren;
-        // Passed in, not derived from `ren`: SDL_RenderGetWindow is SDL
-        // 2.0.22+, and the Linux release builds against 2.0.20 (jammy — the
-        // AppImage's library floor, release.yml).  The 0.9.7 dry run caught
-        // the call on that job only.
-        SDL_Window* win;
+        // Draw the frozen scene into a native 320x200 frame WITHOUT advancing
+        // any per-frame state — the caller `continue`s before its tick, so an
+        // advancing draw here would be the only advance of a frozen frame
+        // (open F5 mid-swing and the club drained away).
+        std::function<void(FrameBuffer&)> compose;
+        // Present a native form frame.
+        std::function<void(FrameBuffer&)> show;
+        // Write the report: the clean frozen scene (the first compose after
+        // open) and the form's fields.
+        std::function<void(const FrameBuffer&, const BugAnnotations&)> write;
+        // The form's bitmap font and bone cursor (cursor may be null).
+        const std::vector<formats::Sprite>& charset;
+        const formats::Sprite* cursor;
+        const std::vector<formats::Rgb>* cursor_palette;
         std::uint32_t frame_ms;
-        // run_platform_level's upload_and_show(frame, with_hud, do_present).
-        const std::function<void(FrameBuffer&, bool, bool)>& upload_and_show;
     };
 
     // Freeze + draw over the frozen scene; Save writes the report from the
     // stashed frame.  Returns true when the form owned this frame (the
-    // caller must `continue` — full freeze, exactly like the old inline
-    // block); false when the form is closed and the frame proceeds.
+    // caller must `continue` — full freeze); false when the form is closed
+    // and the frame proceeds.
     bool service_freeze(const FreezeDeps& d);
 
 private:

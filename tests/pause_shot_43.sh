@@ -47,7 +47,7 @@ if [ ! -x "${BINARY}" ]; then
 fi
 
 sha256() {
-    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"
+    if command -v sha256sum >"${ERR}" 2>&1; then sha256sum "$1"
     else shasum -a 256 "$1"; fi | cut -d' ' -f1
 }
 
@@ -60,14 +60,17 @@ print('%d %d' % struct.unpack('>II', d[16:24]))" "$1"
 
 export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}"
 export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}"
+. "$(dirname "$0")/lib/engine_err.sh"
+engine_err_init
 CFG_DIR="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
 XDG_CONFIG_HOME="${CFG_DIR}" OLDUVAI_PAUSE_SHOT="${SHOT}" timeout 60 \
     "${BINARY}" --play --level 1 --render-scale 1 --aspect 4:3 \
-    --window 640x480 --game-dir "${GAME_DIR}" >/dev/null 2>&1
+    --window 640x480 --game-dir "${GAME_DIR}" >"${ERR}" 2>&1
 rm -rf "${CFG_DIR}"
 
 if [ ! -s "${SHOT}" ]; then
     echo "pause_shot_43: FAIL — no shot produced (pause overlay not reached?)"
+    engine_said "${ERR}"
     rm -f "${SHOT}"
     exit 1
 fi
@@ -86,7 +89,7 @@ CTRL="$(mktemp -u /tmp/pause_43_ctrl.XXXXXX).png"
 CFG_DIR="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
 XDG_CONFIG_HOME="${CFG_DIR}" OLDUVAI_PAUSE_SHOT="${CTRL}" timeout 60 \
     "${BINARY}" --play --level 1 --render-scale 1 --aspect keep \
-    --window 640x480 --game-dir "${GAME_DIR}" >/dev/null 2>&1
+    --window 640x480 --game-dir "${GAME_DIR}" >"${ERR}" 2>&1
 rm -rf "${CFG_DIR}"
 if [ -s "${CTRL}" ] && [ "$(sha256 "${CTRL}")" = "$(sha256 "${SHOT}")" ]; then
     echo "pause_shot_43: FAIL — --aspect 4:3 renders identically to --aspect"
@@ -97,6 +100,7 @@ fi
 rm -f "${CTRL}"
 
 if [ "$(sha256 "${SHOT}")" = "$(cat "${GOLDEN}")" ]; then
+    engine_err_clean "${ERR}"
     echo "pause_shot_43: PASS"
     rm -f "${SHOT}"
     exit 0

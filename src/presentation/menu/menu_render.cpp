@@ -19,7 +19,11 @@ static constexpr int kDlgSlabW   = 240;
 static constexpr int kDlgPad     = 9;
 static constexpr int kDlgLineH   = 11;
 static constexpr int kDlgHeaderH = 16;
-static constexpr int kDlgNoteH   = 10;   // note line height
+// The note takes the line after the last change row and leaves the buttons
+// room below it.  At 10, with the note 4 px down its line, the note's
+// baseline landed exactly on the buttons' ("Apply settings now." drawn
+// through Apply / Discard on the title menu).
+static constexpr int kDlgNoteH   = 16;   // note line + clearance
 static constexpr int kDlgBtnH    = 14;   // button row height
 static constexpr int kDlgBtnGap  = 8;    // gap between the two buttons
 }  // namespace
@@ -58,8 +62,21 @@ void blend_rect(FrameBuffer& fb, int x, int y, int w, int h, Rgb c, int a) {
 }  // namespace
 
 MenuLayout compute_menu_layout(const Menu& menu, int fb_w, int fb_h) {
-    const int n = static_cast<int>(menu.rows().size());
-    const int line_h = 11, header_h = 16, pad = 9, slab_w = 212;
+    const auto rows = menu.rows();
+    const int n = static_cast<int>(rows.size());
+    const int line_h = 11, header_h = 16, pad = 9;
+    // 212 is the house width.  A row that would not fit it — label, a 16 px
+    // gap and its value, at the classic 8 px glyph advance, plus the 34 px
+    // of pointer and margins — widens the slab, up to the frame less 4 px a
+    // side: the About lines, "Sound card  Sound Blaster".  Every older row
+    // fits 212 by this measure, so no existing menu moves.
+    int slab_w = 212;
+    for (const MenuRow& r : rows) {
+        int w = 34 + 8 * static_cast<int>(r.label.size());
+        if (r.value) w += 16 + 8 * static_cast<int>(r.value->size());
+        slab_w = std::max(slab_w, w);
+    }
+    slab_w = std::min(slab_w, fb_w - 8);
     const int slab_h = pad * 2 + header_h + n * line_h;
     MenuLayout L;
     L.slab_w = slab_w;
@@ -151,6 +168,81 @@ void draw_menu(FrameBuffer& fb, const Menu& menu,
     }
 }
 
+// Anti-aliased VECTOR bone pointer at glyph resolution — the game's
+// score-bone silhouette (shaft + two knobs per end) rebuilt as smooth
+// geometry so it matches the vector font's crispness instead of a
+// nearest-upscaled 13x7 sprite.  Sized from the active cap: ~2 glyphs
+// wide, centred on the selected row, tight against the label.
+static void draw_vector_bone(std::vector<std::uint8_t>& buf, int ow,
+                             int oh, enhance::HdText& font,
+                             int label_px_x, int baseline_y) {
+    const float capf = static_cast<float>(font.cap_px());
+    const float h = capf * 0.72f;          // bone height
+    const float w = h * 1.9f;              // score-bone aspect (25:13)
+    const float cy = static_cast<float>(baseline_y) - capf * 0.42f;
+    const float x1 = static_cast<float>(label_px_x) - capf * 0.45f;
+    const float x0 = x1 - w;
+    const float r = h * 0.30f;             // end-knob radius
+    const float rb = h * 0.20f;            // shaft half-thickness
+    const float ky = h * 0.20f;            // knob vertical offset
+    const float exl = x0 + r, exr = x1 - r;   // knob centres (x)
+    auto sdf = [&](float px, float py) {
+        // Signed distance to the bone silhouette (union of the shaft
+        // capsule and the four end knobs); negative = inside.
+        const float cxc = std::min(std::max(px, exl), exr);
+        float d = std::hypot(px - cxc, py - cy) - rb;   // shaft
+        for (const float kx : {exl, exr})
+            for (const float sygn : {-1.0f, 1.0f})
+                d = std::min(d, std::hypot(px - kx,
+                                           py - (cy + sygn * ky)) - r);
+        return d;
+    };
+    const int lo_x = static_cast<int>(x0 - r - 2);
+    const int hi_x = static_cast<int>(x1 + r + 2);
+    const int lo_y = static_cast<int>(cy - h - 2);
+    const int hi_y = static_cast<int>(cy + h + 2);
+    const float aa = 0.8f;                 // AA band (px)
+    const float ow_px = std::max(1.2f, capf / 12.0f);   // outline width
+    for (int py2 = lo_y; py2 <= hi_y; ++py2) {
+        if (py2 < 0 || py2 >= oh) continue;
+        for (int px2 = lo_x; px2 <= hi_x; ++px2) {
+            if (px2 < 0 || px2 >= ow) continue;
+            const float d = sdf(static_cast<float>(px2) + 0.5f,
+                                static_cast<float>(py2) + 0.5f);
+            if (d > ow_px + aa) continue;
+            // Fill: bone-white with a soft under-shade; outline: dark.
+            float fill_a = std::clamp((0.0f - d) / aa + 1.0f, 0.0f, 1.0f);
+            float line_a =
+                std::clamp((ow_px - d) / aa + 0.0f, 0.0f, 1.0f);
+            std::uint8_t cr, cg, cb;
+            float a;
+            if (fill_a > 0.0f) {
+                // vertical shade: lighter on top like the sprite art
+                const float v = std::clamp(
+                    (static_cast<float>(py2) - (cy - h * 0.5f)) / h, 0.0f,
+                    1.0f);
+                cr = static_cast<std::uint8_t>(232 - 60 * v);
+                cg = static_cast<std::uint8_t>(232 - 60 * v);
+                cb = static_cast<std::uint8_t>(236 - 58 * v);
+                a = fill_a;
+            } else {
+                cr = 16; cg = 18; cb = 24;
+                a = line_a * 0.9f;
+            }
+            if (a <= 0.0f) continue;
+            const std::size_t off =
+                (static_cast<std::size_t>(py2) * ow + px2) * 4;
+            const float ia = 1.0f - a;
+            buf[off] = static_cast<std::uint8_t>(cr * a + buf[off] * ia);
+            buf[off + 1] =
+                static_cast<std::uint8_t>(cg * a + buf[off + 1] * ia);
+            buf[off + 2] =
+                static_cast<std::uint8_t>(cb * a + buf[off + 2] * ia);
+            buf[off + 3] = 255;
+        }
+    }
+}
+
 void draw_menu_vector(std::vector<std::uint8_t>& buf, int ow, int oh,
                       enhance::HdText& font, const Menu& menu,
                       float title_tsec, MenuFrame frame) {
@@ -165,7 +257,7 @@ void draw_menu_vector(std::vector<std::uint8_t>& buf, int ow, int oh,
     // Glyph size follows the FRAME, not the whole canvas.
     const int entry_cap = font.cap_px();
     font.set_cap_px(std::max(1, entry_cap * f.w / ow));
-    const std::string hdr = menu.header();
+    const std::string& hdr = menu.header();
     if (hdr == "OLDUVAI") {
         // The title is the showpiece: bigger (1.7x the menu cap), with a dark
         // charcoal-blood outline so the caveman fire-blood fill reads BOLD and
@@ -183,92 +275,20 @@ void draw_menu_vector(std::vector<std::uint8_t>& buf, int ow, int oh,
                     font.draw(buf, ow, oh, tx + dx, ty + dy, hdr, 18, 6, 6);
             }
         }
-        const auto shade = make_banner_shade("caveman", title_tsec);
-        font.draw_styled(buf, ow, oh, tx, ty, hdr, shade);
-        font.draw_styled(buf, ow, oh, tx + 1, ty, hdr, shade);   // faux-bold
+        const enhance::BannerShader shade("caveman", title_tsec);
+        font.draw_banner(buf, ow, oh, tx, ty, hdr, shade);
+        font.draw_banner(buf, ow, oh, tx + 1, ty, hdr, shade);   // faux-bold
         font.set_cap_px(menu_cap);                       // restore for the rows
     } else {
         const int hdr_x = f.x + (f.w - font.measure(hdr)) / 2;
         font.draw(buf, ow, oh, hdr_x, sy(L.header_baseline), hdr, 127, 209, 255);
     }
-    // Anti-aliased VECTOR bone pointer at glyph resolution — the game's
-    // score-bone silhouette (shaft + two knobs per end) rebuilt as smooth
-    // geometry so it matches the vector font's crispness instead of a
-    // nearest-upscaled 13x7 sprite.  Sized from the active cap: ~2 glyphs
-    // wide, centred on the selected row, tight against the label.
-    auto draw_vector_bone = [&](int label_px_x, int baseline_y) {
-        const float capf = static_cast<float>(font.cap_px());
-        const float h = capf * 0.72f;          // bone height
-        const float w = h * 1.9f;              // score-bone aspect (25:13)
-        const float cy = static_cast<float>(baseline_y) - capf * 0.42f;
-        const float x1 = static_cast<float>(label_px_x) - capf * 0.45f;
-        const float x0 = x1 - w;
-        const float r = h * 0.30f;             // end-knob radius
-        const float rb = h * 0.20f;            // shaft half-thickness
-        const float ky = h * 0.20f;            // knob vertical offset
-        const float exl = x0 + r, exr = x1 - r;   // knob centres (x)
-        auto sdf = [&](float px, float py) {
-            // Signed distance to the bone silhouette (union of the shaft
-            // capsule and the four end knobs); negative = inside.
-            const float cxc = std::min(std::max(px, exl), exr);
-            float d = std::hypot(px - cxc, py - cy) - rb;   // shaft
-            for (const float kx : {exl, exr})
-                for (const float sygn : {-1.0f, 1.0f})
-                    d = std::min(d, std::hypot(px - kx,
-                                               py - (cy + sygn * ky)) - r);
-            return d;
-        };
-        const int lo_x = static_cast<int>(x0 - r - 2);
-        const int hi_x = static_cast<int>(x1 + r + 2);
-        const int lo_y = static_cast<int>(cy - h - 2);
-        const int hi_y = static_cast<int>(cy + h + 2);
-        const float aa = 0.8f;                 // AA band (px)
-        const float ow_px = std::max(1.2f, capf / 12.0f);   // outline width
-        for (int py2 = lo_y; py2 <= hi_y; ++py2) {
-            if (py2 < 0 || py2 >= oh) continue;
-            for (int px2 = lo_x; px2 <= hi_x; ++px2) {
-                if (px2 < 0 || px2 >= ow) continue;
-                const float d = sdf(static_cast<float>(px2) + 0.5f,
-                                    static_cast<float>(py2) + 0.5f);
-                if (d > ow_px + aa) continue;
-                // Fill: bone-white with a soft under-shade; outline: dark.
-                float fill_a = std::clamp((0.0f - d) / aa + 1.0f, 0.0f, 1.0f);
-                float line_a =
-                    std::clamp((ow_px - d) / aa + 0.0f, 0.0f, 1.0f);
-                std::uint8_t cr, cg, cb;
-                float a;
-                if (fill_a > 0.0f) {
-                    // vertical shade: lighter on top like the sprite art
-                    const float v = std::clamp(
-                        (static_cast<float>(py2) - (cy - h * 0.5f)) / h, 0.0f,
-                        1.0f);
-                    cr = static_cast<std::uint8_t>(232 - 60 * v);
-                    cg = static_cast<std::uint8_t>(232 - 60 * v);
-                    cb = static_cast<std::uint8_t>(236 - 58 * v);
-                    a = fill_a;
-                } else {
-                    cr = 16; cg = 18; cb = 24;
-                    a = line_a * 0.9f;
-                }
-                if (a <= 0.0f) continue;
-                const std::size_t off =
-                    (static_cast<std::size_t>(py2) * ow + px2) * 4;
-                const float ia = 1.0f - a;
-                buf[off] = static_cast<std::uint8_t>(cr * a + buf[off] * ia);
-                buf[off + 1] =
-                    static_cast<std::uint8_t>(cg * a + buf[off + 1] * ia);
-                buf[off + 2] =
-                    static_cast<std::uint8_t>(cb * a + buf[off + 2] * ia);
-                buf[off + 3] = 255;
-            }
-        }
-    };
     const int cursor = menu.cursor_index();
     for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
         const MenuRow& r = rows[i];
         const bool sel = (i == cursor);
         const int by = sy(L.row0_baseline + i * L.row_h);
-        if (sel) draw_vector_bone(sx(L.label_x), by);
+        if (sel) draw_vector_bone(buf, ow, oh, font, sx(L.label_x), by);
         font.draw(buf, ow, oh, sx(L.label_x), by, r.label,
                   sel ? 255 : 205, sel ? 255 : 214, sel ? 255 : 224);
         if (r.value) {
@@ -302,7 +322,7 @@ void draw_confirm(FrameBuffer& fb, const ConfirmDialog& dlg,
 
     // Button highlight: accent-colored background on the selected button cell.
     // Two buttons side by side, centred in the slab.
-    //   [ Apply ]   [ Discard ]
+    //   Apply   Discard   (or No  Yes for a question)
     // Each cell is 80px wide; total 160px; centred in 240px → 40px margin each.
     const int btn_y    = slab_y + slab_h - kDlgPad - kDlgBtnH + 2;
     const int btn_w    = 80;
@@ -338,7 +358,7 @@ void draw_confirm(FrameBuffer& fb, const ConfirmDialog& dlg,
     // Note (dimmed, centred).
     if (has_note) {
         const std::string& note = dlg.note();
-        const int note_y = row0_y + n_changes * kDlgLineH + 4;
+        const int note_y = row0_y + n_changes * kDlgLineH;
         draw_text_rgb(fb, charset,
                       slab_x + (kDlgSlabW - text_width(charset, note)) / 2,
                       note_y, note, kHint);
@@ -347,8 +367,8 @@ void draw_confirm(FrameBuffer& fb, const ConfirmDialog& dlg,
     // Buttons.
     const Rgb apply_col   = dlg.apply_selected()  ? kSelected : kText;
     const Rgb discard_col = !dlg.apply_selected() ? kSelected : kText;
-    const std::string apply_label   = "[ Apply ]";
-    const std::string discard_label = "[ Discard ]";
+    const std::string apply_label   = dlg.left_label();
+    const std::string discard_label = dlg.right_label();
     draw_text_rgb(fb, charset,
                   btn0_x + (btn_w - text_width(charset, apply_label)) / 2,
                   btn_y + 8, apply_label, apply_col);
@@ -396,7 +416,7 @@ void draw_confirm_vector(std::vector<std::uint8_t>& buf, int ow, int oh,
     // Note.
     if (has_note) {
         const std::string& note = dlg.note();
-        const int note_y = row0_y + n_changes * kDlgLineH + 4;
+        const int note_y = row0_y + n_changes * kDlgLineH;
         font.draw(buf, ow, oh,
                   sx(slab_x) + (kDlgSlabW * f.w / 320 - font.measure(note)) / 2,
                   sy(note_y), note, 125, 135, 148);
@@ -408,8 +428,8 @@ void draw_confirm_vector(std::vector<std::uint8_t>& buf, int ow, int oh,
     const int btn_area = btn_w * 2 + kDlgBtnGap;
     const int btn0_x   = slab_x + (kDlgSlabW - btn_area) / 2;
     const int btn1_x   = btn0_x + btn_w + kDlgBtnGap;
-    const std::string apply_label   = "[ Apply ]";
-    const std::string discard_label = "[ Discard ]";
+    const std::string apply_label   = dlg.left_label();
+    const std::string discard_label = dlg.right_label();
     const bool as = dlg.apply_selected();
     font.draw(buf, ow, oh,
               sx(btn0_x) + (btn_w * f.w / 320 - font.measure(apply_label)) / 2,

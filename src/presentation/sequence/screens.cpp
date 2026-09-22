@@ -4,6 +4,7 @@
 #include "presentation/sequence/screens.hpp"
 
 #include <SDL.h>
+#include <algorithm>
 #include <cstdio>
 
 #include "enhance/hd_text.hpp"
@@ -153,6 +154,17 @@ void apply_fade(FrameBuffer& dst, const FrameBuffer& src, double t) {
     });
 }
 
+bool fade_to_black(const FrameBuffer& from, const PresentFn& present,
+                   const std::function<void(const FrameBuffer&)>& on_frame) {
+    FrameBuffer work{from.w, from.h};
+    for (int f = 0; f <= kFadeFrames; ++f) {
+        apply_fade(work, from, static_cast<double>(f) / kFadeFrames);
+        if (on_frame) on_frame(work);
+        if (!present(work)) return false;
+    }
+    return true;
+}
+
 // ── show_loading_screen ──────────────────────────────────────────────────────
 
 bool show_loading_screen(const FrameBuffer* from, int display_level,
@@ -233,13 +245,8 @@ bool show_loading_screen(const FrameBuffer* from, int display_level,
     draw_centered(loading, charset, pal, 0x60, "Please Wait");
     draw_centered(loading, charset, pal, 0x70, line2);
 
+    if (from != nullptr && !fade_to_black(*from, present)) return false;
     FrameBuffer work;
-    if (from != nullptr) {              // fade current → black
-        for (int f = 0; f <= kFadeFrames; ++f) {
-            apply_fade(work, *from, static_cast<double>(f) / kFadeFrames);
-            if (!present(work)) return false;
-        }
-    }
     for (int f = kFadeFrames; f >= 0; --f) {   // fade in the loading text
         apply_fade(work, loading, static_cast<double>(f) / kFadeFrames);
         if (!present(work)) return false;
@@ -247,11 +254,7 @@ bool show_loading_screen(const FrameBuffer* from, int display_level,
     for (int f = 0; f < 9; ++f) {              // hold ~0.5 s
         if (!present(loading)) return false;
     }
-    for (int f = 0; f <= kFadeFrames; ++f) {   // fade out to black
-        apply_fade(work, loading, static_cast<double>(f) / kFadeFrames);
-        if (!present(work)) return false;
-    }
-    return true;
+    return fade_to_black(loading, present);
 }
 
 // ── show_pc1_screen ──────────────────────────────────────────────────────────
@@ -281,25 +284,17 @@ bool show_pc1_screen(const formats::Pc1Image& img, int hold_frames,
         if (!present(fb)) return false;
         if (skip && skip()) break;
     }
-    if (fade_out) {
-        for (int f = 0; f <= kFadeFrames; ++f) {
-            apply_fade(work, fb, static_cast<double>(f) / kFadeFrames);
-            if (!present(work)) return false;
-        }
-    }
-    return true;
+    return !fade_out || fade_to_black(fb, present);
 }
 
-// ── show_score_tally (boss overload) ────────────────────────────────────────
+// ── show_score_tally ────────────────────────────────────────────────────────
 //
-// Takes lives/score by reference directly — used for boss levels where the
-// caller holds a BossPlayerState (no SystemsState wrapper).
-// EXE: Level_EndScreen(N,500) at 23cf:0fc9 / 24cc:0818 / 254f:0620.
+// One tally for every level (see the header for the EXE call sites).
 
 bool show_score_tally(int& lives, long& score, int display_level,
                       int bonus, const std::vector<formats::Sprite>& charset,
                       const std::vector<formats::Rgb>& pal,
-                      const PresentFn& present, const SkipFn& /*skip*/,
+                      const PresentFn& present,
                       const TextScreenHd& hd, const TallyAudio& sfx) {
     // Odd display levels award an extra life before the tally.
     if (display_level & 1) ++lives;
@@ -354,6 +349,15 @@ bool show_score_tally(int& lives, long& score, int display_level,
     // numbers (no %6d padding) like the reference: "<bonus>  x  10",
     // "<lives>  x  1000", "<score:06>".  render_bitmap() keeps the EXE-centred
     // "%6d" strings (classic path unchanged).
+    // The starting counts with every digit as '8' (the widest digit in any
+    // font the overlay loads) — the counts only fall from here.
+    const auto widest = [](int v, const char* suffix) {
+        std::string out = std::to_string(v);
+        for (char& c : out) if (c >= '0' && c <= '9') c = '8';
+        return out + suffix;
+    };
+    const std::string reserve_bonus = widest(bonus_remaining, "  x  10");
+    const std::string reserve_lives = widest(lives_remaining, "  x  1000");
     auto build_rows = [&]() -> std::vector<HdTextRow> {
         char buf[40];
         std::vector<HdTextRow> r;
@@ -373,21 +377,30 @@ bool show_score_tally(int& lives, long& score, int display_level,
         r.push_back({144, "SCORE:", 1});
         std::snprintf(buf, sizeof buf, "%06ld", std::min(score, 999999L));
         r.push_back({144, buf, 2});
+        // Width reservations (align 3, measured, never drawn): the widest the
+        // two counting values will be during this tally.  Without them the
+        // value column followed the CURRENT bonus width — "390  x  10" is
+        // wider than the "888888" floor — so the whole block slid sideways
+        // as the bonus counted down.
+        r.push_back({0, reserve_bonus, 3});
+        r.push_back({0, reserve_lives, 3});
         return r;
     };
 
     // Present one tally frame for the current state.  HD: upscale the black
     // base (no text) and pass the rows for the output-res overlay.
+    // The HD tally scene is plain black: present_hd takes an empty buffer for
+    // that and clears, instead of this upscaling a black frame and uploading
+    // it on every counting step.
+    const std::vector<std::uint8_t> hd_black;
     auto present_state = [&]() -> bool {
         if (!hd_on) {
             render_bitmap();
             return present(fb);
         }
-        fill_base();                               // black base, no bitmap text
-        std::vector<std::uint8_t> hd_px = hd.upscale(fb.px);
         const int hw = 320 * hd.scale;
         const int hh = 200 * hd.scale;
-        return hd.present_hd(hd_px, hw, hh, build_rows());
+        return hd.present_hd(hd_black, hw, hh, build_rows());
     };
 
     // Wait up to `frames`, presenting the current (static) state each frame,
@@ -395,8 +408,7 @@ bool show_score_tally(int& lives, long& score, int display_level,
     // bitmap fb; HD re-presents the composed HD scene + overlay each frame.
     auto pause = [&](int frames) -> bool {
         if (!hd_on) return tally_pause(present, fb, frames);
-        fill_base();
-        std::vector<std::uint8_t> hd_px = hd.upscale(fb.px);
+        const std::vector<std::uint8_t>& hd_px = hd_black;
         const int hw = 320 * hd.scale;
         const int hh = 200 * hd.scale;
         const std::vector<HdTextRow> row_list = build_rows();
@@ -467,18 +479,6 @@ bool show_score_tally(int& lives, long& score, int display_level,
     // divergence, same ruling class as the tally fonts.  Audio-only.
     if (sfx.audio != nullptr) sfx.audio->fade_out_music();
     return true;
-}
-
-// ── show_score_tally (SystemsState overload) ─────────────────────────────────
-
-bool show_score_tally(systems::SystemsState& state, int display_level,
-                      int bonus, const std::vector<formats::Sprite>& charset,
-                      const std::vector<formats::Rgb>& pal,
-                      const PresentFn& present, const SkipFn& skip,
-                      const TextScreenHd& hd, const TallyAudio& sfx) {
-    // Delegate to the lives/score-reference overload.
-    return show_score_tally(state.player.lives, state.score, display_level,
-                            bonus, charset, pal, present, skip, hd, sfx);
 }
 
 }  // namespace olduvai::presentation

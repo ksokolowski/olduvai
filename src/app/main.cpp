@@ -90,7 +90,10 @@ int render_audio_command(const olduvai::app::CliArgs& args,
         ps.music_device, ps.rom_dir, ps.soundfont, ps.sfx_backend, rate, 0,
         "", /*offline=*/true,
         ps.mt32_model.empty() ? "auto" : ps.mt32_model);
-    if (!audio.music_available()) {
+    // A fallback is not the backend that was asked for: rendering AdLib in
+    // place of a missing GM SoundFont fed the GM fixture to the wrong synth
+    // and failed audio_render on the Linux CI container (1f34fef).
+    if (!audio.music_available() || audio.music_fell_back()) {
         std::fprintf(stderr,
             "render-audio: no synth backend for '%s' — SKIP "
             "(MT-32 needs ROMs; GM needs a SoundFont)\n",
@@ -174,7 +177,10 @@ int render_sfx_command(const olduvai::app::CliArgs& args,
                     dot == std::string::npos ? out : out.substr(0, dot);
                 const std::string ext =
                     dot == std::string::npos ? "" : out.substr(dot);
-                out = stem + "_" + id + ext;
+                out = stem;
+                out += "_";
+                out += id;
+                out += ext;
             }
             olduvai::presentation::write_wav16(out, pcm, rate, 2);
             std::printf("render-sfx: %s -> %s\n", id.c_str(), out.c_str());
@@ -246,13 +252,21 @@ void print_usage() {
         "                          black bars; 4:3 = CRT-like vertical stretch;\n"
         "                          stretch = fill window, no bars; widescreen\n"
         "                          (enhanced only) peeks adjacent screens into\n"
-        "                          the side margins.\n"
+        "                          the side margins — its default window takes\n"
+        "                          the desktop's shape, since a 16:10 one has\n"
+        "                          no margins to show.\n"
         "      --autofire [speed]  Hold the attack key to keep swinging (no\n"
         "                          mashing): slow|medium|fast (bare = fast;\n"
         "                          fast matches the boss-fight feel).  Saved\n"
         "                          to config; --no-autofire turns it off.\n"
         "\n"
         "Audio:\n"
+        "      --sound-card <c>    The sound setup, by the card a 1991 player\n"
+        "                          knew: auto|sb (Sound Blaster: FM music,\n"
+        "                          digital effects)|adlib (FM music and\n"
+        "                          effects)|mt32|gm|midi (external)|off.  Sets\n"
+        "                          --music-device and --sfx-backend; either\n"
+        "                          one given as well wins.\n"
         "      --music-device <d>  Music backend: auto|mt32-builtin|gm-builtin|opl|\n"
         "                          none|host-midi|gm-host (default: auto).  host-midi\n"
         "                          (alias mt32) streams raw MT-32 MIDI to a real MIDI\n"
@@ -263,7 +277,8 @@ void print_usage() {
         "      --midi-port <name>  Host MIDI OUT port for host-midi / gm-host\n"
         "                          (default: first port, preferring MT-32/MUNT).\n"
         "      --list-midi-ports   List available MIDI OUT ports and exit.\n"
-        "      --sfx-backend <b>   SFX backend: auto|opl|sb-dac|mt32-sfx|gm-sfx|midi\n"
+        "      --sfx-backend <b>   SFX backend: auto|opl|sb-dac|mt32-sfx|gm-sfx|midi|\n"
+        "                          none\n"
         "                          (default: auto — pairs to the music device).\n"
         "      --rom-dir <dir>     MT-32/CM-32L ROM directory (mt32-builtin).\n"
         "      --soundfont <file>  SoundFont (.sf2) for gm-builtin.\n"
@@ -285,8 +300,8 @@ void print_usage() {
         "      --banner-fx <e>     Enhanced banner colour effect: caveman|fire|\n"
         "                          rainbow|gold|pulse (default: caveman).\n"
         "      --window <WxH>      Force window pixel size, e.g. 1680x720 (~21:9)\n"
-        "                          to simulate an ultrawide widescreen viewport.\n"
-        "                          Use with --aspect widescreen.\n"
+        "                          to simulate an ultrawide widescreen viewport\n"
+        "                          on a narrower display.\n"
         "      --start-screen <n>  DEBUG: enter a surface level at screen n (e.g.\n"
         "                          the last screen) instead of 0.  Clamped to the\n"
         "                          level's screen count.\n"
@@ -335,6 +350,113 @@ void print_usage() {
         "      --render-audio-secs <s>     Render duration (default: 2).\n"
         "      --render-sfx <id|all>   Render an AdLib sound effect the way the\n"
         "                              engine plays it; needs --game-dir.\n");
+}
+
+// Leaf command: list the host MIDI OUT ports, then exit.  Needs no game
+// files.  The body's free-name probe found ZERO names to carry, so it had
+// no business staying in main — the other standalone verbs (§3.10b) are all
+// the same shape.  When this build has no RtMidi (Linux without ALSA, or
+// the option off), report the feature as unavailable rather than crashing.
+int list_midi_ports_command() {
+#ifdef OLDUVAI_HAVE_SDL
+    if (!olduvai::presentation::host_midi_available()) {
+        std::printf("Host MIDI is not available in this build.\n");
+        return 0;
+    }
+    const std::vector<std::string> ports =
+        olduvai::presentation::host_midi_list_ports();
+    if (ports.empty()) {
+        std::printf(
+            "No MIDI output ports found.  Connect a MIDI device, run "
+            "MUNT, or create a virtual MIDI port (CoreMIDI / ALSA seq).\n");
+    } else {
+        std::printf("Available MIDI output ports:\n");
+        for (std::size_t i = 0; i < ports.size(); ++i) {
+            std::printf("  %zu: %s\n", i, ports[i].c_str());
+        }
+    }
+    return 0;
+#else
+    std::printf("Host MIDI is not available in this build "
+                "(no presentation layer).\n");
+    return 0;
+#endif
+}
+
+// Game-directory resolution for the interactive launch (§3.12).  Free-name
+// probe: 2 (args, ps) — both stay parameters.
+void resolve_launch_game_dir(olduvai::app::CliArgs& args,
+                             const olduvai::app::PlaySettings& ps) {
+    // Map a GOG install root (game files under data/PREH) to the directory
+    // actually holding the files.  A no-op for plain directories.  Done after
+    // --save-config so the config keeps the path the user gave.
+    args.game_dir = olduvai::prepare::resolve_game_dir(args.game_dir);
+
+    // With NO configured directory (no --game-dir, none in the config) and
+    // no game files where we stand, probe the machine's GOG install —
+    // a fresh GOG copy then plays with plain `olduvai --play`.  An explicit
+    // directory, even a wrong one, is always respected (clear error beats
+    // silently playing from somewhere else).
+    if (!ps.cli.game_dir && !ps.config_game_dir &&
+        !olduvai::prepare::detect_game_files(args.game_dir).complete()) {
+        for (const auto& cand :
+             olduvai::prepare::default_game_dir_candidates()) {
+            const olduvai::prepare::GameFiles gf =
+                olduvai::prepare::detect_game_files(cand);
+            if (gf.complete()) {
+                args.game_dir = gf.dir;   // detection already resolved data/PREH
+                std::printf("Using game files found at %s\n",
+                            args.game_dir.string().c_str());
+                break;
+            }
+        }
+    }
+}
+
+// First-run gate: confirm a complete game-file set, printing the missing-
+// files report (and on a GUI launch raising the folder-picker dialog) until
+// one is found.  Returns true once the set is complete.  Free-name probe:
+// 2 (args, ps).
+bool ensure_launch_game_files(olduvai::app::CliArgs& args,
+                              olduvai::app::PlaySettings& ps) {
+    olduvai::prepare::GameFiles gf =
+        olduvai::prepare::detect_game_files(args.game_dir);
+    if (!gf.complete()) {
+        // Always emit the report to the console — the fallback trail
+        // for terminals, logs and debugging even when the GUI dialog
+        // below handles the user-facing side.
+        std::printf("Olduvai needs your original Prehistorik game files.\n");
+        std::printf("Missing in %s:\n%s",
+                    args.game_dir.string().c_str(), gf.problems().c_str());
+        std::printf("Copy them there (or pass --game-dir) and run again.\n");
+        std::fflush(stdout);
+#ifdef OLDUVAI_HAVE_SDL
+        // GUI session: additionally raise the first-run dialog (folder
+        // picker + GOG link).  A validated pick is persisted to
+        // play.json and adopted for this run.
+        if (olduvai::app::launched_from_gui()) {
+            std::string chosen_preset;
+            const auto picked = olduvai::app::first_run_dialog(
+                args.game_dir, gf.problems(), &chosen_preset,
+                ps.profile_family);
+            if (!picked) return false;            // user quit
+            args.game_dir = *picked;
+            // Adopt the dialog's presentation choice for THIS session
+            // too — it is already persisted for the next launch, but the
+            // config merge above ran before the dialog existed (the
+            // "chose Enhanced HD, got classic DOS" first-run report).
+            olduvai::app::adopt_preset(ps, args.profile, chosen_preset);
+            ps.style_answered = true;   // the dialog always asks
+            gf = olduvai::prepare::detect_game_files(args.game_dir);
+            if (gf.complete()) {
+                std::printf("Using game folder %s (saved to settings).\n",
+                            args.game_dir.string().c_str());
+            }
+        }
+#endif
+        if (!gf.complete()) return false;
+    }
+    return true;
 }
 
 }  // namespace
@@ -424,58 +546,11 @@ int main(int argc, char** argv) {
     // the --music-device host-midi path can target, then exit.  Needs no game
     // files.  When this build has no RtMidi (Linux without ALSA, or the option
     // off), report the feature as unavailable rather than crashing.
-    if (args.do_list_midi_ports) {
-#ifdef OLDUVAI_HAVE_SDL
-        if (!olduvai::presentation::host_midi_available()) {
-            std::printf("Host MIDI is not available in this build.\n");
-            return 0;
-        }
-        const std::vector<std::string> ports =
-            olduvai::presentation::host_midi_list_ports();
-        if (ports.empty()) {
-            std::printf(
-                "No MIDI output ports found.  Connect a MIDI device, run "
-                "MUNT, or create a virtual MIDI port (CoreMIDI / ALSA seq).\n");
-        } else {
-            std::printf("Available MIDI output ports:\n");
-            for (std::size_t i = 0; i < ports.size(); ++i) {
-                std::printf("  %zu: %s\n", i, ports[i].c_str());
-            }
-        }
-        return 0;
-#else
-        std::printf("Host MIDI is not available in this build "
-                    "(no presentation layer).\n");
-        return 0;
-#endif
-    }
+    if (args.do_list_midi_ports) return list_midi_ports_command();
 
     // ── game directory resolution ────────────────────────────────────────
-    // (After the standalone commands that need no game files.)  Map a GOG
-    // install root (game files under data/PREH) to the directory actually
-    // holding the files.  A no-op for plain directories.  Done after
-    // --save-config so the config keeps the path the user gave.
-    args.game_dir = olduvai::prepare::resolve_game_dir(args.game_dir);
-
-    // With NO configured directory (no --game-dir, none in the config) and
-    // no game files where we stand, probe the machine's GOG install —
-    // a fresh GOG copy then plays with plain `olduvai --play`.  An explicit
-    // directory, even a wrong one, is always respected (clear error beats
-    // silently playing from somewhere else).
-    if (!ps.cli.game_dir && !ps.config_game_dir &&
-        !olduvai::prepare::detect_game_files(args.game_dir).complete()) {
-        for (const auto& cand :
-             olduvai::prepare::default_game_dir_candidates()) {
-            const olduvai::prepare::GameFiles gf =
-                olduvai::prepare::detect_game_files(cand);
-            if (gf.complete()) {
-                args.game_dir = gf.dir;   // detection already resolved data/PREH
-                std::printf("Using game files found at %s\n",
-                            args.game_dir.string().c_str());
-                break;
-            }
-        }
-    }
+    // (After the standalone commands that need no game files.)
+    resolve_launch_game_dir(args, ps);
 
     // ── Cache commands ───────────────────────────────────────────────────
     // These run without launching the game (and exit when done).  Purge needs
@@ -487,45 +562,7 @@ int main(int argc, char** argv) {
     // Detection accepts PREH.SQZ in place of HISTORIK.EXE (GOG / CD
     // releases) — the manual per-name loop would wrongly report those
     // copies as incomplete.
-    {
-        olduvai::prepare::GameFiles gf =
-            olduvai::prepare::detect_game_files(args.game_dir);
-        if (!gf.complete()) {
-            // Always emit the report to the console — the fallback trail
-            // for terminals, logs and debugging even when the GUI dialog
-            // below handles the user-facing side.
-            std::printf("Olduvai needs your original Prehistorik game files.\n");
-            std::printf("Missing in %s:\n%s",
-                        args.game_dir.string().c_str(), gf.problems().c_str());
-            std::printf("Copy them there (or pass --game-dir) and run again.\n");
-            std::fflush(stdout);
-#ifdef OLDUVAI_HAVE_SDL
-            // GUI session: additionally raise the first-run dialog (folder
-            // picker + GOG link).  A validated pick is persisted to
-            // play.json and adopted for this run.
-            if (olduvai::app::launched_from_gui()) {
-                std::string chosen_preset;
-                const auto picked = olduvai::app::first_run_dialog(
-                    args.game_dir, gf.problems(), &chosen_preset,
-                    ps.profile_family);
-                if (!picked) return 1;                 // user quit
-                args.game_dir = *picked;
-                // Adopt the dialog's presentation choice for THIS session
-                // too — it is already persisted for the next launch, but the
-                // config merge above ran before the dialog existed (the
-                // "chose Enhanced HD, got classic DOS" first-run report).
-                olduvai::app::adopt_preset(ps, args.profile, chosen_preset);
-                ps.style_answered = true;   // the dialog always asks
-                gf = olduvai::prepare::detect_game_files(args.game_dir);
-                if (gf.complete()) {
-                    std::printf("Using game folder %s (saved to settings).\n",
-                                args.game_dir.string().c_str());
-                }
-            }
-#endif
-            if (!gf.complete()) return 1;
-        }
-    }
+    if (!ensure_launch_game_files(args, ps)) return 1;
 
     if (args.play) {
 #ifdef OLDUVAI_HAVE_SDL

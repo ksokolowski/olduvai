@@ -6,6 +6,7 @@
 // the compose helpers → ctx_ callbacks).  The block comments moved with the
 // code they document.
 
+#include "formats/hash64.hpp"
 #include "presentation/render/widescreen_presenter.hpp"
 
 #include <algorithm>
@@ -104,11 +105,29 @@ int WidescreenPresenter::compute_margin(int ow, int oh) const {
     return boss_ws_margin(ow, oh, fm);
 }
 
+// Say so, once, when widescreen was asked for and has nothing to show: the
+// margin comes from the OUTPUT aspect, so a 16:10 window (the game's own
+// aspect, and the default one) computes it to 0 — silently, until this line
+// (BACKLOG §3.25).  Not a warning: it is the honest answer on a display that
+// is 16:10 or narrower.
+void WidescreenPresenter::note_no_margin_(int ow, int oh) {
+    if (active_ || said_no_margin_ || *ctx_.aspect != "widescreen" || !hd())
+        return;
+    said_no_margin_ = true;
+    std::fprintf(stderr,
+                 "widescreen: this window is %dx%d (aspect %.2f) — at or "
+                 "below the game's own 16:10, so there are no side margins "
+                 "to show.  Try a wider window (--window 1680x720 is ~21:9) "
+                 "or fullscreen on a wider display.\n",
+                 ow, oh, oh > 0 ? static_cast<double>(ow) / oh : 0.0);
+}
+
 WidescreenPresenter::WidescreenPresenter(WidescreenShellCtx ctx)
     : ctx_(std::move(ctx)) {
     SDL_GetRendererOutputSize(ren(), &ow0_, &oh0_);
     margin_ = compute_margin(ow0_, oh0_);
     active_ = (*ctx_.aspect == "widescreen") && hd() && margin_ > 0;
+    note_no_margin_(ow0_, oh0_);
     native_w_ = 320 + 2 * margin_;   // wide native width
     // The classic streaming texture (owned by the shell) stays 320*hd_scale
     // wide for EVERY non-widescreen path — unchanged.  Widescreen present
@@ -173,8 +192,8 @@ std::uint64_t WidescreenPresenter::overlay_key(
     const std::uint64_t bk = ctx_.banners_key ? ctx_.banners_key()
                                               : TextOverlay::kAlwaysRedraw;
     if (bk == TextOverlay::kAlwaysRedraw) return TextOverlay::kAlwaysRedraw;
-    std::uint64_t h = 1469598103934665603ull;
-    const auto mix = [&h](std::uint64_t v) { h = (h ^ v) * 1099511628211ull; };
+    formats::Hash64 key;
+    const auto mix = [&key](std::uint64_t v) { key.mix(v); };
     mix(bk);
     mix(static_cast<std::uint64_t>(ow));
     mix(static_cast<std::uint64_t>(oh));
@@ -190,6 +209,7 @@ std::uint64_t WidescreenPresenter::overlay_key(
             static_cast<std::uint64_t>(t.b));
     }
     // Never collide with the kAlwaysRedraw sentinel.
+    const std::uint64_t h = key.value();
     return h == TextOverlay::kAlwaysRedraw ? 1ull : h;
 }
 
@@ -297,6 +317,7 @@ void WidescreenPresenter::rebuild_if_resized() {
                                       200 * hd_scale());
     }
     active_ = (*ctx_.aspect == "widescreen") && hd() && margin_ > 0;
+    note_no_margin_(ow, oh);
     // Active → wide canvas fills the output; inactive (margin 0 → 16:10
     // display) → the aspect_logical fallback.  Keep SDL's logical size and
     // the overlay-restore vars in lockstep.

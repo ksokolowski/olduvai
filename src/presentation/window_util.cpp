@@ -117,6 +117,17 @@ int desktop_integer_scale(int logical_w, int logical_h) {
     return k < 1 ? 1 : k;
 }
 
+int widescreen_default_w(const std::string& aspect, int base_w, int win_h,
+                         double desktop_ratio) {
+    if (aspect != "widescreen" || win_h <= 0 || desktop_ratio <= 0.0)
+        return base_w;
+    // 2.8 is where boss_ws_margin's 120-column cap bites: past it there is no
+    // more arena to show, so a wider window would only letterbox.
+    if (desktop_ratio > 2.8) desktop_ratio = 2.8;
+    const int w = static_cast<int>(win_h * desktop_ratio + 0.5);
+    return w > base_w ? w : base_w;   // never NARROWER than the DOS window
+}
+
 ScaledWindow create_scaled_window(const char* title, int logical_w,
                                   int logical_h, bool software, bool vsync,
                                   const std::string& aspect, int win_w,
@@ -127,8 +138,25 @@ ScaledWindow create_scaled_window(const char* title, int logical_w,
     // ultrawide viewport on a non-ultrawide panel for widescreen testing);
     // otherwise the integer-scaled default.  RESIZABLE so the aspect can also be
     // dragged at runtime (rebuild_ws_if_resized recomputes the margin).
-    const int win_px_w = win_w > 0 ? win_w : logical_w * k;
     const int win_px_h = win_h > 0 ? win_h : logical_h * k;
+    int win_px_w = win_w > 0 ? win_w : logical_w * k;
+    if (win_w <= 0 && aspect == "widescreen") {
+        // --aspect widescreen with no --window: give it a window it can
+        // actually be widescreen in (§3.25).  Only this case is touched —
+        // the integer-scaled default above is what every other aspect gets,
+        // desktop bounds included (clamping it to the desktop width here
+        // shrank the 1280 default to the headless driver's 1024 and failed
+        // first_run / reinit_smoke).
+        SDL_Rect usable{0, 0, 0, 0};
+        double ratio = 0.0;
+        if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && usable.h > 0)
+            ratio = static_cast<double>(usable.w) / usable.h;
+        const int wide = widescreen_default_w(aspect, win_px_w, win_px_h, ratio);
+        // Never wider than the desktop, but never narrower than the default.
+        win_px_w = (usable.w > 0 && wide > usable.w)
+                       ? (usable.w > win_px_w ? usable.w : win_px_w)
+                       : wide;
+    }
     ScaledWindow sw;
     // ALLOW_HIGHDPI so SDL_GetRendererOutputSize reports TRUE physical pixels
     // on HiDPI/Retina displays (e.g. 2560x1600 backing a 1280x800-point

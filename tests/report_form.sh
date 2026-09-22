@@ -21,7 +21,10 @@ set -eu
 GAME_DIR="${OLDUVAI_GAME_DATA:-${1:-$(dirname "$0")/../game_data}}"
 GAME_DIR=$(cd "${GAME_DIR}" 2>/dev/null && pwd || echo "${GAME_DIR}")
 BINARY="${2:-$(dirname "$0")/../build/release/olduvai}"
-case "${BINARY}" in /*) ;; *) BINARY="$(pwd)/${BINARY}" ;; esac
+# Absolute is `/...` OR a drive-letter path: on Windows ctest passes
+# C:/.../olduvai, and prefixing $(pwd) to that made the binary "not found"
+# (a silent SKIP until CI got game files on Windows, 2026-09-22).
+case "${BINARY}" in /*|[A-Za-z]:[/\\]*) ;; *) BINARY="$(pwd)/${BINARY}" ;; esac
 FIX="$(cd "$(dirname "$0")/fixtures" && pwd)"
 SKIP=77
 
@@ -114,11 +117,14 @@ if [ -n "$(ls -d "${WORK}"/bug_reports/*/ 2>/dev/null)" ]; then
 fi
 
 # ── 3. default root: no OLDUVAI_BUG_DIR → <home>/olduvai/bug_reports ──
-# (HOME points into the workdir so the tester's real home stays untouched.)
+# (HOME points into the workdir so the tester's real home stays untouched —
+# and USERPROFILE too, which is the home the engine reads on Windows.  With
+# only HOME set, a Windows run wrote the report into the runner account's
+# real profile and this walk found nothing, 2026-09-22.)
 OUT="${WORK}/report_home"
 mkdir -p "${OUT}"
 ( cd "${WORK}" &&
-  HOME="${WORK}/home" XDG_CONFIG_HOME="${WORK}/cfg" \
+  HOME="${WORK}/home" USERPROFILE="${WORK}/home" XDG_CONFIG_HOME="${WORK}/cfg" \
   OLDUVAI_MENU_SCRIPT="wait wait f5 esc enter" \
   OLDUVAI_MENU_SCRIPT_DIR="${OUT}" timeout 60 \
   "${BINARY}" --play --level 1 --render-scale 1 --window 640x400 \

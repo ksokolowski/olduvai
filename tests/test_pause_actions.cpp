@@ -34,6 +34,7 @@ struct Rig {
     bool want_load = false;
     bool god_active = false;
     int want_warp = 0;
+    ConfirmDialog confirm;
     PauseActionsDeps deps;
     MenuActionTable actions;
 
@@ -41,7 +42,8 @@ struct Rig {
         deps = {/*g=*/nullptr,     &replay,       &bind,       &opts,
                 &out_load,         &pause_open,   &abort_to_title,
                 &want_quit_program, &want_restart, &want_load,
-                &god_active,       &want_warp,    /*display_level=*/1};
+                &god_active,       &want_warp,    /*display_level=*/1,
+                &confirm};
         actions = make_pause_actions(&deps);
     }
 };
@@ -70,6 +72,24 @@ TEST_CASE("restart_level uses the same leave-open pattern") {
     r.actions.at("restart_level")();
     CHECK(r.want_restart);
     CHECK(r.pause_open);
+}
+
+TEST_CASE("the quit actions ask first; only Yes raises the flag") {
+    for (const char* id : {"quit_title", "quit_desktop"}) {
+        Rig r;
+        bool& flag = std::string(id) == "quit_title" ? r.abort_to_title
+                                                     : r.want_quit_program;
+        r.actions.at(id)();
+        CHECK(r.confirm.is_open());
+        CHECK(r.confirm.is_question());
+        CHECK(!flag);                  // nothing happens until answered
+        CHECK(!r.confirm.answer_yes());   // opens on No
+        CHECK(!flag);
+        r.actions.at(id)();
+        r.confirm.move(1);             // → Yes
+        CHECK(r.confirm.answer_yes());
+        CHECK(flag);
+    }
 }
 
 // ─── enhance.* staging (Style-preset Discard bug) ────────────────────────────

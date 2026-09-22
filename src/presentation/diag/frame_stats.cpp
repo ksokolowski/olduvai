@@ -11,6 +11,7 @@
 #include <cstdlib>
 
 #include "enhance/upscale.hpp"
+#include "presentation/render/text_overlay.hpp"
 
 namespace olduvai::presentation {
 
@@ -221,6 +222,16 @@ void FrameStats::report(int display_level) const {
                  paused_ms,
                  static_cast<unsigned long long>(paused_ticks),
                  budget_ms);
+}
+
+void wire_overlay_stats(FrameStats& stats, TextOverlay& overlay) {
+    overlay.clear_ms = &stats.ov_clear_ms;
+    overlay.upload_ms = &stats.ov_upload_ms;
+    overlay.blit_ms = &stats.ov_blit_ms;
+    overlay.hash_ms = &stats.ov_hash_ms;
+    overlay.uploads_skipped = &stats.ov_skipped;
+    overlay.perf_ms = stats.perf_ms;
+    overlay.stats_on = stats.enabled;
 }
 
 }  // namespace olduvai::presentation

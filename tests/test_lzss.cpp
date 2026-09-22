@@ -118,3 +118,17 @@ TEST_CASE("implausible declared output size throws instead of allocating") {
     const std::uint8_t hdr[4] = {0xFF, 0xFF, 0xFF, 0xFF};
     CHECK_THROWS_AS(lzss_decompress(hdr, 4), LzssError);
 }
+
+TEST_CASE("declared size the input cannot encode throws, fast") {
+    // Under the 16 MiB cap, but 30 payload bytes can encode at most
+    // 30*8*5/11 = 109 bytes.  Found by the fuzzer's first instrumented run
+    // (2026-09-22): the reader zero-filled 16 MiB one bit at a time.
+    std::vector<std::uint8_t> bomb = {0x00, 0xFF, 0x00, 0x00};   // 16711680
+    bomb.resize(34, 0x00);
+    CHECK_THROWS_AS(lzss_decompress(bomb), LzssError);
+    // The bound is not tight for real data: a stream at the encodable
+    // maximum (all 5-byte back-references) still decodes.
+    std::vector<std::uint8_t> dense = {0x00, 0x00, 0x00, 105};
+    dense.resize(4 + 30, 0xFF);   // every token: flag 1, len 3 (+2 = 5)
+    CHECK(lzss_decompress(dense).size() == 105);
+}

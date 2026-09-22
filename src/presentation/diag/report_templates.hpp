@@ -5,14 +5,16 @@
 // the two engines prefill the same guidance.
 #pragma once
 
+#include <array>
 #include <string>
-#include <vector>
 
 namespace olduvai::presentation {
 
-inline const std::vector<std::string> kReportTags = {
+// constexpr tables: no dynamic init, so nothing can throw at static-init time
+// (the check that flags std::vector<std::string> here).
+inline constexpr std::array<const char*, 7> kReportTags = {
     "collision", "visual", "gameplay", "entity", "audio", "crash", "other"};
-inline const std::vector<std::string> kReportRepro = {
+inline constexpr std::array<const char*, 4> kReportRepro = {
     "every", "sometimes", "once", "unknown"};
 
 inline const std::string& report_template(const std::string& tag) {

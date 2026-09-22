@@ -30,6 +30,8 @@
 
 namespace olduvai::presentation {
 
+class TextOverlay;
+
 struct FrameStats {
         std::uint64_t frames = 0, overruns = 0;
         double worst_ms = 0.0, worst_present_ms = 0.0, present_ms = 0.0;
@@ -207,5 +209,9 @@ struct FrameStats {
     // One DosTicker period — the budget a tick is late against.
     double budget_ms = 1000.0 / 18.2065;
 };
+
+// Point the HUD text overlay's sinks at `stats` (call after begin_run()).
+// Both level drivers wired the same seven fields by hand.
+void wire_overlay_stats(FrameStats& stats, TextOverlay& overlay);
 
 }  // namespace olduvai::presentation

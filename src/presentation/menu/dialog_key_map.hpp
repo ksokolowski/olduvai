@@ -15,6 +15,9 @@
 
 #include <SDL.h>
 
+#include <functional>
+
+#include "presentation/menu/menu_nav.hpp"       // menu_nav_keydown
 #include "presentation/menu/settings_flow.hpp"
 
 namespace olduvai::presentation {
@@ -29,6 +32,33 @@ inline SettingsFlow::Key flow_key_from_sym(SDL_Keycode sym) {
     if (sym == SDLK_ESCAPE)
         return SettingsFlow::Key::kCancel;
     return SettingsFlow::Key::kNone;
+}
+
+// Route ONE key press for a menu that may have its confirm dialog open.
+// Returns true when the dialog consumed it.
+//
+// The three settings menus — the surface pause, the boss pause and the title
+// menu — spelled this out identically (shape_clones.py: `is_open ->
+// handle_key -> flow_key_from_sym -> is_open` in three files).  They differ
+// only in what ESC does at the ROOT screen, which is `on_root_escape`: the
+// two pause menus close the overlay, the title menu re-opens "main" because
+// there is nothing behind it.
+inline bool menu_dialog_keydown(SDL_Keycode sym, const ConfirmDialog& confirm,
+                                SettingsFlow& flow, Menu& menu,
+                                const std::function<void()>& on_root_escape) {
+    // The dialog intercepts all input while open (§8.6 step 4); SettingsFlow
+    // resolves move/apply/discard/cancel through that site's own hooks.
+    if (confirm.is_open()) {
+        flow.handle_key(flow_key_from_sym(sym));
+        return true;
+    }
+    if (sym == SDLK_ESCAPE) {
+        menu.back();                      // one screen out (Options → root)
+        if (!menu.is_open() && on_root_escape) on_root_escape();
+    } else {
+        menu_nav_keydown(menu, sym);
+    }
+    return false;
 }
 
 }  // namespace olduvai::presentation

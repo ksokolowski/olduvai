@@ -22,8 +22,8 @@ constexpr int kMinRowsToSplit = 32;
 int env_threads() {
     const char* e = std::getenv("OLDUVAI_UPSCALE_THREADS");
     if (e == nullptr || *e == '\0') return 0;
-    const int v = std::atoi(e);
-    return v > 0 ? v : 0;
+    const long v = std::strtol(e, nullptr, 10);
+    return v > 0 ? static_cast<int>(v) : 0;
 }
 
 int decide_threads() {

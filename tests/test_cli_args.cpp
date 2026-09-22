@@ -153,3 +153,40 @@ TEST_CASE("cli: --default-profile is stored for the config layer, unvalidated") 
     CHECK(out.should_exit == false);
     CHECK(a.default_profile == "hd-toaster");
 }
+
+TEST_CASE("cli: --sound-card sets both audio keys, above play.json") {
+    CliArgs a;
+    PlaySettings ps;
+    CHECK(!run({"olduvai", "--sound-card", "sb"}, a, ps).should_exit);
+    CHECK(ps.music_device == "opl");
+    CHECK(ps.sfx_backend == "sb-dac");
+    CHECK(ps.cli.music_device);   // flagged: a saved config cannot undo it
+    CHECK(ps.cli.sfx_backend);
+}
+
+TEST_CASE("cli: an explicit audio flag beats --sound-card, in any order") {
+    CliArgs a;
+    PlaySettings ps;
+    CHECK(!run({"olduvai", "--sfx-backend", "opl", "--sound-card", "mt32"},
+               a, ps).should_exit);
+    CHECK(ps.music_device == "mt32-builtin");
+    CHECK(ps.sfx_backend == "opl");
+
+    CliArgs a2;
+    PlaySettings ps2;
+    CHECK(!run({"olduvai", "--sound-card", "mt32", "--music-device", "opl"},
+               a2, ps2).should_exit);
+    CHECK(ps2.music_device == "opl");
+    CHECK(ps2.sfx_backend == "mt32-sfx");
+}
+
+TEST_CASE("cli: an unknown --sound-card is an error") {
+    CliArgs a;
+    PlaySettings ps;
+    const auto out = run({"olduvai", "--sound-card", "gus"}, a, ps);
+    CHECK(out.should_exit);
+    CHECK(out.exit_code == 2);
+    CliArgs a2;
+    PlaySettings ps2;
+    CHECK(run({"olduvai", "--sound-card", "custom"}, a2, ps2).should_exit);
+}

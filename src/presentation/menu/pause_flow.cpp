@@ -128,6 +128,7 @@ SettingsFlow make_pause_flow(MenuModel& model, SettingsSession& session,
         }
     };
     h.reopen_options = [d]() { d->menu->open("options"); };
+    h.value_of = [d](const std::string& k) { return d->bind->get(k); };
     h.confirm_note = [](bool any_reinit, bool any_persist) {
         if (any_reinit) return std::string("Your game will briefly reload.");
         if (any_persist)
@@ -140,8 +141,12 @@ SettingsFlow make_pause_flow(MenuModel& model, SettingsSession& session,
 MenuActionTable make_pause_actions(PauseActionsDeps* d) {
     return {
         {"resume", [d] { *d->pause_open = false; }},
-        {"quit_title", [d] { *d->abort_to_title = true; }},
-        {"quit_desktop", [d] { *d->want_quit_program = true; }},
+        {"quit_title", [d] {
+            d->confirm->ask("Quit to title?", [d] { *d->abort_to_title = true; });
+        }},
+        {"quit_desktop", [d] {
+            d->confirm->ask("Exit game?", [d] { *d->want_quit_program = true; });
+        }},
         {"restart_level", [d] { *d->want_restart = true; }},
         {"cheat_bonus_0", [d] { cheat_spawn_bonus(d, 0); }},
         {"cheat_bonus_1", [d] { cheat_spawn_bonus(d, 1); }},
@@ -205,6 +210,7 @@ void configure_pause_bind(PauseBindings& bind, const PauseBindWireDeps& d) {
     bind.enhanced = d.opts->enhanced;
     bind.persist = &d.opts->persist;
     bind.session = d.session;
+    bind.sound_avail = probe_sound_cards(d.opts->rom_dir, d.opts->soundfont);
     // Tier-classifier wiring: pause → reinit path.
     bind.want_reinit = d.want_reinit;
     bind.reinit_req = d.reinit_req;

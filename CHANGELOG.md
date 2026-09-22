@@ -1,11 +1,89 @@
 # Changelog
 
 All notable changes to Olduvai. Versioning follows semver once 1.0.0
-lands; 0.x releases are beta.
+lands; 0.x releases were beta through 0.9.7, and from 0.9.8 are release
+candidates for 1.0.0.
 
 ## Unreleased
 
-## 0.9.7 — 2026-09-15
+## 0.9.8 — 2026-09-22
+
+**Release candidate.** Olduvai leaves beta: it is feature-complete, with
+no known bugs. The road to 1.0.0 is confirmation, not features — anything
+that plays differently from the 1991 original is a bug worth reporting.
+
+- **Changed: one Quit, and it asks first.** The pause menus had *Quit to
+  Title* and *Quit to Desktop* side by side; there is now one **Quit** entry
+  (*Quit to Title* / *Exit Game*), and every quit asks "Are you sure?" with
+  **No** selected, so a double press never quits by accident. Closing the
+  window still exits at once.
+- **Added: About** on the title menu — the version and exact build, the
+  system it runs on, the optional parts built in, the licence and the
+  project's GitHub address.
+- **Added: Sound card** under *Options → Audio* (and `--sound-card`): Sound
+  Blaster, AdLib, Roland MT-32, General MIDI, MIDI out or Off — the sound
+  setup named after the card a 1991 player would recognise, in place of two
+  rows about music devices and effect backends (still there, under
+  *Audio → Advanced*). Only the cards your machine can play are listed.
+- **Fixed: HD text now stays inside the picture at every aspect.** With
+  *Aspect 4:3* — or *Keep* in a window that is not 16:10 — the HUD text and
+  the menus were drawn across the whole window while the picture sat
+  pillarboxed inside it: menu values landed outside the slab, and "Energy"
+  was drawn over the food gauge. Only widescreen had been told where the
+  picture is.
+- **Changed: `--aspect widescreen` now opens a widescreen window.** Given
+  without `--window`, it used to open the usual 16:10 window, in which
+  widescreen has no margins to show, and said nothing. The default window
+  now takes the desktop's own shape (up to 21:9); on a display that is 16:10
+  or narrower — where there is genuinely nothing to widen into — the engine
+  says so instead of appearing to do nothing.
+- **Fixed:** a saved MT-32 or General MIDI choice whose ROMs or SoundFont had
+  gone left the game without music; it now falls back to the AdLib music.
+- **Fixed:** in a confirm dialog with a note under the changes (the title
+  menu's), the note was drawn across the buttons.
+- **Fixed:** the confirm dialogs' buttons read "? Apply ?  ? Discard ?" in
+  Classic mode (the game's font has no square brackets); they now read
+  *Apply* / *Discard*.
+- **Added (Enhanced): the balloons float away when a ride ends**, rising
+  off-screen the way they already did when you lose a life in flight,
+  instead of vanishing with the landing.
+- **Added: the bug-report form (F5) now works in the boss fights too**, and
+  its report carries the display setup and the state of the fight.
+- **Improved (Enhanced): text and the animated banners are much cheaper to
+  draw**, which is felt most on the handhelds — GET READY / NOT ENOUGH FOOD
+  no longer slow the game down, and the score tally no longer jitters while
+  it counts.
+- **Fixed: a crash when switching Style from Enhanced to Classic** in the
+  pause menu (seen on the TrimUI on level 3), which then misleadingly
+  reported the game files as unreadable.
+- **Fixed:** one frame of the finished level flashed between the score tally
+  and the next level's loading screen.
+- **Fixed (Enhanced):** the NOT ENOUGH FOOD banner stayed on top of the pause
+  menu, and rode along with the screen slide when leaving or entering the
+  food-gate screen.
+- **Fixed (macOS):** if the system refused a MIDI connection, the game
+  closed instead of carrying on without MIDI out.
+- **Fixed: damaged game files are rejected cleanly.** A corrupt packed game
+  executable (the GOG / CD releases' `PREH.SQZ`) could crash the engine, and
+  a corrupt compressed archive entry could stall it for seconds; both are now
+  refused with an error. Genuine files are unaffected. A quick-save with an
+  impossible score is likewise refused instead of being read wrongly.
+- **Fixed (Windows):** input recordings and traces written on Windows now
+  match, byte for byte, the ones written on the other systems.
+- **Fixed (Enhanced):** pausing a boss fight could nudge the player by a
+  fraction of a pixel — up to four HD pixels on screen — because the paused
+  frame was redrawn at a whole-pixel position the smooth motion had not
+  reached.
+- **Fixed (Linux):** the AppImage now reports the exact build it is —
+  `olduvai --version` and the About screen said `(unknown)` in every Linux
+  release so far, because the release build had no git history to read.
+- **Added: screenshots in the README** — the classic DOS mode and the
+  enhanced widescreen mode, on level 1. They are frames of this engine's
+  own output from a legitimately owned copy, and a small curated set lives
+  in `assets/screenshots/` with its rules and a removal-on-request promise
+  (see its README and `LEGAL.md`).
+
+## 0.9.7 — 2026-09-16
 
 Olduvai leaves the desk: the first handheld builds, and the enhanced mode
 made fast enough to matter there.

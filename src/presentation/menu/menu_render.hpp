@@ -83,6 +83,33 @@ struct MenuFrame {
         if (r.h <= 0) { r.y = 0; r.h = oh; }
         return r;
     }
+    // Where a logical_w x logical_h picture lands in an ow x oh output: the
+    // rect SDL_RenderSetLogicalSize letterboxes it into (aspect kept,
+    // centred), or the whole output when there is no logical size (0 x 0,
+    // Aspect "stretch").  sub_x / sub_w (logical units) narrow it to a
+    // horizontal slice — the 320-wide centre of a widescreen frame.
+    //
+    // WHY.  The text overlay is drawn at OUTPUT resolution, so everything on
+    // it must be told where the picture is.  Only widescreen used to be:
+    // with Aspect 4:3, or Keep in a window that is not 16:10, the HUD text
+    // and the menu glyphs were laid out across the whole window while the
+    // picture and the menu slab sat pillarboxed inside it (BACKLOG §3.23).
+    static MenuFrame picture(int ow, int oh, int logical_w, int logical_h,
+                             int sub_x = 0, int sub_w = -1) {
+        if (logical_w <= 0 || logical_h <= 0) return {0, 0, ow, oh};
+        int vw = ow, vh = oh;
+        if (static_cast<long long>(ow) * logical_h <=
+            static_cast<long long>(oh) * logical_w)
+            vh = logical_h * ow / logical_w;   // width-limited: bars top/bottom
+        else
+            vw = logical_w * oh / logical_h;   // height-limited: bars left/right
+        MenuFrame f{(ow - vw) / 2, (oh - vh) / 2, vw, vh};
+        if (sub_w > 0) {
+            f.x += sub_x * vw / logical_w;
+            f.w = sub_w * vw / logical_w;
+        }
+        return f;
+    }
     // Map a native 320x200 coordinate into the frame.
     int sx(int nx) const { return x + nx * w / 320; }
     int sy(int ny) const { return y + ny * h / 200; }

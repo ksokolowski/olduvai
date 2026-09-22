@@ -19,6 +19,7 @@
 #include <SDL.h>
 
 #include "presentation/audio/audio.hpp"             // SdlAudio
+#include "presentation/audio/sound_card.hpp"        // the Sound card row
 #include "presentation/menu/menu.hpp"              // MenuBindings
 #include "presentation/menu/settings_apply.hpp"    // ApplyTier, classify_change,
                                               // DisplaySettings, apply_preset
@@ -53,6 +54,9 @@ struct StagingBindings : MenuBindings {
     // step off "widescreen" in classic mode hides the value again and strands
     // it — the very trap this gate exists to avoid.
     std::string aspect_at_entry;
+    // Which Sound card choices this machine can play (probe_sound_cards);
+    // the row offers only those.  Default: the always-present cards.
+    SoundCardAvail sound_avail;
 
     // Aspect's "widescreen" is offered only when HD is on, because that is
     // literally what the presenter requires: WidescreenPresenter activates on
@@ -65,6 +69,10 @@ struct StagingBindings : MenuBindings {
     // value the list does not offer back in, so a widescreen user who drops
     // to classic still sees and keeps their setting.
     std::vector<std::string> allowed_values(const MenuItem& it) override {
+        // Sound card: only the cards that will sound.  "custom" is never
+        // offered — it is how a hand-made pair READS, and Menu::adjust
+        // steps from it into this list.
+        if (it.key == "sound_card") return available_sound_cards(sound_avail);
         if (it.key != "aspect") return it.values;
         const auto e = mem.find("enhanced");
         const auto p = mem.find("hd_profile");
@@ -88,6 +96,9 @@ struct StagingBindings : MenuBindings {
     std::string get(const std::string& k) override final {
         std::string special;
         if (get_special(k, special)) return special;
+        // Sound card is a VIEW of the two audio keys, never stored itself.
+        if (k == "sound_card")
+            return sound_card_for(get("music_device"), get("sfx_backend"));
         const auto it = mem.find(k);
         return it == mem.end() ? std::string{} : it->second;
     }
@@ -96,6 +107,16 @@ struct StagingBindings : MenuBindings {
     }
     void set(const std::string& k, const std::string& v) override final {
         if (set_special(k, v)) return;
+        if (k == "sound_card") {
+            // Fan the card out to the pair it names, through this same set(),
+            // so each key stages (and classifies, and persists) as it always
+            // has.  "custom" and unknown names name no pair: nothing to do.
+            if (const SoundCard* c = find_sound_card(v)) {
+                set("music_device", c->music);
+                set("sfx_backend", c->sfx);
+            }
+            return;
+        }
         if (k == "preset") {
             // One-click Classic/HD preset: fan the bundle out through this
             // same set() so every key rides the normal machinery.

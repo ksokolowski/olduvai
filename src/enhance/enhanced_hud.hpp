@@ -64,11 +64,13 @@ void draw_enhanced_hud_bars(std::vector<std::uint8_t>& rgba, int buf_w,
                             int x_off_native = 0);
 
 // Draw the vector TEXT of the layout into an output-resolution RGBA overlay
-// (out_w x out_h).  Native x is multiplied by out_w/320, native baseline_y by
-// out_h/200.  `text` must already be sized to the output cap height by the
-// caller (TextOverlay::begin → HdText::set_cap_px).
+// (out_w x out_h), mapped into the picture's rect in that output: native x
+// to fx + x*fw/320, native baseline_y to fy + y*fh/200.  fw/fh <= 0 means
+// the picture fills the output.  `text` must already be sized for the
+// picture (8 native px -> 8*fw/320) by the caller.
 void draw_enhanced_hud_text(std::vector<std::uint8_t>& rgba, int out_w,
                             int out_h, const HdText& text,
-                            const EnhancedHudLayout& layout);
+                            const EnhancedHudLayout& layout,
+                            int fx = 0, int fy = 0, int fw = 0, int fh = 0);
 
 }  // namespace olduvai::enhance

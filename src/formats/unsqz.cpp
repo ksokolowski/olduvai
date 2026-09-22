@@ -95,6 +95,15 @@ std::vector<std::uint8_t> unsqz(const std::uint8_t* data, std::size_t size) {
         code_size = kCodeWidth;
         next_free = kFirstFree;
         const std::uint16_t code = get_code();
+        // After a reset the stream must send a LITERAL (or reset again).  The
+        // check was missing, so any 9-bit code up to 0x1FF became prev_code;
+        // the next dictionary entry then chained to a stale or never-written
+        // slot, and a crafted stream could build a loop that the unwind below
+        // followed off the end of `stack` (stack-buffer-overflow, found by
+        // fuzz-smoke on 2026-09-22 within a minute of 334cb6a/2a311d8 giving
+        // the fuzzer real coverage).
+        if (code > 0xFF && code != kResetCode)
+            throw SqzError("sqz: non-literal code after reset");
         if (code != kResetCode) {
             prev_code = code;
             last_byte = static_cast<std::uint8_t>(code & 0xFF);
@@ -118,7 +127,12 @@ std::vector<std::uint8_t> unsqz(const std::uint8_t* data, std::size_t size) {
             stack[sp++] = last_byte;
             code = prev_code;
         }
+        // Bounded unconditionally: a valid chain is shorter than the
+        // dictionary, so reaching the end of `stack` can only be a corrupt
+        // (looping) one — reject it rather than trust every other check.
         while (code >= kCodeBase) {
+            if (sp + 1 >= stack.size())
+                throw SqzError("sqz: corrupt dictionary chain");
             stack[sp++] = str[code];
             code = prefix[code];
         }

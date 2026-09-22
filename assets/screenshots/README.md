@@ -78,6 +78,31 @@ ffmpeg -framerate 18.2065 -i frames/steady_fb_%04d.bmp \
     -movflags +faststart classic-l1-clip.mp4
 ```
 
+### Compress before committing — and keep it PNG
+
+Pixel art is JPEG's worst case: flat palette colours and hard edges are
+exactly where it rings and smears, and it is not even smaller. Measured on
+`classic-l1.png` (2026-09-22): JPEG q85 was 218 KB and lossy, against 17 KB
+as a lossless PNG. So:
+
+- **Classic** — the game draws in a handful of colours (14 in that frame), so
+  save as an **indexed PNG** with exactly those colours: lossless,
+  pixel-identical, and a third smaller than a plain RGB PNG.
+- **Enhanced** — the HD scalers blend neighbours into thousands of colours;
+  **quantise to 256** (no dither). The source palette is small enough that
+  this is visually indistinguishable — 47 dB PSNR against JPEG q85's 36 dB at
+  the same size — and it took `enhanced-widescreen-l1.png` from 643 to 256 KB.
+
+```python
+from PIL import Image
+im = Image.open("shot.png").convert("RGB")
+n = len(im.getcolors(1 << 24) or [])
+if 0 < n <= 256:   # classic: lossless, exact palette
+    im.quantize(colors=n, dither=Image.Dither.NONE).save("shot.png", optimize=True)
+else:              # enhanced: 256 colours
+    im.quantize(colors=256, dither=Image.Dither.NONE).save("shot.png", optimize=True)
+```
+
 `OLDUVAI_DUMP_STEADY` writes frames before upscaling (320x200, classic HUD),
 so a clip made this way is classic. For an HD clip, `OLDUVAI_DUMP_OUTPUT=<dir>`
 dumps the final output (scaler, margins, vector HUD); drop the audio with `-an`.

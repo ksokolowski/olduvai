@@ -9,6 +9,7 @@
 
 #include "enhance/hd_asset_cache.hpp"
 #include "enhance/upscale.hpp"
+#include "presentation/image_out.hpp"   // present_output
 #include "presentation/render/boss_hud.hpp"
 #include "presentation/render/boss_widescreen.hpp"
 #include "presentation/render/text_overlay.hpp"
@@ -153,7 +154,7 @@ void BossArenaPresenter::present_frame(bool draw_lives, bool do_present) {
     }
     if (do_present) {
         FrameStats::Timer st(stats, &FrameStats::swap_ms);
-        SDL_RenderPresent(ren);
+        present_output(ren);
     }
 }
 
@@ -214,9 +215,65 @@ void BossArenaPresenter::show_wide_up(const std::vector<std::uint8_t>& up,
     if (surface_.hd_text().ok()) hud_overlay_wide(draw_lives);
     if (do_present) {
         FrameStats::Timer st(stats, &FrameStats::swap_ms);
-        SDL_RenderPresent(ren);
+        present_output(ren);
     }
 }
+
+std::vector<std::uint8_t> BossArenaPresenter::compose_wide_native(
+    const std::function<void(RenderTarget&)>& draw) {
+    if (!ws_.active || ws_.wtex == nullptr || arena_bg == nullptr) return {};
+    FrameBuffer cbg{320, 200};
+    std::copy(arena_bg->begin(), arena_bg->end(), cbg.px.begin());
+    std::vector<std::uint8_t> wide;
+    compose_arena_wide(wide, ws_.M, cbg);
+    if (draw) {
+        RenderTarget wrt = boss_visual_target(wide.data(), ws_.w, 200, 1,
+                                              nullptr, nullptr, ws_.M);
+        draw(wrt);
+    }
+    return wide;
+}
+
+void BossArenaPresenter::show_wide_native(const std::vector<std::uint8_t>& wide,
+                                          bool draw_lives, bool do_present,
+                                          bool draw_hud) {
+    if (ws_.wtex == nullptr) return;
+    std::vector<std::uint8_t> up =
+        enhance::upscale_rgba(wide, ws_.w, 200, surface_.hd_scale(),
+                              *surface_.hd_profile());
+    if (draw_hud) {
+        show_wide_up(up, draw_lives, do_present);
+        return;
+    }
+    SDL_Renderer* const ren = surface_.ren();
+    SDL_UpdateTexture(ws_.wtex, nullptr, up.data(),
+                      ws_.w * surface_.hd_scale() * 4);
+    SDL_RenderClear(ren);
+    SDL_RenderCopy(ren, ws_.wtex, nullptr, nullptr);
+    if (do_present) present_output(ren);
+}
+
+void BossArenaPresenter::use_wide_logical() {
+    surface_.lsz().set(ws_.w * surface_.hd_scale(), 200 * surface_.hd_scale());
+}
+
+const FrameBuffer& BossArenaPresenter::last_wide_native() const {
+    return ws_.last_native;
+}
+
+void BossArenaPresenter::keep_fade_source(const FrameBuffer& nat) {
+    ws_.last_native = nat;
+}
+
+int BossArenaPresenter::wide_w() const { return ws_.w; }
+
+bool BossArenaPresenter::wide_on() const { return ws_.active; }
+
+bool BossArenaPresenter::wide_ready() const {
+    return ws_.active && ws_.wtex != nullptr;
+}
+
+void BossArenaPresenter::rebuild_if_resized() { ws_.rebuild_if_resized(); }
 
 void BossArenaPresenter::present_wide(bool draw_lives, bool do_present) {
     ws_.rebuild_if_resized();
@@ -255,7 +312,7 @@ void BossArenaPresenter::present_wide_native(const FrameBuffer& nat,
         if (draw_hud && surface_.use_hd_text()) hud_overlay(draw_lives);
         if (do_present) {
             FrameStats::Timer st(stats, &FrameStats::swap_ms);
-            SDL_RenderPresent(ren);
+            present_output(ren);
         }
         return;
     }
@@ -272,7 +329,7 @@ void BossArenaPresenter::present_wide_native(const FrameBuffer& nat,
     if (draw_hud && surface_.hd_text().ok()) hud_overlay_wide(draw_lives);
     if (do_present) {
         FrameStats::Timer st(stats, &FrameStats::swap_ms);
-        SDL_RenderPresent(ren);
+        present_output(ren);
     }
 }
 

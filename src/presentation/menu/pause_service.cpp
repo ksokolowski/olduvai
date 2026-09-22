@@ -26,7 +26,7 @@ PauseService::PauseService(MenuModel& model, bool menu_ok, const External& x)
                     x.opts,        x.out_load,      &open_,
                     x.abort_to_title, &want_quit_program_, &want_restart_,
                     &want_load_,   x.god_active,    &want_warp_,
-                    x.display_level},
+                    x.display_level, &confirm_},
       bind_wired_(wire_bind_(x)),
       menu_(model, bind_, make_pause_actions(&actions_deps_)),
       flow_deps_{&menu_, x.opts, &bind_, x.reinit_req, x.want_reinit},
@@ -44,7 +44,7 @@ void PauseService::begin_frame() {
 
 void PauseService::esc_pressed() {
     // ESC opens the Pause overlay (Resume / Options / Cheats / Restart /
-    // Quit to Title / Quit to Desktop), superseding the bare ESC→game-over.
+    // Quit), superseding the bare ESC→game-over.
     // Quit to Title still routes through abort_to_title (the
     // game-over→title path).  Falls back to a direct title-abort if
     // menus.json failed to load.
@@ -57,19 +57,8 @@ void PauseService::esc_pressed() {
 }
 
 void PauseService::handle_keydown(SDL_Keycode sym) {
-    // Confirm dialog intercepts all input while open (§8.6 step 4).
-    // SettingsFlow resolves move/apply/discard/cancel through the pause
-    // hooks (OL-B1).
-    if (confirm_.is_open()) {
-        flow_.handle_key(flow_key_from_sym(sym));
-        return;
-    }
-    if (sym == SDLK_ESCAPE) {
-        menu_.back();
-        if (!menu_.is_open()) open_ = false;
-    } else {
-        menu_nav_keydown(menu_, sym);
-    }
+    menu_dialog_keydown(sym, confirm_, flow_, menu_,
+                        [this] { open_ = false; });   // ESC at the root closes
 }
 
 void PauseService::track_options_exit() {
@@ -123,7 +112,13 @@ PauseService::FreezeResult PauseService::service_freeze(const FreezeDeps& d) {
         // Confirm dialog replaces the menu while open (§8.6 step 5).
         draw_confirm(menu_fb, confirm_, d.g.charset, /*dim=*/true,
                      /*draw_text=*/!d.use_hd_text);
-    } else {
+    } else if (menu_.is_open()) {
+        // is_open() as well as open_: the overlay flag and the menu's own
+        // stack are two facts, and `open_ = true` is set BEFORE the screen
+        // opens (esc_pressed) and directly by the reinit test hook.  Drawing
+        // a closed menu asked it which screen it was showing, which was the
+        // TrimUI crash (see menu.hpp).
+        //
         // In HD the glyphs are drawn crisply by the vector overlay
         // (draw_menu_vector in upload_and_show); here draw the slab +
         // accent only.  In classic, draw the bitmap glyphs too.

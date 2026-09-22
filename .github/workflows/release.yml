@@ -19,7 +19,7 @@ jobs:
     # is pinned by a digest-locked CONTAINER, not by the runner label.  This
     # used to be `runs-on: ubuntu-22.04` with the comment "oldest runner =
     # lowest glibc floor" — true, but a promise resting on GitHub keeping a
-    # deprecated image alive: ubuntu-22.04 begins deprecation 2026-09-17,
+    # deprecated image alive: ubuntu-22.04 entered deprecation 2026-09-17,
     # brownouts hard-fail jobs in March/April 2027, removed 2027-04-17.  The
     # obvious repair then is bumping to ubuntu-24.04, which silently moves the
     # floor 2.35 -> 2.39 and drops every Ubuntu 22.04 / Mint 21 user — a
@@ -34,7 +34,24 @@ jobs:
     container:
       image: ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982
     steps:
+      # git BEFORE checkout.  A bare jammy has no git, and actions/checkout
+      # without one on PATH downloads a tarball through the REST API instead of
+      # cloning — no .git, so cmake/build_id.cmake fell back to "unknown" and
+      # every Linux release through 0.9.7 reported `olduvai 0.9.x (unknown)`,
+      # while the macOS and Windows jobs (hosted runners, git present) got
+      # the real hash.  Found by the 0.9.8 dry run, where the new About screen
+      # made the ID user-visible.
+      - name: git (so checkout clones and the build ID is known)
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq git
       - uses: actions/checkout@v4
+      # The container runs as root over a workspace owned by the runner user,
+      # so git refuses it ("dubious ownership") and rev-parse fails — which is
+      # the same "unknown" by a second route.  checkout sets this for itself;
+      # stated here so the build steps do not depend on that detail.
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       # No sudo: the container runs as root.  curl/ca-certificates/file are in
       # the runner image but not in a bare jammy, and the packaging script
       # needs all three.
@@ -62,7 +79,16 @@ jobs:
       - name: Smoke-run the artifact
         run: |
           art=$(ls olduvai-*-linux-x86_64.AppImage)
-          APPIMAGE_EXTRACT_AND_RUN=1 "./${art}" --version
+          v=$(APPIMAGE_EXTRACT_AND_RUN=1 "./${art}" --version)
+          echo "${v}"
+          # A release binary names its commit, cleanly.  "unknown" means the
+          # checkout had no .git (see the first step); "-dirty" means tracked
+          # files changed before the build.  Either is a release that cannot
+          # say what it is, so fail here rather than ship it.
+          case "${v}" in
+            *"(unknown)"*) echo "::error::build ID is unknown — no git history in the build"; exit 1 ;;
+            *-dirty*)      echo "::error::build ID is -dirty — tracked files changed before the build"; exit 1 ;;
+          esac
       - name: Manifest (everything that ships inside)
         run: |
           art=$(ls olduvai-*-linux-x86_64.AppImage)
