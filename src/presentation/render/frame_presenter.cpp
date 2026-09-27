@@ -6,14 +6,17 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <optional>
 
 #include "enhance/enhanced_hud.hpp"          // compute/draw_enhanced_hud_*
 #include "enhance/upscale.hpp"               // upscale_rgba
+#include "presentation/diag/frame_stats.hpp" // FrameStats / note_present
 #include "presentation/render/game_render.hpp"      // FrameBuffer
 #include "presentation/image_out.hpp"        // capture_renderer_output
 #include "presentation/render/hud_render.hpp"  // draw_hud        // capture_renderer_output
 #include "presentation/menu/menu_render.hpp"      // draw_menu_vector/confirm_vector
-#include "presentation/menu/pause_service.hpp"    // PauseService
+#include "presentation/menu/confirm_dialog.hpp"
+#include "presentation/menu/menu.hpp"
 #include "presentation/sequence/screens.hpp"          // enhance::HdText
 #include "presentation/render/text_overlay.hpp"     // TextOverlay
 #include "presentation/render/widescreen_presenter.hpp"  // WidescreenPresenter, HudLayout
@@ -21,8 +24,7 @@
 
 namespace olduvai::presentation {
 
-// The HD-aware HUD compose — moved verbatim from run_platform_level's
-// draw_hud_for_fb lambda (§3.7 cluster 3 slice 2); see the header note.
+// The HD-aware HUD compose; see the header.
 void FramePresenter::draw_hud_for(FrameBuffer& target) {
     systems::SystemsState& state = *this->state;
     const bool hd = surface->hd();
@@ -34,13 +36,10 @@ void FramePresenter::draw_hud_for(FrameBuffer& target) {
         return;
     }
 
-    // HD: run draw_hud on the native scratch for state mutations only.
-    // The scratch pixels are discarded; we only care about side effects
-    // (food_count cap, get_ready_counter decrement; GET READY sprites are
-    // re-drawn at HD below).
-    // Capture GET READY visibility BEFORE draw_hud mutates the counter —
-    // draw_hud draws the banner then decrements; we must draw at HD if the
-    // banner was visible at entry (even on the tick the counter reaches 1).
+    // HD: run draw_hud on a native scratch for its state changes only (food
+    // cap, GET READY decrement); the pixels are discarded.  GET READY
+    // visibility is read first: draw_hud draws, then decrements, so the banner
+    // shows even on the tick the counter reaches 1.
     const bool get_ready_visible =
         (state.get_ready_counter >= 2 && state.get_ready_counter <= 17);
     // Reset scratch alpha so blit_sprite writes are visible (just in case).
@@ -48,12 +47,9 @@ void FramePresenter::draw_hud_for(FrameBuffer& target) {
         hud_scratch_.px[i] = 255;
     draw_hud(hud_scratch_, state, *charset, render->entity_sprites,
              render->palette, with_hd_text);
-    // Re-draw the GET READY banner at HD via the scale-aware RenderTarget
-    // so it appears crisp at the target resolution.  In enhanced vector
-    // mode (with_hd_text) the pre-baked sprites are SUPPRESSED here and the
-    // cartoony vector "GET READY!" is drawn in the output overlay instead
-    // (draw_enhanced_banners) — that path also shows in widescreen, where
-    // this center re-draw is recomposed away.
+    // Redraw GET READY at HD.  With vector banners the sprites are skipped and
+    // the overlay draws the text instead (which also survives the widescreen
+    // re-compose).
     if (get_ready_visible && !with_hd_text) {
         auto rt = make_render_target(target, *surface, *hd_cache);
         if (132 < static_cast<int>(render->entity_sprites.size()))
@@ -65,209 +61,176 @@ void FramePresenter::draw_hud_for(FrameBuffer& target) {
     }
 }
 
-namespace {
-// Folds a present's wall time into the caller's accumulator.  Was
-// `FsPresentTimer`, a local struct in run_platform_level's prologue with
-// exactly one user — the `upload_and_show` lambda this replaced.
-struct PresentTimer {
-    double* accum;
-    double perf_ms;
-    bool on;
-    Uint64 t0;
-    PresentTimer(double* a, double pm, bool o)
-        : accum(a), perf_ms(pm), on(o && a != nullptr),
-          t0(on ? SDL_GetPerformanceCounter() : 0) {}
-    ~PresentTimer() {
-        if (on)
-            *accum += static_cast<double>(SDL_GetPerformanceCounter() - t0) *
-                      perf_ms;
-    }
-};
-}  // namespace
-
 void FramePresenter::present(FrameBuffer& f, bool with_hud, bool do_present) {
-    // Brackets the WHOLE present, exactly as the driver's wrapper did.
-    PresentTimer pt(present_ms, perf_ms, stats_on);
-    if (stats_on && present_calls != nullptr) {
-        ++*present_calls;
-        if (present_iv != nullptr && last_present_pc != nullptr) {
-            const Uint64 now_pc = SDL_GetPerformanceCounter();
-            if (*last_present_pc != 0 && present_iv->size() < 200000) {
-                present_iv->push_back(static_cast<float>(
-                    static_cast<double>(now_pc - *last_present_pc) * perf_ms));
-            }
-            *last_present_pc = now_pc;
-        }
-    }
-    // Bind the live context (pointers → the run-loop locals) to the names the
-    // pipeline body uses, so the body below is a verbatim move.
-    LevelSurface* const surface = this->surface;
-    WidescreenPresenter& wsp = *this->wsp;
-    SDL_Renderer* const ren = surface->ren();
-    SDL_Texture* const tex = surface->tex();
-    enhance::HdText& hd_text = surface->hd_text();
-    TextOverlay& text_overlay = surface->overlay();
-    PauseService& pause = *this->pause;
-    systems::SystemsState& state = *this->state;
-    const int logical_w = surface->lsz().w();
-    const int logical_h = surface->lsz().h();
-    const bool cheat_open = this->cheats->open();
-    std::string& menu_shot_path = *this->menu_shot_path;
-    const bool hd = surface->hd();
-    const bool use_hd_text = surface->use_hd_text();
-    const int hd_scale = surface->hd_scale();
-    // Deref the live pointer once per present (a null profile would mean the
-    // caller forgot to wire it; fall back to the empty string, which
-    // upscale_rgba treats as the native/no-op profile).
-    static const std::string kNoProfile;
-    const std::string& hd_profile =
-        surface->hd_profile() != nullptr ? *surface->hd_profile() : kNoProfile;
-
-    wsp.rebuild_if_resized();   // Alt+Enter / resize: recompute wide state
+    FrameStats::Timer pt(stats, &FrameStats::present_ms);
+    if (stats != nullptr) stats->note_present();
+    wsp->sync_output();   // Alt+Enter, resize or a live Aspect edit
     // Only the NON-text HUD (gauge boxes, food fill, energy pips) goes in the
-    // buffer; the vector HUD TEXT is drawn at output res into text_overlay.
-    const bool draw_hud_overlay = hd && with_hud && use_hd_text;
-    enhance::EnhancedHudLayout hud_layout;
-    if (draw_hud_overlay) {
-        hud_layout = enhance::compute_enhanced_hud_layout(hd_text, state);
-    }
-    // A buffer that is ALREADY WIDE (width == wsp.native_w()) carries real
-    // margin content the caller composed — the paused frame, wrapped via
-    // wsp.wrap_wide_for().  Present it across the FULL canvas instead of
-    // pillarboxing a 320 centre into black bars.  HUD bars go in at native
-    // scale with the centre offset (the same call the L3 descent uses), then
-    // the whole wide buffer is upscaled once into the WIDE texture.
-    const bool wide_frame = hd && wsp.active() && wsp.wide_tex() != nullptr &&
-                            f.w == wsp.native_w() && f.h == 200;
-    if (wide_frame) {
-        std::vector<std::uint8_t> wbuf = f.px;
-        if (draw_hud_overlay) {
-            enhance::draw_enhanced_hud_bars(wbuf, wsp.native_w(), 200, 1,
-                                            hud_layout, wsp.margin());
-        }
-        const std::vector<std::uint8_t> up = enhance::upscale_rgba(
-            wbuf, wsp.native_w(), 200, hd_scale, hd_profile);
-        PresentTimer ut(upload_ms, perf_ms, stats_on);
-        SDL_UpdateTexture(wsp.wide_tex(), nullptr, up.data(),
-                          wsp.native_w() * hd_scale * 4);
-    } else if (hd) {
-        if (f.w == 320 * hd_scale) {
-            // Already-HD gameplay buffer: no upscale needed.
-            if (draw_hud_overlay) {
-                enhance::draw_enhanced_hud_bars(f.px, f.w, f.h, hd_scale,
-                                                hud_layout);
-            }
-            PresentTimer ut(upload_ms, perf_ms, stats_on);
-            SDL_UpdateTexture(tex, nullptr, f.px.data(), f.w * 4);
-        } else {
-            // Native-320 buffer (loading/tally/PC1): upscale whole-frame.
-            std::vector<std::uint8_t> up =
-                enhance::upscale_rgba(f.px, 320, 200, hd_scale, hd_profile);
-            if (draw_hud_overlay) {
-                enhance::draw_enhanced_hud_bars(up, 320 * hd_scale,
-                                                200 * hd_scale, hd_scale,
-                                                hud_layout);
-            }
-            PresentTimer ut(upload_ms, perf_ms, stats_on);
-            SDL_UpdateTexture(tex, nullptr, up.data(), 320 * hd_scale * 4);
-        }
-    } else {
-        // Classic (320x200): draw the cheat picker with the bitmap font into
-        // the native buffer (recomposed clean each frame).
-        if (cheat_open) draw_cheat_rows_native(f);
-        PresentTimer ut(upload_ms, perf_ms, stats_on);
-        SDL_UpdateTexture(tex, nullptr, f.px.data(), 320 * 4);
-    }
-    SDL_RenderClear(ren);
-    if (wide_frame) {
-        // Already the full wide canvas — no bezel, no pillarbox.
-        SDL_RenderCopy(ren, wsp.wide_tex(), nullptr, nullptr);
-    } else if (wsp.active()) {
-        // Widescreen using the 320-wide tex (transitions/loading/tally/pause):
-        // pillarbox the centre into the wide canvas with a PURE-BLACK bezel.
-        SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-        SDL_RenderFillRect(ren, nullptr);
-        SDL_Rect dst{wsp.margin() * hd_scale, 0, 320 * hd_scale, 200 * hd_scale};
-        SDL_RenderCopy(ren, tex, nullptr, &dst);
-    } else {
-        SDL_RenderCopy(ren, tex, nullptr, nullptr);
-    }
-    // One output-resolution vector-text pass shared by the HUD text, the cheat
-    // picker, and the pause/confirm menus (a second begin/flush would not
-    // composite).  The picker spells its gate out rather than taking
-    // use_hd_text; since the per-feature flags collapsed the two are the same
-    // expression (hd && hd_text.ok()), so either spelling is correct here.
-    const bool show_cheat = cheat_open && hd && hd_text.ok();
-    // menu().is_open() as well as pause.open(): the overlay flag is set
-    // before the screen opens, and a closed menu cannot say which screen it
-    // is showing (menu.hpp — the TrimUI crash).
-    const bool show_menu = pause.open() && use_hd_text &&
-                           !pause.confirm().is_open() && pause.menu().is_open();
-    const bool show_confirm =
-        pause.open() && use_hd_text && pause.confirm().is_open();
-    // Save whenever the pause overlay is up (classic draws the bitmap menu into
-    // the native frame, so the shot must capture that path too).
-    const char* show_menu_shot =
-        !menu_shot_path.empty() ? menu_shot_path.c_str()
-        : (pause.open() ? std::getenv("OLDUVAI_PAUSE_SHOT") : nullptr);
-    if (draw_hud_overlay || show_cheat || show_menu || show_confirm) {
-        int ow = 0, oh = 0;
-        if (text_overlay.begin(ren, hd_text, ow, oh)) {
-            auto& b = text_overlay.buffer();
-            // Where the 320x200 picture sits in the output: the letterboxed
-            // logical rect, narrowed in widescreen to the centre 320 — the
-            // menu and dialog glyphs are laid out in 320-native coordinates,
-            // so they map onto that region for the pillarbox frame AND for a
-            // wide frame (whose slab, laid out in native_w space, is centred
-            // on the same point at the same scale).
-            const MenuFrame pic =
-                wsp.active()
-                    ? MenuFrame::picture(ow, oh, logical_w, logical_h,
-                                         wsp.margin() * hd_scale,
-                                         320 * hd_scale)
-                    : MenuFrame::picture(ow, oh, logical_w, logical_h);
-            if (draw_hud_overlay) {
-                if (wsp.active()) {
-                    // Pillarboxed WS: HUD text uses the wide mapping (matches
-                    // wsp.present()); restore the cap for a same-pass menu.
-                    const int saved_cap = hd_text.cap_px();
-                    wsp.draw_wide_hud_text(b, ow, oh, hud_layout);
-                    hd_text.set_cap_px(saved_cap);
-                } else {
-                    // Sized and placed for the PICTURE, not the window:
-                    // 4:3, or Keep in a window that is not 16:10, pillarboxes
-                    // it (§3.23).
-                    const int saved_cap = hd_text.cap_px();
-                    hd_text.set_cap_px(
-                        std::max(1, TextOverlay::cap_px_for(pic.w)));
-                    enhance::draw_enhanced_hud_text(b, ow, oh, hd_text,
-                                                    hud_layout, pic.x, pic.y,
-                                                    pic.w, pic.h);
-                    hd_text.set_cap_px(saved_cap);
-                    draw_enhanced_banners(b, ow, oh);
-                }
-            }
-            if (show_cheat) draw_cheat_rows(b, ow, oh);
-            if (show_menu)
-                draw_menu_vector(b, ow, oh, hd_text, pause.menu(), 0.0f, pic);
-            if (show_confirm)
-                draw_confirm_vector(b, ow, oh, hd_text, pause.confirm(), pic);
-            text_overlay.flush(ren, logical_w, logical_h);
-        }
-    }
-    if (show_menu_shot) {
-        // Read back the fully-composited frame (scene + slab + vector text)
-        // right before present to verify the HD overlay.
-        capture_renderer_output(ren, show_menu_shot);
-        menu_shot_path.clear();   // consume a menu-script `shot` request
+    // buffer; the vector HUD TEXT is drawn at output res by draw_text_pass.
+    const auto hud =
+        with_hud ? surface->hud_layout(*state) : std::nullopt;
+    const enhance::EnhancedHudLayout* const hud_p = hud ? &*hud : nullptr;
+    show_canvas(upload(f, hud_p));
+    draw_text_pass(hud_p);
+    // Pause shots: the fully-composited frame (scene + slab + vector text),
+    // whenever the overlay is up, classic included (its bitmap menu is in the
+    // native frame).  A menu-script `shot` request is consumed.
+    const char* shot =
+        !menu_shot_path->empty() ? menu_shot_path->c_str() : pause_shot_;
+    if (shot != nullptr) {
+        capture_renderer_output(surface->ren(), shot);
+        menu_shot_path->clear();
     }
     // do_present=false leaves the composited frame in the backbuffer for a
     // caller-side RenderReadPixels (Metal reads black AFTER present).
     if (do_present) {
-        maybe_dump_output(ren);   // OLDUVAI_DUMP_OUTPUT (image_out.hpp)
-        PresentTimer sw(swap_ms, perf_ms, stats_on);   // the vsync block
-        SDL_RenderPresent(ren);
+        FrameStats::Timer sw(stats, &FrameStats::swap_ms);   // the vsync block
+        present_output(surface->ren());
     }
+}
+
+bool FramePresenter::upload(FrameBuffer& f,
+                            const enhance::EnhancedHudLayout* hud) const {
+    using Res = LevelSurface::Res;
+    const int s = surface->hd_scale();
+    // A null profile falls back to "" (the native / no-op profile).
+    static const std::string kNoProfile;
+    const std::string& profile =
+        surface->hd_profile() != nullptr ? *surface->hd_profile() : kNoProfile;
+    if (!surface->hd()) {
+        // Classic: the cheat picker in the bitmap font, into the native
+        // buffer (recomposed clean each frame).
+        if (cheats->open()) draw_cheat_rows_native(f);
+        FrameStats::Timer ut(stats, &FrameStats::upload_ms);
+        surface->upload(f.px, 320, Res::kHd);   // scale 1
+        return false;
+    }
+    // A buffer already wide (the paused frame from wrap_wide_for) carries
+    // real margins: the whole canvas, upscaled once into the wide texture,
+    // the HUD bars at HD over the centre, as the steady frame draws them.
+    const int wn = wsp->native_w();
+    if (wsp->active() && wsp->wide_tex() != nullptr && f.w == wn && f.h == 200) {
+        std::vector<std::uint8_t> up =
+            enhance::upscale_rgba(f.px, wn, 200, s, profile);
+        if (hud != nullptr)
+            enhance::draw_enhanced_hud_bars({up, wn * s, 200 * s}, s, *hud,
+                                            wsp->margin());
+        FrameStats::Timer ut(stats, &FrameStats::upload_ms);
+        surface->upload(up, wn, Res::kHd);
+        return true;
+    }
+    if (f.w == 320 * s) {   // an HD gameplay buffer: no upscale
+        if (hud != nullptr)
+            enhance::draw_enhanced_hud_bars(f.canvas(), s, *hud);
+        FrameStats::Timer ut(stats, &FrameStats::upload_ms);
+        surface->upload(f.px, 320, Res::kHd);
+        return false;
+    }
+    // A native 320 buffer (loading, tally, PC1): upscaled whole.
+    std::vector<std::uint8_t> up =
+        enhance::upscale_rgba(f.px, 320, 200, s, profile);
+    if (hud != nullptr)
+        enhance::draw_enhanced_hud_bars({up, 320 * s, 200 * s}, s, *hud);
+    FrameStats::Timer ut(stats, &FrameStats::upload_ms);
+    surface->upload(up, 320, Res::kHd);
+    return false;
+}
+
+void FramePresenter::show_canvas(bool wide_frame) const {
+    if (wide_frame)
+        surface->show(wsp->wide_tex());
+    else if (wsp->active())   // the 320 texture (transitions, loading, tally,
+        surface->show_pillarboxed(wsp->margin());   // pause) on black
+    else
+        surface->show(surface->tex());
+}
+
+void FramePresenter::draw_text_pass(const enhance::EnhancedHudLayout* hud) {
+    enhance::HdText& text = surface->hd_text();
+    const bool vector = surface->use_hd_text();
+    const bool show_cheat = cheats->open() && surface->hd() && text.ok();
+    // menu().is_open() too: the overlay flag is set before the screen opens,
+    // and a closed menu has no current screen.
+    const bool show_menu = menu_ != nullptr && vector &&
+                           !confirm_->is_open() && menu_->is_open();
+    const bool show_confirm = menu_ != nullptr && vector && confirm_->is_open();
+    if (hud == nullptr && !show_cheat && !show_menu && !show_confirm) return;
+    surface->overlay_pass([&](const enhance::Canvas& cv) {
+        const int ow = cv.w, oh = cv.h;
+        const int lw = surface->lsz().w(), lh = surface->lsz().h();
+        const int s = surface->hd_scale();
+        // The picture's rect in the output (letterboxed; widescreen: the
+        // centre 320).  Menu glyphs are laid out in 320-native coordinates and
+        // map onto it for both the pillarboxed and the wide frame.
+        const MenuFrame pic =
+            wsp->active() ? MenuFrame::picture(ow, oh, lw, lh,
+                                               wsp->margin() * s, 320 * s)
+                          : MenuFrame::picture(ow, oh, lw, lh);
+        if (hud != nullptr) {
+            const int saved_cap = text.cap_px();
+            if (wsp->active()) {
+                // The wide mapping, as wsp->present() draws it.
+                wsp->draw_wide_hud_text(cv, *hud);
+            } else {
+                // Sized for the picture, not the window.
+                text.set_cap_px(std::max(1, TextOverlay::cap_px_for(pic.w)));
+                enhance::draw_enhanced_hud_text(cv, text, *hud,
+                                                {pic.x, pic.y, pic.w, pic.h});
+            }
+            text.set_cap_px(saved_cap);   // for a same-pass menu
+            if (!wsp->active()) draw_enhanced_banners(cv);
+        }
+        if (show_cheat) draw_cheat_rows(cv);
+        if (show_menu) draw_menu_vector(cv, text, *menu_, 0.0f, pic);
+        if (show_confirm) draw_confirm_vector(cv, text, *confirm_, pic);
+    });
+}
+
+void FramePresenter::present_paused(const Menu& menu,
+                                    const ConfirmDialog& confirm,
+                                    const char* shot) {
+    wsp->sync_output();   // an Aspect edit this frame decides `wide` below
+    // The frozen scene at native 320x200 (any --hd-profile), dimmed behind
+    // the slab.  advance_state=false: the pause skips the tick, so an
+    // advancing compose would drain club_flag once per paused frame.
+    FrameBuffer pf{320, 200};
+    {
+        RenderTarget prt{pf.px.data(), pf.w, pf.h, 1, nullptr, nullptr};
+        prt.advance_state = false;
+        compose_frame(prt, *state, *render, /*draw_player=*/true);
+    }
+    // Widescreen: wrap the frozen centre with the live frame's margins, gated
+    // on present_path() so the paused frame is never wider than the live one.
+    FrameBuffer wide_pf;
+    const bool wide = wsp->present_path() && wsp->native_w() > 320;
+    if (wide) {
+        std::vector<std::uint8_t> wbuf;
+        wsp->wrap_wide_for(pf, /*is_present=*/true, wbuf);
+        wide_pf = FrameBuffer{wsp->native_w(), 200};
+        if (wbuf.size() == wide_pf.px.size()) wide_pf.px = std::move(wbuf);
+    }
+    FrameBuffer& menu_fb = wide ? wide_pf : pf;
+    const bool bitmap_text = !surface->use_hd_text();
+    if (confirm.is_open()) {
+        // The confirm dialog replaces the menu while open.
+        draw_confirm(menu_fb, confirm, *charset, /*dim=*/true, bitmap_text);
+    } else if (menu.is_open()) {
+        // is_open(): the pause opens before its screen does (esc_pressed, the
+        // reinit test hook), and a closed menu has no screen.  HD: slab and
+        // accent only, the text pass draws the glyphs.
+        const auto& spr = render->entity_sprites;
+        draw_menu(menu_fb, menu, *charset, /*dim=*/true, bitmap_text,
+                  spr.size() > 33 ? &spr[33] : nullptr, &render->palette);
+    }
+    menu_ = &menu;
+    confirm_ = &confirm;
+    pause_shot_ = shot;
+    // with_hud: the pause skips the tick's HUD draw; the HD HUD path here is
+    // read-only (no second food-cap write or GET READY decrement).
+    present(menu_fb, /*with_hud=*/true, /*do_present=*/true);
+    menu_ = nullptr;
+    confirm_ = nullptr;
+    pause_shot_ = nullptr;
 }
 
 }  // namespace olduvai::presentation

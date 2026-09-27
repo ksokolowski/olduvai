@@ -17,10 +17,12 @@
 # imagery in the tree.  On failure the shot PNG is kept in /tmp for eyeballing.
 #
 # Determinism: same recipe as pause_shot_wide.sh / wide_transition.sh —
-# --hd-profile mmpx (INTEGER upscaler; never omniscale, its float codegen is
-# not bit-stable across LTO relinks), --window 896x400 +
-# OLDUVAI_WS_FORCE_MARGIN=64 (native_w 448 x scale 2), fresh XDG_CONFIG_HOME,
-# muted audio.  The capture is a fixed frame number, so no input timing enters.
+# --hd-profile mmpx (INTEGER upscaler; chosen over omniscale for speed on the
+# handhelds, not stability — §3.36 pinned every scaler's output hashes on the
+# CI platform matrix and retired the old omniscale bit-stability claim),
+# --window 896x400 + OLDUVAI_WS_FORCE_MARGIN=64 (native_w 448 x scale 2),
+# fresh XDG_CONFIG_HOME, muted audio.  The capture is a fixed frame number,
+# so no input timing enters.
 #
 # Regenerate after an intentional change (then update the .sha256):
 #   SDL_VIDEODRIVER=dummy XDG_CONFIG_HOME=$(mktemp -d) \

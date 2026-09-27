@@ -1,31 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// SDL2 game-controller support with configurable button mapping.
-//
-// Design (two prongs, because the codebase reads input two ways):
-//  1. A single global SDL event watch — registered with a NAMED function
-//     (SDL_DelEventWatch matches by pointer; lambdas would leak) — sees
-//     every event regardless of which loop polls the queue.  It handles
-//     controller hotplug and translates the mapped buttons into
-//     synthetic keyboard events (dpad → arrows, confirm → RETURN,
-//     back/pause → ESCAPE), so every existing event-driven loop (title
-//     menu, pause, options, intro cards, tally pauses, confirm dialogs)
-//     works with a pad unmodified.
-//  2. Polled accessors (dpad OR left stick past a deadzone; mapped
-//     buttons) for the few SDL_GetKeyboardState sites — gameplay input
-//     builds and the skip-held helpers — which synthetic events cannot
-//     reach (they don't alter the keyboard state array).
-//
-// Mapping comes from play.json (pad_jump / pad_attack / pad_pause /
-// pad_confirm / pad_back, values are SDL button names: "a", "b", "x",
-// "y", "start", "back", "leftshoulder", ... — parsed by SDL itself),
-// plus pad_deadzone (axis units, default 8000).
+// Game controller support with configurable mapping, in two parts:
+//  1. A global SDL event watch (a named function: SDL_DelEventWatch matches by
+//     pointer) handles hotplug and turns mapped buttons into keyboard events
+//     (dpad -> arrows, confirm -> RETURN, back/pause -> ESCAPE), so every
+//     event-driven loop works with a pad unchanged.
+//  2. Polled accessors (dpad or left stick past a deadzone; mapped buttons)
+//     for the SDL_GetKeyboardState sites (gameplay input, skip-held checks),
+//     which synthetic events do not reach.
+// Mapping from play.json: pad_jump / pad_attack / pad_pause / pad_confirm /
+// pad_back (SDL button names: "a", "b", "x", "y", "start", "back",
+// "leftshoulder", ...) and pad_deadzone (default 8000).
 
 #pragma once
 
 #include <SDL.h>
 
+#include <optional>
 #include <string>
+
+#include "presentation/input/button_layout.hpp"   // PadFamily
 
 namespace olduvai::presentation {
 struct GameOptions;   // (game_app.hpp) — for init_from_options
@@ -42,9 +36,8 @@ struct Config {
     int deadzone = 8000;
 };
 
-// Init the controller subsystem, register the event watch, open any
-// already-connected controller.  Safe to call once per process (after
-// SDL_Init); idempotent.
+// Init the controller subsystem, register the watch, open connected pads.
+// Once per process, after SDL_Init; idempotent.
 void init(const Config& cfg);
 // Build a Config from a GameOptions' pad_* keys (button_from_string with the
 // per-button defaults) and init().  The session's gamepad-setup one-liner.
@@ -52,6 +45,9 @@ void init_from_options(const GameOptions& opts);
 void shutdown();
 
 bool connected();
+// The letters the connected pad prints, when SDL knows its type; nullopt
+// with no pad or an unknown one (a handheld's built-in pad usually).
+std::optional<PadFamily> printed_family();
 
 // Live polled state — dpad OR left stick (deadzone-gated) OR mapped button.
 bool left();
@@ -62,6 +58,13 @@ bool jump_held();
 bool attack_held();
 // confirm OR jump (the "fire" sense used by skip-held helpers).
 bool fire_held();
+
+// The live binding of a pad_* key as an SDL button name; "" for another key.
+// The Options menu reads the mapping from here, not from the launch options.
+std::string binding(const std::string& key);
+// Rebind the action a pad_* key names, from now on.  False for another key
+// or an unknown button name (the binding stays).
+bool apply_binding(const std::string& key, const std::string& button);
 
 // Parse an SDL button name ("a", "start", "leftshoulder", ...); returns
 // `def` and warns on stderr if the name is unknown.

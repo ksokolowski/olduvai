@@ -9,17 +9,17 @@ the shell loop (`presentation/game_app.cpp`).
 ## Inside `run_frame`
 
 1. **Inputs** applied to the state (replays read key state for
-   *frame + 1* — the reference's injection convention).
-2. **Score popups** — countdown decrement (the y-move is step 7,
+   *frame + 1*, the reference's injection convention).
+2. **Score popups**: countdown decrement (the y-move is step 7,
    post-render ordering).
-3. **Entity update** — monster AI and per-type frame work.
+3. **Entity update**: monster AI and per-type frame work.
    3b. **Balloon/glider scenery visibility** sync (before collisions).
 4. **Fireball** spawn requests → motion/hit. **Falling stone** on
    surface platform levels.
 5. **Player–entity collisions** (against the *previous* frame's player
-   position — the original runs its object update before player
+   position: the original runs its object update before player
    physics).
-   5b. **L1 ride nudge** — screen 9 drifts the balloon (+3, −3);
+   5b. **L1 ride nudge**: screen 9 drifts the balloon (+3, −3);
    screen 12 catapults the landing (+5, y=80) until x reaches 60, then
    detaches with a hit cooldown.
 6. **The player slot** (one branch per frame):
@@ -29,47 +29,58 @@ the shell loop (`presentation/game_app.cpp`).
    - **cave-entrance descent** (three frames, then the teleport);
    - otherwise **flight physics** (a no-op unless riding on the flight
      screens) then **the player update**.
-7. **Score popups** — post-render y move. Frame counter increments.
+7. **Score popups**: post-render y move. Frame counter increments.
 
 ## The shell loop, per frame
 
-- Frame-counter wrap (after fc=61 has been used → a 62-value cycle)
-  drives the timer decrement and the food-out death.
-- `run_frame(...)`.
-- `run_post_frame_steps(...)` — **6b through 8a below now live in
-  `systems/frame_runner.cpp`**, called as one step from the shell. They read
-  and write only `SystemsState`, so the shell holds none of them. The order
-  inside that function is this contract; 8b onward stayed in the shell because
-  they need the window, the framebuffer and the audio device.
+Every step that reads and writes only `SystemsState` lives in
+`systems/frame_runner.cpp`; the shell (`presentation/game_app.cpp`) calls
+them in this order and holds none of them.  8b onward stay in the
+presentation layer because they need the window, the framebuffer and the
+audio device.
+
+- `wrap_frame_counter`: the wrap (after fc=61 has been used → a 62-value
+  cycle) drives the timer decrement and the food-out death; `--god` refills
+  the timer instead.  The shell then gathers the frame's inputs (they read the
+  player after the wrap).
+- `run_tick`: the inputs (flight physics steers from them), a deferred
+  cave-sign teleport, the cave-entrance descent, then `run_frame(...)`.  The
+  cheat picker pauses the world: no teleport and no `run_frame`; the descent
+  still ticks.
+- `end_tick`: the `--god` refill, then `run_post_frame_steps(...)`, **6b
+  through 8a below**.  The order inside that function is this contract.
 - **6b** death halo init/tick.
 - **6c/6d** L5 glider entry (screen-9/18 grabs) and the screen-12
   detach + fly-away.
-- **6e** position clamp + death-by-fall — *before* exits and
+- **6e** position clamp + death-by-fall, *before* exits and
   transitions, so both fire in glider mode (the player update returns
   early there).
 - **7** cave exit, or in a secret room: trampoline *then* the exit
   check (a bounce can reach the exit threshold the same frame).
-- **8** surface transitions — **secret entry takes priority**; the
+- **8** surface transitions; **secret entry takes priority**, and the
   per-level transition handler runs only if no trap fired.
   **8a** cave-warp animation (never while inside a cave).
-  **8b** level-complete intercept — **leave the loop**: the pseudo-exit
+  **8b** level-complete intercept: **leave the loop**. The pseudo-exit
   screen never binds or renders, and the completing frame is neither
   composed, presented nor traced. The fade to black and the score tally run
-  AFTER the loop, on the platform and boss drivers alike (§3.29; before
-  that the platform tally ran inside the loop and the rest of the iteration
-  re-presented the finished level for one frame).
+  AFTER the loop, on the platform and boss drivers alike (inside it, the
+  rest of the iteration re-presented the finished level for one frame).
 - **8c** secret-room bubble scatter: while `secret_flag`, exactly one
   627-draw LCG pass per gameplay frame (3 draws × 209 iterations),
   entry frame inclusive and nothing at bind time.  Native runs it in
   the render gate (after the post-frame steps, before compose); the
-  reference runs it as logic step 8c — same per-frame consumption, and
+  reference runs it as logic step 8c, the same per-frame consumption, and
   it must NOT depend on visual flags (an enhanced animation that skips
   or alters these draws forks every later RNG-driven event, because
   the LCG state persists past the room).
 - **9** screen change: per-screen state clear, store rebind, and the
   one-frame walk/gravity skip for the next frame.
-- Render; trace snapshot is **post-render** (the reference captures at
-  the frame top, i.e. after the previous frame's render — render-side
+- Render.  Three draw-timed counters tick once per tick around it, never
+  per smooth sub-frame: `tick_teleport_fx` before the HUD draw,
+  `tick_get_ready` after it (draw-then-decrement), `tick_cave_emerge`
+  after the tick's last present, so every present path saw one value.
+- Trace snapshot is **post-render** (the reference captures at
+  the frame top, i.e. after the previous frame's render, so render-side
   mutations like the club decrement are already applied).
 
 ## History

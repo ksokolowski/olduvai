@@ -203,8 +203,14 @@ TEST_CASE("batch-3 shared-machine types: 40-frame scenario, LCG seed 1") {
             ents[2].state = static_cast<int>(MonsterState::RunningAway);
             ents[2].state_counter = 0;
         }
-        const auto res = update_entities(ents, px, py, f, &col, l3a,
-                                         /*kill_all=*/f == 34);
+        EntityTick t;
+        t.player_x = px;
+        t.player_y = py;
+        t.frame = f;
+        t.collision = &col;
+        t.l3a_phase_counter = l3a;
+        t.kill_all = f == 34;
+        const auto res = update_entities(ents, t);
         l3a = res.l3a_phase_counter;
 
         int got[50];

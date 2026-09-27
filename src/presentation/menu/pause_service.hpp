@@ -1,37 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// In-game Pause overlay — the per-frame service glue, extracted verbatim
-// from run_platform_level (CC3 phase 2, seam 2).  Owns the pause state
-// (open flag, exit intents, bindings, staging session, confirm dialog,
-// menu, SettingsFlow) and its input/freeze orchestration.  The controllers
-// (Menu, SettingsFlow, PauseBindings wiring, actions) live where they
-// always did — pause_flow.cpp / pause_bindings.hpp; this is orchestration
-// only.  The freeze returns an INTENT (LevelOutcome is file-local to
-// game_app.cpp); the caller maps intents to outcomes in the same order the
-// old inline block did.  Ordering is part of the frame-loop contract: the
-// pause_shot / menu_script / reinit_smoke golden gates prove the
-// extraction byte-exact.
+// In-game Pause: per-frame service glue.  Owns the pause state (open flag,
+// exit intents, bindings, staging session, confirm dialog, menu, SettingsFlow)
+// and its input routing; the controllers live in pause_flow.cpp /
+// pause_bindings.hpp.  It draws nothing: the verdict is an intent the caller
+// maps to a LevelOutcome, and the presenter draws the menu.  Ordering is part
+// of the frame-loop contract (pause_shot / menu_script / reinit_smoke).
 
 #pragma once
 
-#include "presentation/render/logical_size.hpp"
-
 #include <SDL.h>
 
-#include <cstdint>
-#include <functional>
 #include <optional>
 
 #include "presentation/menu/confirm_dialog.hpp"
-#include "presentation/render/game_render.hpp"
 #include "presentation/level/level_save.hpp"
 #include "presentation/level/level_state.hpp"
 #include "presentation/menu/menu.hpp"
 #include "presentation/menu/pause_flow.hpp"
+#include "presentation/menu/pause_routing.hpp"
 #include "presentation/input/replay.hpp"
 #include "presentation/menu/settings_flow.hpp"
 #include "presentation/menu/settings_session.hpp"
-#include "presentation/render/widescreen_presenter.hpp"
+#include "presentation/pipeline.hpp"
 
 namespace olduvai::presentation {
 
@@ -43,20 +34,13 @@ public:
         Loaded* g;
         InputReplay* replay;
         GameOptions* opts;
-        SdlAudio* audio;
-        const ScaledWindow* sw;
+        Pipeline* pipe;       // an adopt replaces its window and audio
         bool* god_active;
         bool* abort_to_title;
         std::optional<SaveState>* out_load;
         bool* want_reinit;
-        PendingReinit* reinit_req;
-        // SDL's logical size + the overlay-restore mirror, as one (§3.13).
-        LogicalSize* lsz;
-        int hd_scale;
+        DisplaySettings* reinit_req;
         int display_level;
-        // Called after a live Aspect edit so the widescreen presenter
-        // recomputes in the same keypress (see PauseBindWireDeps).
-        std::function<void()> on_aspect_changed;
     };
 
     PauseService(MenuModel& model, bool menu_ok, const External& x);
@@ -72,9 +56,8 @@ public:
     const Menu& menu() const { return menu_; }
     const ConfirmDialog& confirm() const { return confirm_; }
 
-    // Close-without-apply detection at the top of the loop: pause open last
-    // frame, closed now (Resume) with a dirty session = Discard.  APPLY
-    // already clears the session, so no double-revert.
+    // At the top of the loop: pause closed since last frame with a dirty
+    // session = Discard (Apply already empties it).
     void begin_frame();
 
     // Pause menu owns input while open; swallows every gameplay key.
@@ -84,60 +67,50 @@ public:
     // direct title-abort.
     void esc_pressed();
 
-    // §8.6 step 2: after input handling, SettingsFlow checks whether the
-    // menu just left the Options subtree and opens the confirm dialog if
-    // changes are staged.
+    // After input: leaving Options with staged changes opens the confirm
+    // dialog.
     void track_options_exit();
 
-    // The freeze-frame service's verdict — mapped to LevelOutcome by the
-    // caller in this exact order (quit/restart/load/warp/reinit/abort),
-    // matching the old inline block.
+    // This frame's verdict, in this order: quit / restart / load / warp /
+    // reinit / abort.  kFroze: the overlay is up; the caller presents the
+    // paused frame (FramePresenter::present_paused) and skips the tick.
     enum class FreezeResult {
         kNone,             // pause closed — the frame proceeds
-        kFroze,            // overlay drawn; caller `continue`s (full freeze)
+        kFroze,            // pause open, no intent
         kQuitProgram,      // Pause → Exit Game
         kRestartLevel,     // Pause → Restart Level
         kLoadCheckpoint,   // Pause → Load Game (out_load already set)
         kWarpLevel,        // Cheats → Warp! (want_warp() has the target)
-        kReinitDisplay,    // settings change needing re-init
+        kReinitDisplay,    // an Apply the driver rebuilds the display for
         kAbortGameOver,    // Quit to Title via the game-over path
-        kShotQuit,         // OLDUVAI_PAUSE_SHOT captured — quit + stop
     };
-    struct FreezeDeps {
-        Loaded& g;
-        bool god_active;
-        bool use_hd_text;
-        std::uint32_t frame_ms;
-        // Needed so the frozen backdrop can be wrapped WIDE (real margin
-        // content) on screens whose live frame is wide — otherwise pausing
-        // pillarboxed the scene into black bars.  Mirrors ReportFormService.
-        WidescreenPresenter& wsp;
-        // run_platform_level's upload_and_show(frame, with_hud, do_present).
-        const std::function<void(FrameBuffer&, bool, bool)>& upload_and_show;
-    };
-    FreezeResult service_freeze(const FreezeDeps& d);
+    FreezeResult verdict() const;
 
     int want_warp() const { return want_warp_; }
+
+    // After the driver rebuilt the display in place: the settings the menu
+    // previews into and compares against follow the adopted pipeline.
+    void pipeline_changed();
 
 private:
     int wire_bind_(const External& x);   // ordering shim (see ctor)
 
     External x_;
     bool menu_ok_;
-    bool open_ = false, was_open_ = false;
+    bool open_ = false;
     bool want_quit_program_ = false, want_restart_ = false, want_load_ = false;
     int want_warp_ = 0;
     PauseBindings bind_;
     SettingsSession session_;
     ConfirmDialog confirm_;
     PauseActionsDeps actions_deps_;
-    // configure_pause_bind ran BEFORE the Menu was constructed in the old
-    // inline setup — this shim member preserves that order inside the
-    // member-initializer sequence.
+    // configure_pause_bind must run before the Menu is constructed; this member
+    // keeps that order in the initializer sequence.
     int bind_wired_;
     Menu menu_;
     PauseFlowDeps flow_deps_;
     SettingsFlow flow_;
+    PauseRouting routing_{menu_, flow_, session_, confirm_, open_};
 };
 
 }  // namespace olduvai::presentation

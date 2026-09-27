@@ -97,11 +97,11 @@ void Menu::adjust(int dx) {
         if (vals.empty()) return;
         const std::string cur = bind_.get(it.key);
         // A value the row cannot offer is still a value the user HOLDS, and
-        // cycling must never silently throw it away.  This used to read
+        // cycling must never silently throw it away.  An earlier form read
         // `pos == vals.end() ? 0`, so one keypress on a row whose current
-        // token was not in its list jumped to values[1] with no way back:
-        // Aspect held "widescreen" (absent from the authored list until
-        // 2026-09-07) and a single Right press destroyed it, persisted.
+        // token is not in its list would jump to values[1] with no way back:
+        // Aspect can hold "widescreen" (absent from the authored list) and a
+        // single Right press destroys it, persisted.
         // Splicing the current value in at the front keeps every state
         // reachable in both directions.
         if (std::find(vals.begin(), vals.end(), cur) == vals.end())

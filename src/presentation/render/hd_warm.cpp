@@ -18,25 +18,14 @@ namespace olduvai::presentation {
 
 namespace {
 
-// The RGBA the cache keys on is produced by sprite_to_rgba() — the SAME
-// function blit_sprite's HD path calls, not a copy of it.  It has to be the
-// same body: a warm that hashes even slightly different bytes writes entries
-// under keys no blit ever asks for, which is 100% wasted work that ALSO leaves
-// the hitch exactly where it was, with nothing visibly wrong to see it by.
-// A copy could only be kept in step by a comment saying so, which is the shape
-// this tree's most expensive failures have all had (BACKLOG.md §1).
+// The cache keys on sprite_to_rgba() output, the same function blit_sprite's
+// HD path calls: a warm hashing even slightly different bytes would fill
+// entries no blit asks for and leave the hitch.
 
-// Run body(i) over [0, n) across `threads` participants, the caller being one
-// of them.  A private fan-out rather than enhance::parallel_rows for two
-// reasons: that one is ROW-shaped, and its pool holds exactly ONE task's state
-// (body_/h_/pending_), so entering it from several threads at once corrupts it.
-//
-// The index is an atomic counter rather than a fixed stride because sprite
-// areas vary by an order of magnitude and a static split leaves threads idle on
-// the tail.  That makes COMPLETION ORDER non-deterministic, which is fine here
-// in a way it would not be for a scaler band split: every job writes only its
-// own slot, and the slots are consumed in fixed index order afterwards, so
-// nothing observable depends on who finished first.
+// Run body(i) over [0, n) on `threads` participants including the caller.  Not
+// parallel_rows: that is row-shaped and not reentrant.  An atomic index
+// (sprite sizes vary 10x), so completion order varies, but each job writes its
+// own slot and slots are consumed in index order.
 void parallel_indices(std::size_t n, int threads,
                       const std::function<void(std::size_t)>& body) {
     if (n == 0) return;
@@ -59,16 +48,10 @@ void parallel_indices(std::size_t n, int threads,
     for (auto& t : workers) t.join();
 }
 
-// The inner scalers call enhance::parallel_rows, whose pool is not reentrant.
-// Today every sprite is below kMinRowsToSplit and takes the early return before
-// any locking, so nesting would not actually fire — but that is luck, not a
-// design, and one 32-row sprite would turn it into a corruption bug that only
-// reproduces under load.  Turn the row split off for the duration instead.
-// Nothing is lost: 16-32 px art was never eligible for it, and per-sprite
-// parallelism is the better axis for this work anyway.
-//
-// Safe to touch a global here because the warm runs on the loading screen, with
-// no other thread rendering.
+// Turn parallel_rows off during the warm: its pool is not reentrant, and one
+// sprite tall enough to split would corrupt it under load.  Small sprites never
+// split anyway.  Safe as a global: nothing else renders during the loading
+// screen.
 struct SerialRowsDuringWarm {
     const bool prev = enhance::parallel_rows_enabled();
     SerialRowsDuringWarm() { enhance::set_parallel_rows_enabled(false); }
@@ -102,11 +85,8 @@ std::size_t warm_hd_sprite_cache(enhance::HdAssetCache& cache,
     }
     if (requests.empty()) return 0;
 
-    // Read BEFORE the guard below flips it.  Reusing that flag rather than
-    // adding a second knob: it already means "no threading anywhere in the HD
-    // path", and it is what test_hd_warm flips to compute the cache both ways
-    // in one process — the same trick test_upscale_threading uses, and the only
-    // way to gate "threaded == serial" as a byte comparison rather than a hope.
+    // Read before the guard flips it.  The same flag test_hd_warm flips to
+    // compare threaded and serial output byte for byte.
     const int threads =
         enhance::parallel_rows_enabled() ? enhance::parallel_row_threads() : 1;
     const SerialRowsDuringWarm serial_rows;
@@ -123,9 +103,8 @@ std::size_t warm_hd_sprite_cache(enhance::HdAssetCache& cache,
                                                  profile);
     });
 
-    // Phase 2 (serial, cheap): drop duplicates and anything already cached.
-    // Duplicates are common — a symmetric sprite hashes identically both ways,
-    // and sheets repeat frames — and upscaling one twice would be pure waste.
+    // Phase 2 (serial): drop duplicates (symmetric sprites, repeated frames)
+    // and anything already cached.
     std::vector<std::size_t> todo;
     std::unordered_set<std::uint64_t> seen;
     todo.reserve(sources.size());

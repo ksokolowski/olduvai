@@ -10,6 +10,9 @@
 #include "enhance/hd_asset_cache.hpp"
 #include "enhance/upscale.hpp"
 #include "presentation/image_out.hpp"   // present_output
+#include "presentation/menu/confirm_dialog.hpp"
+#include "presentation/menu/menu.hpp"
+#include "presentation/menu/menu_render.hpp"
 #include "presentation/render/boss_hud.hpp"
 #include "presentation/render/boss_widescreen.hpp"
 #include "presentation/render/text_overlay.hpp"
@@ -34,47 +37,33 @@ void boss_smooth_pos(RenderTarget& rt, bool use_float, float pfx, float pfy) {
 
 // ── BossWidescreen ──────────────────────────────────────────────────────────
 
-BossWidescreen::BossWidescreen(SDL_Renderer* ren, bool enabled, int hd_scale,
-                               LogicalDims fallback, LogicalSize* lsz)
-    : ren_(ren), enabled_(enabled), hd_scale_(hd_scale),
-      fallback_(fallback), lsz_(lsz) {
-    SDL_GetRendererOutputSize(ren_, &ow0_, &oh0_);
+BossWidescreen::BossWidescreen(LevelSurface& surface, bool enabled,
+                               LogicalDims fallback)
+    : surface_(surface), enabled_(enabled), fallback_(fallback) {
+    SDL_GetRendererOutputSize(surface_.ren(), &ow0_, &oh0_);
     M = enabled_ ? boss_ws_margin(ow0_, oh0_,
                                   std::getenv("OLDUVAI_WS_FORCE_MARGIN"))
                  : 0;
     active = enabled_ && M > 0;
     w = 320 + 2 * M;
-    wtex = active ? create_stream_tex(ren_, w * hd_scale_, 200 * hd_scale_)
-                  : nullptr;
-}
-
-BossWidescreen::~BossWidescreen() {
-    if (wtex != nullptr) SDL_DestroyTexture(wtex);
 }
 
 void BossWidescreen::rebuild_if_resized() {
     if (!enabled_) return;
     int ow = 0, oh = 0;
-    SDL_GetRendererOutputSize(ren_, &ow, &oh);
+    SDL_GetRendererOutputSize(surface_.ren(), &ow, &oh);
     if (ow == ow0_ && oh == oh0_) return;   // unchanged
     ow0_ = ow;
     oh0_ = oh;
-    const int newM =
-        boss_ws_margin(ow, oh, std::getenv("OLDUVAI_WS_FORCE_MARGIN"));
-    if (newM != M) {
-        M = newM;
-        w = 320 + 2 * M;
-        if (wtex != nullptr) { SDL_DestroyTexture(wtex); wtex = nullptr; }
-        if (M > 0)
-            wtex = create_stream_tex(ren_, w * hd_scale_, 200 * hd_scale_);
-    }
+    M = boss_ws_margin(ow, oh, std::getenv("OLDUVAI_WS_FORCE_MARGIN"));
+    w = 320 + 2 * M;
     active = M > 0;
 
-    // Active → wide canvas fills the output; inactive (margin 0) → the
-    // aspect_logical fallback (pillarbox).  Keep SDL's logical size and the
-    // restore vars in lockstep.
-    lsz_->set(active ? w * hd_scale_ : fallback_.w,
-              active ? 200 * hd_scale_ : fallback_.h);
+    // Active: the wide canvas fills the output; inactive (margin 0): the
+    // aspect_logical pillarbox.  SDL and lsz change together.
+    const int s = surface_.hd_scale();
+    surface_.lsz().set(active ? w * s : fallback_.w,
+                       active ? 200 * s : fallback_.h);
 }
 
 void compose_arena_wide(std::vector<std::uint8_t>& out, int M,
@@ -95,21 +84,17 @@ BossArenaPresenter::BossArenaPresenter(LevelSurface& surface,
 
 void BossArenaPresenter::hud_overlay(bool draw_lives) {
     // Centre origin 0, total native width 320 — the plain 320 domain.
-    int ow = 0, oh = 0;
-    TextOverlay& overlay = surface_.overlay();
-    if (!overlay.begin(surface_.ren(), surface_.hd_text(), ow, oh)) return;
-    hud_.draw_into(overlay.buffer(), ow, oh, draw_lives, /*cx_native=*/0,
-                   /*total_native_w=*/320);
-    overlay.flush(surface_.ren(), surface_.lsz().w(), surface_.lsz().h());
+    surface_.overlay_pass([&](const enhance::Canvas& cv) {
+        hud_.draw_into(cv, draw_lives, /*cx_native=*/0,
+                       /*total_native_w=*/320);
+    });
 }
 
 void BossArenaPresenter::hud_overlay_wide(bool draw_lives) {
     // Centre origin ws_.M, total native width ws_.w (= 320 + 2M).
-    int ow = 0, oh = 0;
-    TextOverlay& overlay = surface_.overlay();
-    if (!overlay.begin(surface_.ren(), surface_.hd_text(), ow, oh)) return;
-    hud_.draw_into(overlay.buffer(), ow, oh, draw_lives, ws_.M, ws_.w);
-    overlay.flush(surface_.ren(), surface_.lsz().w(), surface_.lsz().h());
+    surface_.overlay_pass([&](const enhance::Canvas& cv) {
+        hud_.draw_into(cv, draw_lives, ws_.M, ws_.w);
+    });
 }
 
 void BossArenaPresenter::present_frame(bool draw_lives, bool do_present) {
@@ -120,8 +105,6 @@ void BossArenaPresenter::present_frame(bool draw_lives, bool do_present) {
     ws_.rebuild_if_resized();
     SDL_Renderer* const ren = surface_.ren();
     SDL_Texture* const tex = surface_.tex();
-    const bool hd = surface_.hd();
-    const int hd_scale = surface_.hd_scale();
 
     // Bitmap path: unchanged (classic only, draw into 320x200 fb).
     if (!surface_.use_hd_text()) {
@@ -129,26 +112,16 @@ void BossArenaPresenter::present_frame(bool draw_lives, bool do_present) {
     }
     {
         FrameStats::Timer ut(stats, &FrameStats::upload_ms);
-        if (hd) {
-            // Arena fb is already HD — upload directly (no upscale, no text).
-            SDL_UpdateTexture(tex, nullptr, fb_.px.data(), fb_.w * 4);
-        } else {
-            SDL_UpdateTexture(tex, nullptr, fb_.px.data(), 320 * 4);
-        }
+        // fb_ is at the surface's scale (HD, or 1 in classic): no upscale.
+        surface_.upload(fb_.px, 320, LevelSurface::Res::kHd);
     }
-    SDL_RenderClear(ren);
     if (ws_.active) {
-        // Wide logical canvas active but this is a non-wide present (the
-        // victory/KO-flash fallback): pillarbox the 320 texture into the
-        // centered dst rect so it keeps its 4:3-ish proportions inside the
-        // wide canvas (no horizontal stretch), then draw the HUD with the
-        // WIDE mapping so labels/bar sit over the centered 320 region.
-        const SDL_Rect dst{ws_.M * hd_scale, 0, 320 * hd_scale, 200 * hd_scale};
-        SDL_RenderCopy(ren, tex, nullptr, &dst);
+        // Non-wide present on a wide canvas (the victory / KO-flash fallback):
+        // pillarbox the 320 texture at the centre, HUD with the wide mapping.
+        surface_.show_pillarboxed(ws_.M);
         if (surface_.use_hd_text()) hud_overlay_wide(draw_lives);
     } else {
-        SDL_RenderCopy(ren, tex, nullptr, nullptr);
-
+        surface_.show(tex);
         // Vector HUD labels at OUTPUT resolution (crisp at any window scale).
         if (surface_.use_hd_text()) hud_overlay(draw_lives);
     }
@@ -162,9 +135,8 @@ std::vector<std::uint8_t> BossArenaPresenter::build_wide_up() {
     const int hd_scale = surface_.hd_scale();
     const std::string& profile = *surface_.hd_profile();
 
-    // 1. Cached static wide bg: the HUD-clean arena background composed wide
-    //    (margins = pure reflection of its edge strips, so the black arena
-    //    walls stay black; 0.10 edge-darkening gradient), upscaled ONCE.
+    // 1. Cached static wide bg: the HUD-clean arena composed wide (pure edge
+    // reflection, 0.10 gradient), upscaled once.
     if (bg_hd_M_ != ws_.M || bg_hd_profile_ != profile) {
         FrameBuffer cbg{320, 200};
         std::copy(arena_bg->begin(), arena_bg->end(), cbg.px.begin());
@@ -175,10 +147,8 @@ std::vector<std::uint8_t> BossArenaPresenter::build_wide_up() {
         bg_hd_profile_ = profile;
     }
 
-    // Timed as the two SEPARATE costs they are: a 2.5 MB allocate-and-copy at
-    // scale 3 that is identical work on every boss, and a sprite blit whose
-    // cost scales with the boss.  Only the second can explain a per-level
-    // spread, so reporting them summed would answer the wrong question.
+    // Timed separately: the background copy (2.5 MB at scale 3, the same for
+    // every boss) and the sprite blit (varies by boss).
     std::vector<std::uint8_t> out;
     {
         FrameStats::Timer bt(stats, &FrameStats::bg_copy_ms);
@@ -189,9 +159,7 @@ std::vector<std::uint8_t> BossArenaPresenter::build_wide_up() {
     RenderTarget wrt = boss_visual_target(out.data(), ws_.w * hd_scale,
                                           200 * hd_scale, hd_scale, &cache_,
                                           surface_.hd_profile(), ws_.M);
-    boss_smooth_pos(wrt, smooth_use_float != nullptr && *smooth_use_float,
-                    smooth_fx != nullptr ? *smooth_fx : 0.0f,
-                    smooth_fy != nullptr ? *smooth_fy : 0.0f);
+    apply_smooth(wrt);
     {
         FrameStats::Timer st(stats, &FrameStats::scene_ms);
         draw_fight_sprites(wrt);
@@ -206,11 +174,9 @@ void BossArenaPresenter::show_wide_up(const std::vector<std::uint8_t>& up,
     SDL_Renderer* const ren = surface_.ren();
     {
         FrameStats::Timer ut(stats, &FrameStats::upload_ms);
-        SDL_UpdateTexture(ws_.wtex, nullptr, up.data(),
-                          ws_.w * surface_.hd_scale() * 4);
+        surface_.upload(up, ws_.w, LevelSurface::Res::kHd);
     }
-    SDL_RenderClear(ren);
-    SDL_RenderCopy(ren, ws_.wtex, nullptr, nullptr);
+    surface_.show(ws_.wtex());
     // Vector HUD over the center 320 sub-region (mapped into the wide domain).
     if (surface_.hd_text().ok()) hud_overlay_wide(draw_lives);
     if (do_present) {
@@ -221,7 +187,7 @@ void BossArenaPresenter::show_wide_up(const std::vector<std::uint8_t>& up,
 
 std::vector<std::uint8_t> BossArenaPresenter::compose_wide_native(
     const std::function<void(RenderTarget&)>& draw) {
-    if (!ws_.active || ws_.wtex == nullptr || arena_bg == nullptr) return {};
+    if (!ws_.active || ws_.wtex() == nullptr || arena_bg == nullptr) return {};
     FrameBuffer cbg{320, 200};
     std::copy(arena_bg->begin(), arena_bg->end(), cbg.px.begin());
     std::vector<std::uint8_t> wide;
@@ -237,20 +203,17 @@ std::vector<std::uint8_t> BossArenaPresenter::compose_wide_native(
 void BossArenaPresenter::show_wide_native(const std::vector<std::uint8_t>& wide,
                                           bool draw_lives, bool do_present,
                                           bool draw_hud) {
-    if (ws_.wtex == nullptr) return;
-    std::vector<std::uint8_t> up =
+    if (ws_.wtex() == nullptr) return;
+    const std::vector<std::uint8_t> up =
         enhance::upscale_rgba(wide, ws_.w, 200, surface_.hd_scale(),
                               *surface_.hd_profile());
     if (draw_hud) {
         show_wide_up(up, draw_lives, do_present);
         return;
     }
-    SDL_Renderer* const ren = surface_.ren();
-    SDL_UpdateTexture(ws_.wtex, nullptr, up.data(),
-                      ws_.w * surface_.hd_scale() * 4);
-    SDL_RenderClear(ren);
-    SDL_RenderCopy(ren, ws_.wtex, nullptr, nullptr);
-    if (do_present) present_output(ren);
+    surface_.upload(up, ws_.w, LevelSurface::Res::kHd);
+    surface_.show(ws_.wtex());
+    if (do_present) present_output(surface_.ren());
 }
 
 void BossArenaPresenter::use_wide_logical() {
@@ -270,7 +233,7 @@ int BossArenaPresenter::wide_w() const { return ws_.w; }
 bool BossArenaPresenter::wide_on() const { return ws_.active; }
 
 bool BossArenaPresenter::wide_ready() const {
-    return ws_.active && ws_.wtex != nullptr;
+    return ws_.active && ws_.wtex() != nullptr;
 }
 
 void BossArenaPresenter::rebuild_if_resized() { ws_.rebuild_if_resized(); }
@@ -278,10 +241,9 @@ void BossArenaPresenter::rebuild_if_resized() { ws_.rebuild_if_resized(); }
 void BossArenaPresenter::present_wide(bool draw_lives, bool do_present) {
     ws_.rebuild_if_resized();
 
-    // A resize this frame may have dropped widescreen (margin → 0, ws_.wtex
-    // freed): fall back to the pillarbox present rather than touch a null
-    // texture.
-    if (!ws_.active || ws_.wtex == nullptr) {
+    // A resize may have dropped widescreen (null wtex): use the pillarbox
+    // present.
+    if (!ws_.active || ws_.wtex() == nullptr) {
         present_frame(draw_lives, do_present);
         return;
     }
@@ -299,16 +261,14 @@ void BossArenaPresenter::present_wide_native(const FrameBuffer& nat,
     const int hd_scale = surface_.hd_scale();
     const std::string& profile = *surface_.hd_profile();
 
-    if (!ws_.active || ws_.wtex == nullptr) {
-        std::vector<std::uint8_t> up =
+    if (!ws_.active || ws_.wtex() == nullptr) {
+        const std::vector<std::uint8_t> up =
             enhance::upscale_rgba(nat.px, 320, 200, hd_scale, profile);
         {
             FrameStats::Timer ut(stats, &FrameStats::upload_ms);
-            SDL_UpdateTexture(surface_.tex(), nullptr, up.data(),
-                              320 * hd_scale * 4);
+            surface_.upload(up, 320, LevelSurface::Res::kHd);
         }
-        SDL_RenderClear(ren);
-        SDL_RenderCopy(ren, surface_.tex(), nullptr, nullptr);
+        surface_.show(surface_.tex());
         if (draw_hud && surface_.use_hd_text()) hud_overlay(draw_lives);
         if (do_present) {
             FrameStats::Timer st(stats, &FrameStats::swap_ms);
@@ -318,14 +278,13 @@ void BossArenaPresenter::present_wide_native(const FrameBuffer& nat,
     }
     std::vector<std::uint8_t> wide;
     compose_arena_wide(wide, ws_.M, nat);
-    std::vector<std::uint8_t> up =
+    const std::vector<std::uint8_t> up =
         enhance::upscale_rgba(wide, ws_.w, 200, hd_scale, profile);
     {
         FrameStats::Timer ut(stats, &FrameStats::upload_ms);
-        SDL_UpdateTexture(ws_.wtex, nullptr, up.data(), ws_.w * hd_scale * 4);
+        surface_.upload(up, ws_.w, LevelSurface::Res::kHd);
     }
-    SDL_RenderClear(ren);
-    SDL_RenderCopy(ren, ws_.wtex, nullptr, nullptr);
+    surface_.show(ws_.wtex());
     if (draw_hud && surface_.hd_text().ok()) hud_overlay_wide(draw_lives);
     if (do_present) {
         FrameStats::Timer st(stats, &FrameStats::swap_ms);
@@ -336,19 +295,14 @@ void BossArenaPresenter::present_wide_native(const FrameBuffer& nat,
 void BossArenaPresenter::present_any(bool draw_lives, bool do_present) {
     const bool l4_victory = ws_.active && wide_victory && wide_victory();
     if (l4_victory) {
-        // L4 ride-off victory: build the wide buffer the SAME way the fight
-        // does — clean arena bg composed wide (mirror + 0.10 edge gradient),
-        // then the victory SPRITES drawn ONCE at origin_x = M so the riding
-        // triceratops + player OVERFLOW into the margins.  The old path baked
-        // the sprites into a 320 frame and then mirrored it
-        // (present_wide_native), which duplicated + clipped the ride-off dino
-        // at the screen edges.  Defensive 320 fallback if a resize dropped
-        // widescreen mid-ride.
+        // L4 ride-off: the wide buffer as the fight builds it (clean arena,
+        // mirror, 0.10 gradient), then the victory sprites once at origin_x = M
+        // so rider and dino overflow into the margins.  320 fallback if a
+        // resize dropped widescreen.
         ws_.rebuild_if_resized();
 
-        // Keep the post-victory wide fade source (ws_.last_native) current: it
-        // is faded native-wrapped after the loop; by then the dino has ridden
-        // off so the baked-native frame is a fine (near-empty) fade source.
+        // Keep the fade source (ws_.last_native) current; by the fade the dino
+        // has ridden off, so the native frame is fine.
         FrameBuffer vnat;
         {
             RenderTarget nrt{vnat.px.data(), 320, 200, 1, nullptr, nullptr};
@@ -356,7 +310,7 @@ void BossArenaPresenter::present_any(bool draw_lives, bool do_present) {
         }
         ws_.last_native = vnat;
 
-        if (!ws_.active || ws_.wtex == nullptr) {   // resize dropped widescreen
+        if (!ws_.active || ws_.wtex() == nullptr) {   // resize dropped widescreen
             present_wide_native(vnat, draw_lives, do_present);
             return;
         }
@@ -375,6 +329,149 @@ void BossArenaPresenter::present_any(bool draw_lives, bool do_present) {
         present_wide(draw_lives, do_present);
     } else {
         present_frame(draw_lives, do_present);
+    }
+}
+
+void BossArenaPresenter::show_native(const FrameBuffer& f) {
+    SDL_Renderer* const ren = surface_.ren();
+    surface_.upload(f.px, 320, LevelSurface::Res::kNative);
+    if (ws_.active)
+        surface_.show_pillarboxed(ws_.M);
+    else
+        surface_.show(surface_.tex());
+    present_output(ren);
+}
+
+void BossArenaPresenter::capture_shot(const std::string& path,
+                                      bool real_output) {
+    SDL_Renderer* const ren = surface_.ren();
+    const bool text_ok = surface_.hd_text().ok();
+    if (real_output) {
+        // Rendered without presenting: a post-present readback is black on
+        // Metal.
+        present_any(true, /*do_present=*/false);
+        capture_renderer_output(ren, path);
+    } else if (ws_.active) {
+        // The wide buffer + HUD at its true size (a readback would capture
+        // the window's aspect).
+        std::vector<std::uint8_t> up = build_wide_up();
+        const int uw = ws_.w * surface_.hd_scale();
+        const int uh = 200 * surface_.hd_scale();
+        if (text_ok)
+            hud_.draw_into({up, uw, uh}, /*draw_lives=*/true,
+                           /*cx_native=*/ws_.M, /*total_native_w=*/ws_.w);
+        save_rgba_image(up.data(), uw, uh, path);
+    } else if (surface_.hd()) {
+        // The HUD labels live in the output overlay, not fb.
+        surface_.upload(fb_.px, 320, LevelSurface::Res::kHd);
+        surface_.show(surface_.tex());
+        if (text_ok) hud_overlay(/*draw_lives=*/true);
+        capture_renderer_output(ren, path);
+    } else {
+        save_rgba_image(fb_.px.data(), fb_.w, fb_.h, path);
+    }
+}
+
+void BossArenaPresenter::apply_smooth(RenderTarget& rt) const {
+    boss_smooth_pos(rt, smooth_use_float != nullptr && *smooth_use_float,
+                    smooth_fx != nullptr ? *smooth_fx : 0.0f,
+                    smooth_fy != nullptr ? *smooth_fy : 0.0f);
+}
+
+void BossArenaPresenter::show_pause(
+    const std::function<void(RenderTarget&)>& render_frame,
+    const std::function<void(RenderTarget&)>& render_sprites,
+    const Menu& menu, const ConfirmDialog& confirm,
+    const std::vector<formats::Sprite>& charset, const formats::Sprite* bone,
+    const std::vector<formats::Rgb>* bone_palette) {
+    SDL_Texture* const tex = surface_.tex();
+    const bool hd = surface_.hd();
+    const int hd_scale = surface_.hd_scale();
+    enhance::HdText& text = surface_.hd_text();
+    LogicalSize& lsz = surface_.lsz();
+    ws_.rebuild_if_resized();   // Alt+Enter taken WHILE paused
+    // The menu is laid out in native coordinates: compose at 320x200 and
+    // upscale the whole frame into the HD texture, never an SDL stretch
+    // (nearest, scale quality "0").
+    FrameBuffer pf{320, 200};
+    RenderTarget prt{pf.px.data(), 320, 200, 1, nullptr, nullptr};
+    // Freeze at the granularity of the last present: a vsync tick can
+    // end mid-interpolation, and redrawing at the integer position
+    // nudges the player up to hd_scale pixels on ESC.
+    apply_smooth(prt);
+    render_frame(prt);
+
+    // HD: slab and dim come from draw_menu (upscaled); glyphs and
+    // cursor go to the vector overlay.  Classic draws bitmap glyphs
+    // into the native buffer.
+    const bool menu_use_vector = surface_.use_hd_text();
+
+    // Widescreen: rebuild the frozen arena as the live fight does:
+    // mirror the clean background (reflect_pure, 0.10 edge gradient),
+    // then draw the sprites once at origin_x = ws_.M.  Mirroring the
+    // composed frame would reflect live sprites into the margins.
+    FrameBuffer wide_pf;
+    bool wide_pause = hd && wide_ready() && wide_w() > 320;
+    if (wide_pause) {
+        std::vector<std::uint8_t> wbuf =
+            compose_wide_native([&](RenderTarget& wrt) {
+                // The same three fields the live wide compose feeds, so
+                // the paused edge matches it byte for byte.
+                apply_smooth(wrt);
+                render_sprites(wrt);
+            });
+        wide_pf = FrameBuffer{wide_w(), 200};
+        if (wbuf.size() == wide_pf.px.size()) {
+            wide_pf.px = std::move(wbuf);
+        } else {
+            wide_pause = false;   // give up → pillarbox fallback
+        }
+    }
+
+    FrameBuffer& menu_fb = wide_pause ? wide_pf : pf;
+    if (confirm.is_open()) {
+        // The confirm dialog replaces the menu while open.
+        draw_confirm(menu_fb, confirm, charset, /*dim=*/true,
+                     /*draw_text=*/!menu_use_vector);
+    } else if (menu.is_open()) {
+        // is_open(): the overlay can be open before its screen is.
+        draw_menu(menu_fb, menu, charset, /*dim=*/true,
+                  /*draw_text=*/!menu_use_vector, bone,
+                  bone_palette);
+    }
+    // The native pause compose, upscaled into the wide texture or the
+    // fight's 320 one.
+    surface_.upload(menu_fb.px, wide_pause ? ws_.w : 320,
+                    LevelSurface::Res::kNative);
+    if (wide_pause)   // already the full wide canvas: no bezel
+        surface_.show(ws_.wtex());
+    else if (ws_.active)
+        surface_.show_pillarboxed(ws_.M);
+    else
+        surface_.show(tex);
+
+    if (menu_use_vector) {
+        surface_.overlay_pass([&](const enhance::Canvas& cv) {
+            // Boss HUD in the same overlay pass, before the menu (a
+            // second begin/flush would not composite).  Without it the
+            // paused frame shows mirrored arena where the HUD belongs.
+            hud_.draw_into(cv, /*draw_lives=*/true,
+                           /*cx_native=*/ws_.active ? ws_.M : 0,
+                           /*total_native_w=*/ws_.active ? ws_.w : 320);
+            // The picture's rect in the output (letterboxed;
+            // widescreen: the centre 320 at ws_.M), so glyphs land on
+            // the slab.
+            const MenuFrame pic =
+                ws_.active
+                    ? MenuFrame::picture(cv.w, cv.h, lsz.w(), lsz.h(),
+                                         ws_.M * hd_scale,
+                                         320 * hd_scale)
+                    : MenuFrame::picture(cv.w, cv.h, lsz.w(), lsz.h());
+            if (confirm.is_open())
+                draw_confirm_vector(cv, text, confirm, pic);
+            else if (menu.is_open())
+                draw_menu_vector(cv, text, menu, 0.0f, pic);
+        });
     }
 }
 

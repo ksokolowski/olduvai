@@ -31,6 +31,93 @@ int w(const prepare::ObjectRecord& r, std::size_t i) {
 
 std::uint16_t next15() { return core::global_rng().next(); }
 
+// The common shape: record words 0/1 are x/y, plus a sprite and a hitbox.
+void place(Entity& e, const prepare::ObjectRecord& r, int sprite, int hit_w,
+           int hit_h) {
+    e.x = w(r, 0);
+    e.y = w(r, 1);
+    e.sprite = sprite;
+    e.hit_w = hit_w;
+    e.hit_h = hit_h;
+}
+
+// The shared-machine monsters: the record's start state and position, then
+// the EXE's per-type tables (sprites, walk offsets, energy, probes, club
+// reach) and the alternate walk set some types switch to.
+void init_monster(Entity& e, const prepare::ObjectRecord& r,
+                  const MonsterTables& tables) {
+    e.init_state = w(r, 0);
+    e.respawns = w(r, 1);
+    e.init_x = w(r, 2);
+    e.init_y = w(r, 3);
+    e.x = e.init_x;
+    e.y = e.init_y;
+    e.state = static_cast<int>(MonsterState::Reset);
+    e.direction = w(r, 8);
+    e.state_counter = w(r, 9);
+    e.ko_counter = w(r, 10);
+    e.hit_w = 32; e.hit_h = 32;
+    const auto it = tables.main.find(r.type);
+    if (it != tables.main.end()) {
+        const auto& mt = it->second;
+        e.sprite = mt.init_spr;
+        e.init_spr = mt.init_spr;
+        e.spr_num = mt.move_spr;
+        e.walk_offsets.assign(mt.walk_offsets.begin(), mt.walk_offsets.end());
+        e.away_spr = mt.away_spr;
+        e.ko_spr = mt.ko_spr;
+        e.hits_to_ko = mt.energy;
+        e.dat00 = mt.dat00;
+        e.probe_di = mt.di;
+        e.probe_si = mt.si;
+        e.club_reach_right = mt.dat02;
+        e.club_reach_left = mt.var16;
+        e.direction_flag = mt.direction_flag;
+    }
+    const auto alt = tables.alt.find(r.type);
+    if (alt != tables.alt.end()) {
+        e.alt_spr_num = alt->second.move_spr;
+        e.alt_away_spr = alt->second.away_spr;
+        e.alt_walk_offsets.assign(alt->second.walk_offsets.begin(),
+                                  alt->second.walk_offsets.end());
+    }
+    // Pre-activated from screen entry when the record's state is positive.
+    e.visible = e.init_state > 0;
+    if (e.visible) e.state = e.init_state;
+}
+
+// PTERIYAKI_L7: body and wing x, then their phase sub-counters, from the LCG
+// (in that order) between the record's x bounds.  Cosmetic: no hitbox.
+void init_pteriyaki(Entity& e, const prepare::ObjectRecord& r) {
+    const int x_max = w(r, 0);
+    const int x_min = w(r, 1);
+    const int range = (x_max - x_min) > 0 ? (x_max - x_min) : 1;
+    e.x = next15() % range + x_min;
+    e.anchor_a = x_max;
+    e.anchor_b = x_min;
+    e.wing_x = next15() % range + x_min;
+    e.body_phase = 0x38;
+    e.wing_phase = 0x4D;
+    e.body_subcounter = next15() % 2;
+    e.wing_subcounter = next15() % 2;
+    e.y = 159;
+    e.sprite = e.body_phase;
+    e.body_sprite = e.wing_phase;
+    e.body_x = e.wing_x;
+    e.body_y = 165;
+    e.visible = true;
+    e.hit_w = 0; e.hit_h = 0;
+}
+
+// A cave bat's right bound: the cave's width from the size table, less 8;
+// the screen width outside a cave.
+int cave_bat_right(int cave_index) {
+    const auto& sizes = core::game_tables().cave_sizes;
+    if (cave_index < 0 || cave_index >= static_cast<int>(sizes.size()))
+        return core::kGameW - 8;
+    return sizes[static_cast<std::size_t>(cave_index)] - 8;
+}
+
 }  // namespace
 
 MonsterTables MonsterTables::from_exe(const std::vector<std::uint8_t>& exe) {
@@ -64,44 +151,29 @@ std::vector<Entity> spawn_screen_entities(
                 e.visible = false;
                 break;
             }
-            case 0x02: {  // PEAK trampoline
-                e.x = w(r, 0); e.y = w(r, 1);
-                e.sprite = kSprTrampoline;
-                e.hit_w = 16; e.hit_h = 16;
+            case 0x02:    // PEAK trampoline
+                place(e, r, kSprTrampoline, 16, 16);
                 break;
-            }
-            case 0x25: {  // PEAK_L7 lava spring
-                e.x = w(r, 0); e.y = w(r, 1);
-                e.sprite = kSprPeakL7;
-                e.hit_w = 16; e.hit_h = 16;
+            case 0x25:    // PEAK_L7 lava spring
+                place(e, r, kSprPeakL7, 16, 16);
                 break;
-            }
-            case 0x03: {  // EGG — counter forced to 2 at reset
-                e.x = w(r, 0); e.y = w(r, 1);
+            case 0x03:    // EGG
+                place(e, r, kSprEgg, 16, 16);
                 // EXE bug — matches original: FUN_27f7_02cb TYPE 0x03
                 // CS:0x0439 forces counter := 2 unconditionally (spawn
                 // records carry 0) — hatch timer starts 2 frames in.
                 e.counter = 2;
-                e.sprite = kSprEgg;
-                e.hit_w = 16; e.hit_h = 16;
                 break;
-            }
-            case 0x04: {  // ROCK — counter forced to 3
-                e.x = w(r, 0); e.y = w(r, 1);
+            case 0x04:    // ROCK
+                place(e, r, kSprRock, 16, 16);
                 // EXE bug — matches original: FUN_27f7_02cb TYPE 0x04
                 // CS:0x0367 forces counter := 3 (shake/drop starts mid-timer).
                 e.counter = 3;
-                e.sprite = kSprRock;
-                e.hit_w = 16; e.hit_h = 16;
                 break;
-            }
-            case 0x1C: {  // BREAKABLE_ROCK_L3 — shares the egg reset (2 HP)
-                e.x = w(r, 0); e.y = w(r, 1);
+            case 0x1C:    // BREAKABLE_ROCK_L3 — shares the egg reset (2 HP)
+                place(e, r, kSprRockL3, 16, 16);
                 e.counter = 2;
-                e.sprite = kSprRockL3;
-                e.hit_w = 16; e.hit_h = 16;
                 break;
-            }
             case 0x05: {  // ANCESTOR_GHOST — counter may be negative (delay)
                 e.x = w(r, 0); e.y = w(r, 1);
                 e.counter = w(r, 2);
@@ -111,46 +183,35 @@ std::vector<Entity> spawn_screen_entities(
                 e.hit_w = 40; e.hit_h = 30;
                 break;
             }
-            case 0x06: {  // HIDDEN_FOOD — state forced to 2 (dormant)
-                e.x = w(r, 0); e.y = w(r, 1);
+            case 0x06:    // HIDDEN_FOOD — state forced to 2 (dormant)
                 e.spr_num = w(r, 2);
+                place(e, r, kSprHiddenFoodBase + e.spr_num, 16, 16);
                 e.state = 2;
-                e.sprite = kSprHiddenFoodBase + e.spr_num;
-                e.hit_w = 16; e.hit_h = 16;
                 e.visible = false;
                 break;
-            }
-            case 0x07: {  // SECRET_FOOD
-                e.x = w(r, 0); e.y = w(r, 1);
+            case 0x07:    // SECRET_FOOD
                 e.spr_num = w(r, 2);
+                place(e, r, kSprSecretFoodBase + e.spr_num, 16, 16);
                 e.state = w(r, 3);
-                e.sprite = kSprSecretFoodBase + e.spr_num;
-                e.hit_w = 16; e.hit_h = 16;
                 break;
-            }
             case 0x18: {  // ANIMATED_FOOD_L3 hazard
-                e.x = w(r, 0); e.y = w(r, 1);
-                e.spr_num = w(r, 2);
-                e.counter = 0;
                 constexpr int kAnim[4] = {94, 84, 83, 84};
-                e.sprite = kAnim[e.spr_num & 3];
-                e.hit_w = 16; e.hit_h = 16;
-                break;
-            }
-            case 0x14: {  // FOOD_CAVE — bonus sprite table
-                e.x = w(r, 0); e.y = w(r, 1);
                 e.spr_num = w(r, 2);
-                e.state = w(r, 3);
-                e.sprite = (e.spr_num >= 0 && e.spr_num < 6)
-                               ? kBonusSprites[e.spr_num]
-                               : kSprSecretFoodBase + e.spr_num;
-                e.hit_w = 16; e.hit_h = 16;
+                place(e, r, kAnim[e.spr_num & 3], 16, 16);
+                e.counter = 0;
                 break;
             }
+            case 0x14:    // FOOD_CAVE — bonus sprite table
+                e.spr_num = w(r, 2);
+                place(e, r,
+                      (e.spr_num >= 0 && e.spr_num < 6)
+                          ? kBonusSprites[e.spr_num]
+                          : kSprSecretFoodBase + e.spr_num,
+                      16, 16);
+                e.state = w(r, 3);
+                break;
             case 0x08: {  // BALLOONS — two entities from one record
-                e.x = w(r, 0); e.y = w(r, 1);
-                e.sprite = w(r, 2) - 1;    // 1-based on disk
-                e.hit_w = 24; e.hit_h = 24;
+                place(e, r, w(r, 2) - 1, 24, 24);   // sprite 1-based on disk
                 out.push_back(e);
                 Entity e2;
                 e2.obj_type = ObjType::Balloons;
@@ -187,51 +248,9 @@ std::vector<Entity> spawn_screen_entities(
             }
             case 0x0A: case 0x0B: case 0x0C: case 0x0D:
             case 0x1A: case 0x1B: case 0x21: case 0x22:
-            case 0x26: case 0x27: {  // shared-machine monsters
-                e.init_state = w(r, 0);
-                e.respawns = w(r, 1);
-                e.init_x = w(r, 2);
-                e.init_y = w(r, 3);
-                e.x = e.init_x;
-                e.y = e.init_y;
-                e.state = static_cast<int>(MonsterState::Reset);
-                e.direction = w(r, 8);
-                e.state_counter = w(r, 9);
-                e.ko_counter = w(r, 10);
-                e.hit_w = 32; e.hit_h = 32;
-                const auto it = tables.main.find(r.type);
-                if (it != tables.main.end()) {
-                    const auto& mt = it->second;
-                    e.sprite = mt.init_spr;
-                    e.init_spr = mt.init_spr;
-                    e.spr_num = mt.move_spr;
-                    e.walk_offsets.assign(mt.walk_offsets.begin(),
-                                          mt.walk_offsets.end());
-                    e.away_spr = mt.away_spr;
-                    e.ko_spr = mt.ko_spr;
-                    e.hits_to_ko = mt.energy;
-                    e.dat00 = mt.dat00;
-                    e.probe_di = mt.di;
-                    e.probe_si = mt.si;
-                    e.club_reach_right = mt.dat02;
-                    e.club_reach_left = mt.var16;
-                    e.direction_flag = mt.direction_flag;
-                }
-                const auto alt = tables.alt.find(r.type);
-                if (alt != tables.alt.end()) {
-                    e.alt_spr_num = alt->second.move_spr;
-                    e.alt_away_spr = alt->second.away_spr;
-                    e.alt_walk_offsets.assign(alt->second.walk_offsets.begin(),
-                                              alt->second.walk_offsets.end());
-                }
-                if (e.init_state > 0) {  // pre-activated from screen entry
-                    e.state = e.init_state;
-                    e.visible = true;
-                } else {
-                    e.visible = false;
-                }
+            case 0x26: case 0x27:   // shared-machine monsters
+                init_monster(e, r, tables);
                 break;
-            }
             case 0x0E:    // CHIMP
             case 0x20: {  // CHIMP_L5 snowman
                 e.state = w(r, 0);
@@ -264,27 +283,9 @@ std::vector<Entity> spawn_screen_entities(
                 e.hit_w = 24; e.hit_h = 24;
                 break;
             }
-            case 0x23: {  // PTERIYAKI_L7 — LCG x/wing + phase sub-counters
-                const int x_max = w(r, 0);
-                const int x_min = w(r, 1);
-                const int range = (x_max - x_min) > 0 ? (x_max - x_min) : 1;
-                e.x = next15() % range + x_min;
-                e.anchor_a = x_max;
-                e.anchor_b = x_min;
-                e.wing_x = next15() % range + x_min;
-                e.body_phase = 0x38;
-                e.wing_phase = 0x4D;
-                e.body_subcounter = next15() % 2;
-                e.wing_subcounter = next15() % 2;
-                e.y = 159;
-                e.sprite = e.body_phase;
-                e.body_sprite = e.wing_phase;
-                e.body_x = e.wing_x;
-                e.body_y = 165;
-                e.visible = true;
-                e.hit_w = 0; e.hit_h = 0;  // cosmetic, no damage
+            case 0x23:    // PTERIYAKI_L7
+                init_pteriyaki(e, r);
                 break;
-            }
             case 0x10: {  // PLATFORM — dy forced 0, current_y := y
                 e.x = w(r, 0); e.y = w(r, 1);
                 e.y_top = w(r, 3);
@@ -336,21 +337,14 @@ std::vector<Entity> spawn_screen_entities(
                 e.sprite = kSprBat; e.spr_num = kSprBat;
                 e.hit_w = 16; e.hit_h = 16;
                 e.y_top = 40;  // cave left bound
-                e.y_bottom = (cave_index >= 0 &&
-                              cave_index < static_cast<int>(
-                                  core::game_tables().cave_sizes.size()))
-                                 ? core::game_tables().cave_sizes[static_cast<std::size_t>(
-                                       cave_index)] - 8
-                                 : core::kGameW - 8;
+                e.y_bottom = cave_bat_right(cave_index);
                 break;
             }
-            case 0x1D: {  // SNAKE_L3 — strike phase from the LCG
-                e.x = w(r, 0); e.y = w(r, 1);
+            case 0x1D:    // SNAKE_L3 — strike phase from the LCG
+                place(e, r, kSprSnake, 24, 16);
+                e.spr_num = kSprSnake;
                 e.counter = next15() % 10;
-                e.sprite = kSprSnake; e.spr_num = kSprSnake;
-                e.hit_w = 24; e.hit_h = 16;
                 break;
-            }
             case 0x1E: {  // PROJECTILE_L3 launcher
                 e.x = w(r, 1);          // field order: state, x, y, …
                 e.y = w(r, 2);

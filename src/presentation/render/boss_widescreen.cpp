@@ -27,7 +27,7 @@ int boss_ws_margin(int out_w, int out_h, const char* force_env) {
     // OLDUVAI_WS_DEBUG: what the margin was computed FROM, on the one function
     // both the boss arena and the platform presenter call.
     //
-    // Reported 2026-09-10: black bars above and below the arena on a 1280x720
+    // Reported: black bars above and below the arena on a 1280x720
     // handheld panel.  The arithmetic here cannot produce them -- 1280x720
     // gives desired=356, m=18, a 356x200 canvas at 1.7780 against the panel's
     // 1.7778 -- so if bars appear, `out_w`/`out_h` are not the panel, and this

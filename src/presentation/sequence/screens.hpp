@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Loading screen, score tally, and palette-fade transitions.
+// Loading screen, score tally, palette fades.
 // Loading: "Please Wait" (baseline 0x60) / "while loading Level N" (0x70),
-// centred, black screen, mode-2-style fade in/out.   // FUN_270a_0412
-// Tally: LEVEL N (y=32) / COMPLETED! (48) / BONUS SCORE (72) and the three
-// centred value rows (96/120/144); bonus counts down by 2 (+20 score each),
-// lives count down (+1000 each); odd display levels award +1 life first;
-// 4-second skippable pauses.                          // FUN_270a_01b4
+// centred on black, fade in/out.   // FUN_270a_0412
+// Tally: LEVEL N (y=32) / COMPLETED! (48) / BONUS SCORE (72) and three centred
+// value rows (96/120/144); bonus counts down by 2 (+20 score each), lives by 1
+// (+1000 each); odd display levels award +1 life first; 4-second skippable
+// pauses.                          // FUN_270a_01b4
 
 #pragma once
 
@@ -27,52 +27,28 @@ using PresentFn = std::function<bool(const FrameBuffer&)>;
 // True when the skip key (attack/fire) is held this moment.
 using SkipFn = std::function<bool()>;
 
-// A vector-text row for the loading/tally screens.  `native_baseline_y`
-// is the EXE text-row baseline in the 320x200 design space; the present
-// implementation draws it at the renderer's OUTPUT resolution (so the glyphs
-// are crisp at the physical window size, not the HD compose size).  Colour
-// 235,235,235 by default (matches the boss HUD labels).
-//
-// `align` controls horizontal placement (mirrors the reference's fixed-anchor
-// tally layout — labels stay put while the counting digits change width):
-//   0 = centred  (default; title rows, loading rows)
-//   1 = label    — right-aligned, ending at the tally colon column
-//   2 = value    — left-aligned, starting at the tally value column
-// Aligns 1/2 are only meaningful inside draw_tally_rows_overlay (which derives
-// the colon/value columns from FIXED reference strings, so the columns are the
-// same every frame regardless of the current bonus/lives/score digits).
+// A vector-text row for the loading/tally screens, drawn at output resolution.
+// `native_baseline_y` is the EXE baseline in 320x200 space.  Colour
+// 235,235,235 (the boss HUD labels).
 struct HdTextRow {
     int native_baseline_y;
     std::string text;
-    // 0 centred, 1 label (right-aligned to the colon column), 2 value
-    // (left-aligned after it), 3 width reservation for the value column —
-    // measured, never drawn (draw_tally_rows_overlay).
+    // 0 centred; 1 label, right-aligned to the colon column; 2 value,
+    // left-aligned after it; 3 value-column width reservation (measured, never
+    // drawn).  1-3 only in draw_tally_rows_overlay, which derives the columns
+    // from fixed strings so they do not move as digits change.
     int align = 0;
 };
 
-// Presents a pre-built HD scene buffer (wxh already at HD resolution) and then
-// draws the centred vector-text `rows` at the renderer's OUTPUT resolution as
-// a 1:1 overlay over the scene — so the text stays crisp regardless of how far
-// SDL scales the scene texture up to the window.  The scene buffer carries NO
-// vector text (it is left black / upscaled-only).  An EMPTY scene buffer means
-// a black scene: the presenter clears and uploads nothing.  Returns false to
-// abort.
+// Present a pre-built HD scene (w x h) and draw `rows` over it at output
+// resolution.  The scene has no vector text; an empty scene means black.
+// Returns false to abort.
 using HdPresentFn = std::function<bool(const std::vector<std::uint8_t>&, int w,
                                        int h, const std::vector<HdTextRow>&)>;
 
-// Enhanced-mode handle for a full-screen TEXT screen — the level-entry loading
-// card and the score tally.  When set + ok(), the screen routes every text row
-// through the cartoon vector font (hd_text) at OUTPUT resolution (via the
-// present_hd overlay), mirroring the reference's text layers.  Classic mode
-// passes a default-constructed handle (null hd_text) and keeps the
-// byte-identical bitmap path.
-//
-// ONE type, deliberately.  This was `TallyHd` and `LoadingHd` — two structs
-// with the same four members, same types, same defaults.  Nothing enforced
-// that they stayed the same, and game_app assigned one to the other a field at
-// a time because the language would not let it say what it meant.  A screen
-// that draws vector rows over an upscaled buffer is one concept; it now has
-// one name.  See sequence/text_screen_present.hpp for the shared presenter.
+// Enhanced text screens (loading card, tally): with hd_text set and ok(), every
+// row goes through the vector font at output resolution.  Default (null
+// hd_text): the classic bitmap path.
 struct TextScreenHd {
     const enhance::HdText* hd_text = nullptr;   // null → classic bitmap path
     int scale = 1;                              // HD target scale (2/3/4)
@@ -87,73 +63,54 @@ constexpr int kFadeFrames = 18;
 // Multiply the frame towards black (t = 0 → unchanged, 1 → black).
 void apply_fade(FrameBuffer& dst, const FrameBuffer& src, double t);
 
-// Present `from` faded to black over kFadeFrames + 1 frames (the last one
-// fully black).  `on_frame`, when set, sees each faded frame before it is
-// presented.  Returns false as soon as `present` does (the user quit).
+// Fade `from` to black over kFadeFrames + 1 frames (the last fully black).
+// `on_frame` sees each frame before it is presented.  Returns false when
+// `present` does.
 bool fade_to_black(const FrameBuffer& from, const PresentFn& present,
                    const std::function<void(const FrameBuffer&)>& on_frame = {});
 
-// Fade `from` to black, then the loading screen in; hold; fade to black.
-// Returns false if the user quit.
-// `hd` (optional): when hd.hd_text is non-null and ok(), the two text rows
-// ("Please Wait" / "while loading Level N") are rendered via the cartoon vector
-// font at HD resolution on an upscaled black buffer (classic bitmap path
-// suppressed), and the in/out fades run on the HD buffer — see TextScreenHd.
-bool show_loading_screen(const FrameBuffer* from, int display_level,
-                         const std::vector<formats::Sprite>& charset,
-                         const std::vector<formats::Rgb>& pal,
-                         const PresentFn& present,
-                         const TextScreenHd& hd = {});
+// How a text screen draws: the level's bitmap font in its palette, the
+// present, and the vector text when HD (TextScreenHd; default: bitmap).
+struct TextPage {
+    const std::vector<formats::Sprite>& charset;
+    const std::vector<formats::Rgb>& palette;
+    const PresentFn& present;
+    TextScreenHd hd;
+};
 
-// Full-screen PC1 (e.g. the game-over picture): fade in, hold, fade out.
-// fade_in/fade_out are optional so multi-call holds (the BULLE dream
-// screen) can present seamlessly without dipping to black between calls.
+// Fade `from` to black, the loading screen in, hold, fade out.  Returns false
+// if the user quit.
+bool show_loading_screen(const FrameBuffer* from, int display_level,
+                         const TextPage& page);
+
+// Full-screen PC1 (e.g. the game-over picture): fade in, hold, fade out.  The
+// fades are optional so consecutive holds (the BULLE dream screen) do not dip
+// to black.
 bool show_pc1_screen(const formats::Pc1Image& img, int hold_frames,
                      const PresentFn& present, const SkipFn& skip,
                      bool fade_in = true, bool fade_out = true);
 
-// Pure countdown step: apply one bonus-countdown tick or one lives-countdown
-// tick to the mutable accumulators.  Returns the new bonus_remaining / lives
-// values.  Extracted for headless unit testing (no SDL, no present()).
-//
-// Bonus phase: bonus_remaining decrements by 2 (clamped to 0), score += 20.
-// Lives phase: lives_remaining decrements by 1, score += 1000.
-// Call with bonus_remaining > 0 for bonus phase; once it reaches 0 call with
-// lives_remaining > 0 for lives phase.
+// One countdown tick.  Bonus: -2 (clamped at 0), score +20.  Lives: -1, score
+// +1000.  Run the bonus phase to 0, then the lives phase.
 void step_tally_bonus(int& bonus_remaining, long& score);
 void step_tally_lives(int& lives_remaining, long& score);
 
-// Enhanced-mode completion-chime handle for the score tally.  When enhanced is
-// true and audio is non-null, the tally plays SFX_WAIT_AND_PLAY once at the
-// final pause (after both countdowns) — mirrors the reference engine extension
-// (`if state.cinematic_cue: audio.play_sfx_event("SFX_WAIT_AND_PLAY")` — the
-// reference keeps that as a separate flag; here it rides --enhanced, which is
-// all-or-nothing since the collapse).  The EXE plays NO SFX here
-// (FUN_270a_01b4 calls the silent FUN_1847_065a wait), so the default
-// (non-enhanced / null audio) path stays silent — EXE-faithful.
+// Enhanced completion chime: SFX_WAIT_AND_PLAY once at the final pause (the
+// reference's extension).  The EXE plays nothing here (FUN_270a_01b4 calls the
+// silent wait FUN_1847_065a), so classic / null audio stays silent.
 struct TallyAudio {
     SdlAudio* audio = nullptr;     // null → no chime
     bool enhanced = false;         // gate: set from --enhanced
 };
 
-// The level-completion tally, shared by the platform and boss drivers
-// (EXE Level_EndScreen(N,500): FUN_270a_01b4, called from the platform exits
-// 21f3:082b / 2276:0ea4 / 2361:06d6 / 25b2:0892 and the boss exits 23cf:0fc9 /
-// 24cc:0818 / 254f:0620).  Mutates `lives` and `score`.  Both drivers call it
-// AFTER their level loop has ended, so nothing is presented after it.
-// The two 4-second pauses are edge-triggered: only a fresh SPACE/RETURN
-// KEYDOWN (not a key held from gameplay) advances them.  The countdown
-// loops themselves are never skippable (EXE FUN_270a_01b4 pacing).
-// `hd` (optional): when hd.hd_text is non-null and ok(), the tally renders all
-// text rows via the cartoon vector font at HD resolution (classic bitmap path
-// suppressed) — see TextScreenHd.  A default-constructed handle (null hd_text)
-// keeps the byte-identical bitmap path.
-// Returns false when the tally was quit (window close).
-bool show_score_tally(int& lives, long& score, int display_level,
-                      int bonus, const std::vector<formats::Sprite>& charset,
-                      const std::vector<formats::Rgb>& pal,
-                      const PresentFn& present,
-                      const TextScreenHd& hd = {}, const TallyAudio& sfx = {});
+// Level-completion tally for both drivers (Level_EndScreen(N,500):
+// FUN_270a_01b4, called from 21f3:082b / 2276:0ea4 / 2361:06d6 / 25b2:0892 and
+// the boss exits 23cf:0fc9 / 24cc:0818 / 254f:0620).  Mutates `lives` and
+// `score`; runs after the level loop.  The two 4-second pauses advance only on
+// a fresh SPACE/RETURN keydown; the countdowns are never skippable.  Returns
+// false when quit (window close).
+bool show_score_tally(int& lives, long& score, int display_level, int bonus,
+                      const TextPage& page, const TallyAudio& sfx = {});
 
 
 }  // namespace olduvai::presentation

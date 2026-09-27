@@ -10,20 +10,10 @@
 
 namespace olduvai::systems {
 
-// Per-screen walk boundaries — the x limits a level imposes on the screens
-// that have them.  §3.16: these were ~11 statements of the form
-// `if (scr == N && p.x < K) p.x = K` spread through check_l3_transition and
-// check_l7_transition, which is a table written as control flow: the metric
-// counts each one as a branch, and the constants sit where they cannot be read
-// side by side.
-//
-// kLoOpen / kHiOpen are INT_MIN / INT_MAX rather than a sentinel needing its
-// own test, so an unbounded side simply never compares true.
-//
-// NOT every clamp is here, deliberately.  Three of L3's carry an extra
-// condition — `!screen_change` on screen 12, `p.y > 0x22` on screen 11,
-// `!cave_flag` on screen 9 — and folding those in would need a predicate
-// column, at which point the table is the code again. They stay written out.
+// Per-screen walk limits (x) as a table.  kLoOpen / kHiOpen (INT_MIN/INT_MAX)
+// never compare true.  Three L3 clamps carry an extra condition
+// (`!screen_change` on 12, `p.y > 0x22` on 11, `!cave_flag` on 9) and stay
+// written out.
 struct WalkClamp {
     int screen;
     int lo;
@@ -135,9 +125,9 @@ void check_l3_transition(SystemsState& state) {
             p.x = 0x96;
             p.y = 0x32;
             state.screen_change = true;
-            // Trunk-cave EXIT to surface — EXE FUN_2276_06f2 0x0c82-0x0cbf
-            // clears bp-6 = 0 at 0x0cbf, routing the next frame through
-            // Sprite_DrawDispatch mode=2 (the fade-out → blit → fade-in pair).
+            // Trunk-cave exit to the surface: FUN_2276_06f2 0x0c82-0x0cbf
+            // clears bp-6 at 0x0cbf, so the next frame goes through
+            // Sprite_DrawDispatch mode 2 (the fade pair).
             state.player.cave_warp_pending = true;
             return;
         }
@@ -197,13 +187,12 @@ void check_l5_transition(SystemsState& state) {
     }
 }
 
-// Warp behaviour here is the AUTHORITY (capstone-cited); the seam
-// topology it implies is mirrored in systems/screen_topology.hpp
-// (one table for peek suppression + transition-kind classification).
-// test_screen_topology cross-checks the two.
+// This warp behaviour is the authority (capstone-cited); its seam topology is
+// mirrored in systems/screen_topology.hpp and cross-checked by
+// test_screen_topology.
 void check_l7_transition(SystemsState& state) {
     PlayerState& p = state.player;
-    int scr = state.current_screen;
+    const int scr = state.current_screen;
     apply_walk_clamps(state, kL7Clamps, std::size(kL7Clamps));
     // Screen-18 lava-spring exit trigger.
     if (scr == 18 && !state.screen_change &&
@@ -316,12 +305,9 @@ void handle_l5_screen12_glider(SystemsState& state) {
 }
 
 void roll_l3_descent_smoke_jitter(SystemsState& state) {
-    // FUN_2276_03d9:0x0554 + 0x0586 — smoke A then B per outer iter, iters
-    // 0..19 only (iter 20 jumps to exit at 0x0516-0x051c).  Two Rand_LCG16()
-    // % 10 calls per iter = 40 global LCG draws per descent.  The renderer
-    // reads the cached pairs; the LCG state is thus advanced identically
-    // whether we are in interactive, replay, or headless mode.
-    // Capstone-verified 2026-06-12: same modulus 0x0a, same call site order.
+    // FUN_2276_03d9:0x0554 + 0x0586: smoke A then B per outer iter, iters 0..19
+    // (iter 20 exits at 0x0516-0x051c).  Two Rand_LCG16() % 10 per iter = 40
+    // draws per descent, in every mode; the renderer reads the cached pairs.
     auto& rng = core::global_rng();
     for (auto& p : state.l3_descent_smoke_jitter) {
         p.first  = static_cast<int>(rng.next() % 10);  // jitter_a (smoke A Y)
@@ -335,15 +321,11 @@ void clear_per_screen_state(SystemsState& state) {
     state.player.platform_flag = 0;
     state.player.cave_warp_freeze = 0;   // DS:0x987e
     state.player.cave_warp_pending = false;   // presentation transient
-    // Floating score popups are zeroed on EVERY screen change: each surface
-    // level main re-runs a clear loop over the 10-slot popup array (DS:0x9806,
-    // stride 8) at its per-screen setup top, zeroing every counter field
-    // (L1-main capstone 0x289 zero-writes each slot counter at DS:0x9806+bx;
-    // L5 0x263, L3 0x093a, L7 0x03e9; cave init 0x07b5).  The in-screen frame
-    // loop enters past the clear (L1, 0x2b2), so popups age normally within a screen but
-    // never carry across one.  Matching this stops a popup spawned inside a cave
-    // from continuing to float on the surface after exit (was a port divergence
-    // in both engines).  Zeroing the counter marks each slot inactive.
+    // Score popups are cleared on every screen change: each surface level main
+    // zeroes the 10-slot popup array (DS:0x9806, stride 8) at its per-screen
+    // setup (L1 0x289, L5 0x263, L3 0x093a, L7 0x03e9; cave init 0x07b5), and
+    // the frame loop enters past the clear (L1 0x2b2).  So a popup from a cave
+    // never floats on after the exit.
     for (auto& b : state.score_bonuses) {
         b.counter = 0;
         b.active_this_frame = false;

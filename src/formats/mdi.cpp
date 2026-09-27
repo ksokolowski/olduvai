@@ -21,11 +21,8 @@ std::size_t read_vlq(const std::vector<std::uint8_t>& d, std::size_t& pos) {
 }
 
 void write_vlq(std::vector<std::uint8_t>& out, std::size_t value) {
-    // SMF caps a variable-length quantity at 4 bytes (max 0x0FFFFFFF).  A
-    // corrupt/hostile container can accumulate absurd tick deltas; clamp to
-    // the spec max instead of overflowing the byte stack below (a mutated
-    // .MDI overran stack[5] here — fuzz_formats finding).  Real containers
-    // never get near the cap, so faithful output is unchanged.
+    // SMF caps a VLQ at 4 bytes (0x0FFFFFFF); clamp so a corrupt file cannot
+    // overrun stack[5] (a fuzz finding).
     if (value > 0x0FFFFFFF) value = 0x0FFFFFFF;
     std::uint8_t stack[5];
     int n = 0;
@@ -46,11 +43,9 @@ std::uint32_t be32(const std::vector<std::uint8_t>& d, std::size_t pos) {
 
 }  // namespace
 
-// Per-track MT-32 program assignment for the melodic-synth path.  The MDI
-// streams carry no program-change events; this channel→program table is the
-// release catalog's curated assignment, matched per track against the
-// original driver's MT-32 output (it is not a table in the executable —
-// byte-searched 2026-07-19).
+// Per-track MT-32 program assignment for the melodic path.  MDI streams carry
+// no program changes; this curated table is matched per track against the
+// original driver's MT-32 output (not in the executable; byte-searched).
 const std::map<int, int>* roland_program_map(int track_id) {
     static const std::map<int, std::map<int, int>> kMap = {
         {0, {{1, 14}, {2, 34}, {3, 32}, {4, 56}, {5, 77}, {10, 0}}},
@@ -67,12 +62,9 @@ const std::map<int, int>* roland_program_map(int track_id) {
     return it == kMap.end() ? nullptr : &it->second;
 }
 
-// EXE 'R'-branch MT-32 channel remap (FUN_1f75_01bb jump-table arms): MDI
-// channel → output channel.  Melody parts 0..5 → 1..6; channels 6..15 collapse
-// onto channel 9 (the rhythm/percussion part — drums in both MT-32 and GM).
-// Tracks 0/4/5 collapse some melody channels too (composer's "monaural"
-// tricks).  Mirrors the reference implementation's MT-32 channel remap tables.  Applied only on
-// the melodic-synth path (mt32_strict); the OPL/'A' branch keeps raw channels.
+// EXE 'R'-branch MT-32 channel remap (FUN_1f75_01bb): melody 0..5 -> 1..6,
+// 6..15 -> 9 (rhythm).  Tracks 0/4/5 also collapse some melody channels.
+// Melodic path only (mt32_strict); OPL keeps raw channels.
 const std::array<int, 16>& channel_remap(int track_id) {
     static const std::array<int, 16> kDefault =
         {1, 2, 3, 4, 5, 6, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9};
@@ -90,14 +82,13 @@ const std::array<int, 16>& channel_remap(int track_id) {
     }
 }
 
-// Approximate MT-32 -> GM preset translation (timbres without an exact
-// GM peer map to the closest family member; authentic sound needs the
-// real MT-32 path).
+// Approximate MT-32 -> GM program translation (closest family member where no
+// exact peer exists).
 int mt32_to_gm(int program) {
     static const std::map<int, int> kMap = {
-        {7, 3}, {8, 16}, {14, 19}, {15, 21}, {24, 62}, {25, 62},  // 25/26: ScummVM orientation (owner indifferent SynBrass1↔2)
+        {7, 3}, {8, 16}, {14, 19}, {15, 21}, {24, 62}, {25, 62},  // 25/26: ScummVM orientation (SynBrass1↔2 indifferent)
         {26, 63}, {28, 38}, {30, 39}, {32, 88}, {34, 52}, {37, 99},
-        {39, 95}, {43, 90}, {44, 81}, {51, 45}, {56, 43}, {63, 104},  // 39: owner ear-check vs MT-32 (was 86); see mt32_to_gm_scummvm_walk.md
+        {39, 95}, {43, 90}, {44, 81}, {51, 45}, {56, 43}, {63, 104},  // 39: ear-checked vs MT-32 (fixed from 86); see mt32_to_gm_scummvm_walk.md
         {66, 33}, {68, 36}, {69, 37}, {77, 75}, {78, 65}, {87, 22},
         {92, 60}, {95, 61}, {97, 11}, {98, 11}, {104, 12}, {113, 117},
         {117, 116}, {122, 55},
@@ -119,9 +110,8 @@ int mdi_track_id(const std::string& lower_name) {
 
 namespace {
 
-// The MDI files are single-track SMFs: a header chunk, then one MTrk.  Fills
-// `header_len` and `track` with that track's bytes; false when the file is not
-// that shape, and the caller then passes it through untouched.
+// MDI files are single-track SMFs: fill `header_len` and `track`; false for
+// any other shape (the caller passes it through).
 bool first_track_bytes(const std::vector<std::uint8_t>& raw,
                        std::size_t& header_len,
                        std::vector<std::uint8_t>& track) {
@@ -143,11 +133,9 @@ bool first_track_bytes(const std::vector<std::uint8_t>& raw,
     return true;
 }
 
-// The channel-voice events, with the held-note bookkeeping: the source tracks
-// release notes implicitly, so every channel remembers its last sounding note
-// and a new note-on releases that one first.  `last_note` is indexed by the
-// ORIGINAL channel `ch` (see the remap comment in build_gm_midi) while the
-// bytes go out on the remapped channel `oc`.
+// Channel-voice events with held-note bookkeeping: tracks release notes
+// implicitly, so a new note-on first releases the channel's last note.
+// `last_note` is indexed by the original channel `ch`; bytes go out on `oc`.
 template <typename Emit>
 void emit_channel_event(int event_type, int oc, int ch, int d1, int d2,
                         int (&last_note)[16], const Emit& emit) {
@@ -229,6 +217,55 @@ std::vector<std::uint8_t> assemble_smf(const std::vector<std::uint8_t>& raw,
     return out;
 }
 
+// The per-track program presets, each with full channel volume, at time 0.
+// `out` maps a source channel to the output channel.
+template <typename OutChannel>
+void inject_program_presets(std::vector<std::uint8_t>& ev, int track_id,
+                            bool gm_translate, const OutChannel& out) {
+    const auto* programs = roland_program_map(track_id);
+    if (programs == nullptr) return;
+    for (const auto& [ch, prog] : *programs) {
+        const int oc = out(ch - 1);
+        write_vlq(ev, 0);
+        ev.push_back(static_cast<std::uint8_t>(0xC0 | oc));
+        ev.push_back(static_cast<std::uint8_t>(
+            gm_translate ? mt32_to_gm(prog) : prog));
+        write_vlq(ev, 0);
+        ev.push_back(static_cast<std::uint8_t>(0xB0 | oc));
+        ev.push_back(7);
+        ev.push_back(127);
+    }
+}
+
+// A meta event, the cursor past its 0xFF: copied through, except the OPL
+// timbre blocks (type 0x7F).  False when the track ends before its type.
+template <typename Emit>
+bool copy_meta(const std::vector<std::uint8_t>& track, std::size_t& tpos,
+               const Emit& emit) {
+    if (tpos >= track.size()) return false;
+    const std::uint8_t meta_type = track[tpos++];
+    // Clamp the declared length to the bytes present (a corrupt VLQ could
+    // reverse the insert range or loop the cursor).
+    const std::size_t declared_len = read_vlq(track, tpos);
+    const std::size_t meta_len = std::min(declared_len, track.size() - tpos);
+    const std::size_t body = tpos;
+    tpos += meta_len;
+    if (meta_type == 0x7F) return true;
+    std::vector<std::uint8_t> payload = {0xFF, meta_type};
+    write_vlq(payload, meta_len);
+    payload.insert(payload.end(),
+                   track.begin() + static_cast<std::ptrdiff_t>(body),
+                   track.begin() + static_cast<std::ptrdiff_t>(tpos));
+    emit(payload.data(), payload.size());
+    return true;
+}
+
+// Events the strict MT-32 path drops: aftertouch, controllers, pitch bend.
+bool mt32_drops(int event_type) {
+    return event_type == 0xA0 || event_type == 0xB0 || event_type == 0xD0 ||
+           event_type == 0xE0;
+}
+
 }  // namespace
 
 std::vector<std::uint8_t> build_gm_midi(const std::vector<std::uint8_t>& raw,
@@ -239,30 +276,14 @@ std::vector<std::uint8_t> build_gm_midi(const std::vector<std::uint8_t>& raw,
     if (!first_track_bytes(raw, header_len, track)) return raw;
 
     std::vector<std::uint8_t> ev;
-    // MT-32 'R'-branch channel remap (melody 0-5 → 1-6, percussion 6-15 → 9 =
-    // the rhythm/drum channel).  Applied for BOTH melodic synths (mt32_strict =
-    // MT-32 or GM) — the EXE 'R'/MPU-401 branch installs it (FUN_1f75_01bb);
-    // owner A/B confirmed the remapped MT-32 is the correct sound.  OPL keeps
-    // raw channels (the 'A' branch).  Note-tracking below stays on the ORIGINAL
-    // channel so the percussion channels collapsing onto 9 don't auto-cancel.
+    // 'R'-branch channel remap (FUN_1f75_01bb) for both melodic synths; OPL
+    // keeps raw channels.  Note tracking stays on the original channel, so
+    // percussion channels collapsing onto 9 do not cancel each other.
     const std::array<int, 16>& remap = channel_remap(track_id);
     auto rch = [&](int ch) -> int {
         return mt32_strict ? remap[static_cast<std::size_t>(ch & 0x0F)] : ch;
     };
-    // Inject the per-track program presets + full channel volume.
-    if (const auto* programs = roland_program_map(track_id)) {
-        for (const auto& [ch, prog] : *programs) {
-            const int oc = rch(ch - 1);
-            write_vlq(ev, 0);
-            ev.push_back(static_cast<std::uint8_t>(0xC0 | oc));
-            ev.push_back(static_cast<std::uint8_t>(
-                gm_translate ? mt32_to_gm(prog) : prog));
-            write_vlq(ev, 0);
-            ev.push_back(static_cast<std::uint8_t>(0xB0 | oc));
-            ev.push_back(7);
-            ev.push_back(127);
-        }
-    }
+    inject_program_presets(ev, track_id, gm_translate, rch);
 
     int last_note[16];
     for (int& v : last_note) v = 0x80;
@@ -279,34 +300,16 @@ std::vector<std::uint8_t> build_gm_midi(const std::vector<std::uint8_t>& raw,
     while (tpos < track.size()) {
         accumulated_delta += read_vlq(track, tpos);
         if (tpos >= track.size()) break;
-        int status;
-        const std::uint8_t first = track[tpos];
-        if (first < 0x80) {
+        int status = track[tpos];
+        if (status < 0x80) {
             if (running_status < 0) break;
             status = running_status;
         } else {
-            status = first;
             ++tpos;
             if (status < 0xF0) running_status = status;
         }
         if (status == 0xFF) {
-            if (tpos >= track.size()) break;
-            const std::uint8_t meta_type = track[tpos++];
-            // Clamp the declared length to the bytes present: an unbounded
-            // VLQ from a corrupt file can wrap `tpos` below `body` (reversed
-            // insert range = UB) or rewind the cursor into an endless loop.
-            const std::size_t declared_len = read_vlq(track, tpos);
-            const std::size_t meta_len =
-                std::min(declared_len, track.size() - tpos);
-            const std::size_t body = tpos;
-            tpos += meta_len;
-            if (meta_type == 0x7F) continue;   // strip OPL timbre blocks
-            std::vector<std::uint8_t> payload = {0xFF, meta_type};
-            write_vlq(payload, meta_len);
-            payload.insert(payload.end(),
-                           track.begin() + static_cast<std::ptrdiff_t>(body),
-                           track.begin() + static_cast<std::ptrdiff_t>(tpos));
-            emit(payload.data(), payload.size());
+            if (!copy_meta(track, tpos, emit)) break;
             continue;
         }
         if (status >= 0xF0) {   // sysex — skipped entirely
@@ -315,27 +318,15 @@ std::vector<std::uint8_t> build_gm_midi(const std::vector<std::uint8_t>& raw,
             continue;
         }
         const int event_type = status & 0xF0;
-        const int ch = status & 0x0F;          // original — for note tracking
-        const int oc = rch(ch);                // remapped — for output
-        int d1 = 0, d2 = 0;
-        if (event_type == 0x80 || event_type == 0x90 || event_type == 0xA0 ||
-            event_type == 0xB0 || event_type == 0xE0) {
-            if (tpos + 1 >= track.size()) break;
-            d1 = track[tpos];
-            d2 = track[tpos + 1];
-            tpos += 2;
-        } else if (event_type == 0xC0 || event_type == 0xD0) {
-            if (tpos >= track.size()) break;
-            d1 = track[tpos];
-            ++tpos;
-        } else {
-            continue;
-        }
-        if (mt32_strict && (event_type == 0xA0 || event_type == 0xB0 ||
-                            event_type == 0xD0 || event_type == 0xE0)) {
-            continue;
-        }
-        emit_channel_event(event_type, oc, ch, d1, d2, last_note, emit);
+        const std::size_t n_data =
+            event_type == 0xC0 || event_type == 0xD0 ? 1 : 2;
+        if (tpos + n_data > track.size()) break;
+        const int d1 = track[tpos];
+        const int d2 = n_data == 2 ? track[tpos + 1] : 0;
+        tpos += n_data;
+        if (mt32_strict && mt32_drops(event_type)) continue;
+        const int ch = status & 0x0F;   // original — for note tracking
+        emit_channel_event(event_type, rch(ch), ch, d1, d2, last_note, emit);
     }
     return assemble_smf(raw, header_len, ev);
 }
@@ -383,15 +374,9 @@ MdiSeqEvent decode_seq_event(const std::uint8_t* p, std::size_t n) {
 
 }  // namespace
 
-// One MTrk chunk's event stream, appended to `out`.
-//
-// Split out of parse_mdi_events (BACKLOG §3.12: 84 points), which is the
-// FILE structure — header, track table, per-track events — with the event
-// dispatch inlined into it.  The dispatch stays one function on purpose:
-// running status, meta, sysex and the channel events are one decision over
-// the same byte, and separating them would mean re-deriving `status` in
-// each piece.  A malformed stream returns false and the caller discards
-// the WHOLE file, exactly as the inlined version did.
+// One MTrk chunk's events, appended to `out`.  The dispatch (running status,
+// meta, sysex, channel events) is one decision over one byte.  Malformed:
+// false, and the caller discards the whole file.
 bool parse_mdi_track(const std::vector<std::uint8_t>& raw, std::size_t i,
                      std::size_t te, MdiEventStream& out) {
     std::uint32_t tick = 0;

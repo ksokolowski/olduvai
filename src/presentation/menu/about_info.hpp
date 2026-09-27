@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// The title menu's About screen (spec 2026-09-18): which build this is, what
+// The title menu's About screen: which build this is, what
 // it was built for and with, who wrote it, and what it recreates.
 //
 // about_build() reads what the COMPILER knows — the same version and build id

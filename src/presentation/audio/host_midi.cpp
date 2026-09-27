@@ -17,11 +17,9 @@
 
 namespace olduvai::presentation {
 
-// ── RtMidi-backed implementation vs. graceful stub ───────────────────────────
-//
-// Everything platform-specific lives behind Impl + the three free functions.
-// When RtMidi is not compiled in (Linux without ALSA, or OLDUVAI_WITH_RTMIDI
-// OFF), host_midi_available() is false and the rest no-ops cleanly.
+// ---- RtMidi implementation or stub ----
+// Without RtMidi (Linux without ALSA, or OLDUVAI_WITH_RTMIDI off)
+// host_midi_available() is false and the rest does nothing.
 
 #ifdef OLDUVAI_HAVE_RTMIDI
 
@@ -41,9 +39,8 @@ std::vector<std::string> host_midi_list_ports() {
         for (unsigned int i = 0; i < n; ++i) {
             names.push_back(probe.getPortName(i));
         }
-        // Empty IS the handling here: the two alternatives (rethrow, log)
-        // are a crash and an allocation in a path whose contract is "list the
-        // ports or say there are none".
+        // Empty on purpose: the contract is "list the ports or say there are
+        // none".
         // NOLINTNEXTLINE(bugprone-empty-catch)
     } catch (const RtMidiError&) {
         // No backend / driver problem → no ports.  Caller prints a clean
@@ -128,8 +125,7 @@ void send3(HostMidiPlayer::Impl* impl, std::uint8_t s, std::uint8_t d1,
     }
     try {
         impl->out.sendMessage(&msg);
-        // A failing send is exactly the "keep informing, keep going" case:
-        // the next tick retries the message.
+        // A failed send is retried on the next tick.
         // NOLINTNEXTLINE(bugprone-empty-catch)
     } catch (const RtMidiError&) {
         // A transient send failure shouldn't take down the pump thread.
@@ -157,18 +153,11 @@ void send3(HostMidiPlayer::Impl*, std::uint8_t, std::uint8_t, std::uint8_t) {}
 HostMidiPlayer::HostMidiPlayer() = default;
 
 HostMidiPlayer::~HostMidiPlayer() {
-    // stop() joins the pump thread, and std::thread::join can throw
-    // std::system_error.  A destructor is implicitly noexcept, so letting that
-    // escape calls std::terminate — the process dies at shutdown, in the audio
-    // teardown path, for a condition that is already unrecoverable.  Swallow
-    // it: there is nothing a destructor can usefully do with a failed join,
-    // and taking the process down is strictly worse than leaking the thread.
+    // stop() joins the pump thread, and join can throw std::system_error;
+    // escaping a destructor would terminate the process at shutdown.  Swallow
+    // it.
     try {
         stop();
-        // Empty is the handling. The two alternatives a destructor has are
-        // rethrow, which IS the std::terminate this try exists to prevent, and
-        // logging, which wants an allocation on a teardown path that has
-        // already failed once.
         // NOLINTNEXTLINE(bugprone-empty-catch)
     } catch (...) {
     }
@@ -203,11 +192,9 @@ void HostMidiPlayer::stop() {
 }
 
 void HostMidiPlayer::pump() {
-    // Drive the shared MidiSequencer with a virtual 1000-"samples"-per-second
-    // clock so one advance() sample == one wall-clock millisecond.  This reuses
-    // the sequencer's seamless loop (all-notes-off at the seam + initial-tempo
-    // restore) and tempo handling verbatim — identical event timing to the
-    // builtin-synth path, just clocked by wall time instead of audio samples.
+    // Drive the shared MidiSequencer with a 1000-"samples"-per-second clock
+    // (one sample = one wall-clock ms): the builtin path's timing, looping and
+    // tempo handling, clocked by wall time.
     constexpr int kRate = 1000;          // 1 advance-sample == 1 ms
     using clock = std::chrono::steady_clock;
     auto last = clock::now();
@@ -220,12 +207,9 @@ void HostMidiPlayer::pump() {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
-        // Advance `last` by the WHOLE milliseconds consumed, not to `now`:
-        // duration_cast truncates, and `last = now` silently discarded the
-        // sub-millisecond remainder — up to 1 ms of musical time per
-        // iteration.  At a ~2-3 ms wake cadence that compounds to a 15-25%
-        // tempo drop (the "GM music too slow" 2026-07-19 Windows field
-        // report; OPL music is audio-sample-clocked and was unaffected).
+        // Advance `last` by the whole milliseconds consumed, not to `now`:
+        // dropping the sub-ms remainder each iteration slowed the tempo 15-25%
+        // at a 2-3 ms wake cadence.
         if (elapsed_ms > 250) {
             // Cap a long stall (e.g. a debugger pause) so we don't
             // fast-forward a huge burst of events on resume; resync fully.

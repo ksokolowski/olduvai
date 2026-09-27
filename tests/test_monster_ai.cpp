@@ -17,6 +17,15 @@ using namespace olduvai::systems;
 
 namespace {
 
+// A tick at the player's position and frame; no collision, L3A phase 0.
+EntityTick at(int player_x, int player_y, int frame) {
+    EntityTick t;
+    t.player_x = player_x;
+    t.player_y = player_y;
+    t.frame = frame;
+    return t;
+}
+
 struct Row {
     int mx, my, mstate, mspr, mdir, msc, mko, mvis, mact, mres;
     int fy, fdy, fstate, fspr, fvis;
@@ -126,8 +135,11 @@ TEST_CASE("56-frame monster/fish/platform scenario matches the reference") {
         if (f == 30) m.ko_counter = 1;
         if (f == 44) m.state = static_cast<int>(MonsterState::Dead);
 
-        const auto res = update_entities(ents, px, py, f, &col, l3a,
-                                         /*kill_all=*/f == 40);
+        EntityTick t = at(px, py, f);
+        t.collision = &col;
+        t.l3a_phase_counter = l3a;
+        t.kill_all = f == 40;
+        const auto res = update_entities(ents, t);
         l3a = res.l3a_phase_counter;
 
         const Row& e = kOracle[static_cast<std::size_t>(f)];
@@ -165,7 +177,7 @@ TEST_CASE("DEAD with respawns pending resets to RESET at init position") {
     m.x = 99; m.y = 77;
     m.init_x = 30; m.init_y = 120;
     std::vector<Entity> ents = {m};
-    const auto res = update_entities(ents, 100, 121, 0, nullptr, 0);
+    const auto res = update_entities(ents, at(100, 121, 0));
     CHECK(ents[0].state == static_cast<int>(MonsterState::Reset));
     CHECK(ents[0].respawns == 1);
     CHECK(ents[0].x == 30);
@@ -183,8 +195,9 @@ TEST_CASE("axe-powered: away->heading transition collapses straight to KO") {
     m.hits_to_ko = 5;             // far from the normal threshold
     m.ko_spr = 60;
     std::vector<Entity> ents = {m};
-    update_entities(ents, 100, 121, 1 /*odd frame*/, nullptr, 0,
-                    /*kill_all=*/false, /*axe_powered=*/true);
+    EntityTick t = at(100, 121, 1);   // odd frame
+    t.axe_powered = true;
+    update_entities(ents, t);
     CHECK(ents[0].state == static_cast<int>(MonsterState::Ko));
     CHECK(ents[0].ko_counter == 40);
 }
@@ -194,19 +207,19 @@ TEST_CASE("egg and rock hit-point sprites; zero HP deactivates") {
     egg.obj_type = ObjType::Egg;
     egg.counter = 2;
     std::vector<Entity> ents = {egg};
-    update_entities(ents, 0, 0, 0, nullptr, 0);
+    update_entities(ents, at(0, 0, 0));
     CHECK(ents[0].sprite == 125);
     ents[0].counter = 1;
-    update_entities(ents, 0, 0, 1, nullptr, 0);
+    update_entities(ents, at(0, 0, 1));
     CHECK(ents[0].sprite == 126);
     ents[0].counter = 0;
-    update_entities(ents, 0, 0, 2, nullptr, 0);
+    update_entities(ents, at(0, 0, 2));
     CHECK_FALSE(ents[0].active);
 
     Entity rock;
     rock.obj_type = ObjType::Rock;
     rock.counter = 3;
     std::vector<Entity> ents2 = {rock};
-    update_entities(ents2, 0, 0, 0, nullptr, 0);
+    update_entities(ents2, at(0, 0, 0));
     CHECK(ents2[0].sprite == 143);
 }

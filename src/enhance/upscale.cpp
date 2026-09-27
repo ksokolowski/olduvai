@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-#include <atomic>
-#include <chrono>
 #include "enhance/upscale.hpp"
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <stdexcept>
 
@@ -15,11 +16,9 @@
 namespace olduvai::enhance {
 
 const std::vector<std::string>& supported_hd_profiles() {
-    // Profiles olduvai actually renders.  Mirrors the reference engine's
-    // profile catalog MINUS painterly/cinematic, which depend on a
-    // per-asset-class bilinear/lanczos split that the flat whole-frame
-    // upscale path here cannot reproduce (they are rejected by the CLI
-    // with a clear "not yet supported" message rather than faked).
+    // The reference's profile catalog minus painterly/cinematic, which need a
+    // per-asset-class bilinear/lanczos split the whole-frame path cannot do
+    // (the CLI rejects them).
     static const std::vector<std::string> kProfiles = {
         "native", "retro", "smooth", "eagle", "xbr", "mmpx", "omniscale",
     };
@@ -27,16 +26,14 @@ const std::vector<std::string>& supported_hd_profiles() {
 }
 
 bool is_supported_hd_profile(const std::string& profile) {
-    for (const auto& p : supported_hd_profiles())
-        if (p == profile) return true;
-    return false;
+    const auto& all = supported_hd_profiles();
+    return std::find(all.begin(), all.end(), profile) != all.end();
 }
 
 bool profile_preserves_palette(const std::string& profile) {
-    // Nearest / whole-pixel scalers: the upscaled sprite carries only source
-    // colours, so its binary alpha mask is re-stamped as a nearest upscale of
-    // the source (crisp silhouette).  The blenders (omniscale, xbr) invent an
-    // anti-aliased alpha edge from the binary input mask, which is kept.
+    // Whole-pixel scalers carry only source colours, so the alpha mask is
+    // re-stamped as a nearest upscale of the source; the blenders (omniscale,
+    // xbr) keep their anti-aliased edge.
     return profile == "native" || profile == "retro" || profile == "smooth" ||
            profile == "eagle" || profile == "mmpx";
 }
@@ -100,13 +97,9 @@ static std::vector<std::uint8_t> upscale_rgba_impl(const std::vector<std::uint8_
 
     if (profile == "mmpx") {
         if (scale == 3) {
-            // MMPX is strictly 2x-only.  This arm used to fall through and
-            // return a 2x buffer for a 3x request, which every caller then
-            // sized as 3x — HdAssetCache::build wrote the alpha re-stamp off
-            // the end of the vector ("malloc(): corrupted top size", SIGABRT).
-            // Unreachable while hd_scale_for clamped to 2-or-4, and live the
-            // moment scale 3 was allowed through.  Fall back to Scale3x, the
-            // same palette-preserving family, exactly as eagle and xbr do.
+            // MMPX is 2x only.  Never return a 2x buffer for a 3x request:
+            // callers size it as 3x and HdAssetCache::build would write past
+            // the end.  Fall back to Scale3x, as eagle and xbr do.
             std::fprintf(stderr,
                 "olduvai: hd-profile 'mmpx' has no native 3x form — using "
                 "scale3x for this scale.\n");
@@ -122,9 +115,8 @@ static std::vector<std::uint8_t> upscale_rgba_impl(const std::vector<std::uint8_
         return omniscale(px, w, h, scale);
     }
 
-    // Unreachable when the CLI validates with is_supported_hd_profile().
-    // No silent OmniScale fall-through: an unknown/unimplemented profile is
-    // a programmer error here, so fail loudly.
+    // Unreachable after the CLI's is_supported_hd_profile() check; fail loudly
+    // rather than fall through to OmniScale.
     throw std::invalid_argument("upscale_rgba: unsupported HD profile '" +
                                 profile + "'");
 }
@@ -154,9 +146,8 @@ std::vector<std::uint8_t> upscale_rgba(const std::vector<std::uint8_t>& px,
     const double ms =
         std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - t0).count();
-    // fetch_add on a double needs a CAS loop; at ~19 calls a frame the
-    // contention is nil and the alternative (a non-atomic double) is a data
-    // race the moment the scalers are threaded.
+    // fetch_add on a double needs a CAS loop (a plain double would race once
+    // the scalers are threaded); ~19 calls a frame, no contention.
     double cur = g_upscale_ms.load(std::memory_order_relaxed);
     while (!g_upscale_ms.compare_exchange_weak(cur, cur + ms,
                                                std::memory_order_relaxed)) {}

@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include "enhance/hd_text.hpp"
+#include "presentation/render/logical_size.hpp"
 #include "presentation/sequence/screens.hpp"   // HdTextRow (full definition)
 #include "presentation/window_util.hpp"   // create_stream_tex
 
@@ -27,15 +28,14 @@ struct OvTimer {
         if (on) *accum += static_cast<double>(SDL_GetPerformanceCounter() - t0)
                           * perf_ms;
     }
+    OvTimer(const OvTimer&) = delete;
+    OvTimer& operator=(const OvTimer&) = delete;
 };
 }  // namespace
 
-// One pass over the drawn bytes: mark every row that carries content in
-// `used` (1/0 per row) and, when `hv` is non-null, fold the bytes into a
-// 64-bit-word FNV-1a hash (instrumented / verify runs only — it decides
-// whether an upload can be skipped; a collision costs one stale overlay
-// frame, at 2^-64).  A word at a time: byte-at-a-time would cost more than
-// the upload it saves.
+// One pass over the drawn bytes: flag each row with content in `used` and, if
+// `hv` is set, hash the bytes a 64-bit word at a time (instrumented / verify
+// runs only; a collision costs one stale overlay frame at 2^-64).
 namespace {
 void scan_rows(const std::vector<std::uint8_t>& b, int w, int h_px,
                std::vector<std::uint8_t>& used, std::uint64_t* hv) {
@@ -43,10 +43,8 @@ void scan_rows(const std::vector<std::uint8_t>& b, int w, int h_px,
     const std::size_t words = row_bytes / 8;
     const unsigned char* p = b.data();
     used.assign(static_cast<std::size_t>(h_px), 0);
-    // formats::Hash64's mix, fused by hand into this per-frame pixel pass
-    // because the same walk also computes each row's used/unused flag
-    // (racc).  Splitting it out would make two passes of one (hash64.hpp
-    // records this exception).
+    // Hash64's mix, fused into this pass with the row flags (hash64.hpp notes
+    // the exception).
     std::uint64_t h = 1469598103934665603ull;
     for (int y = 0; y < h_px; ++y) {
         const unsigned char* r = p + static_cast<std::size_t>(y) * row_bytes;
@@ -78,9 +76,8 @@ void scan_rows(const std::vector<std::uint8_t>& b, int w, int h_px,
 
 void TextOverlay::ensure(SDL_Renderer* ren, int ow, int oh) {
     if (tex_ != nullptr && w_ == ow && h_ == oh) {
-        // Same size — clear to fully transparent.  Only the rows that held
-        // content at the last flush can be dirty, so only those need erasing;
-        // everything else is already zero and has been since the last resize.
+        // Same size: clear only the rows that held content at the last flush;
+        // the rest are still zero.
         OvTimer t(clear_ms, perf_ms, stats_on);
         const std::size_t row = static_cast<std::size_t>(w_) * 4;
         for (int y = 0; y < h_ && y < static_cast<int>(buf_rows_.size()); ++y) {
@@ -138,29 +135,22 @@ bool TextOverlay::begin(SDL_Renderer* ren, enhance::HdText& font, int& ow,
 
 void TextOverlay::flush(SDL_Renderer* ren, int logical_w, int logical_h) {
     if (tex_ == nullptr || w_ <= 0 || h_ <= 0) return;
-    // Skip the 3.7 MB upload when the drawn bytes are identical to what the
-    // texture already holds.  Measured on a TrimUI: the upload is 7.07 ms of a
-    // 32.2 ms present call while the RenderCopy below is 0.11 ms -- building
-    // the overlay is expensive, compositing it is free.
+    // Skip the 3.7 MB upload when nothing changed (TrimUI: upload 7.07 ms of a
+    // 32.2 ms present; the RenderCopy 0.11 ms).
     if (skipped_) {
-        // Nothing was drawn: the texture already holds the right pixels, so
-        // neither the hash nor the upload is needed.  That is the whole point
-        // of the key -- on the shipping path the 3.7 MB read never happens.
+        // Nothing drawn: the texture is already right, so no hash and no
+        // upload.
         if (stats_on && uploads_skipped != nullptr) ++*uploads_skipped;
         OvTimer tb(blit_ms, perf_ms, stats_on);
-        SDL_RenderSetLogicalSize(ren, 0, 0);
+        const LogicalScalingOff out(ren, logical_w, logical_h);
         SDL_RenderCopy(ren, tex_, nullptr, nullptr);
-        SDL_RenderSetLogicalSize(ren, logical_w, logical_h);
         return;
     }
 
     bool need_upload = true;
     {
-        // Which rows carry content — needed by the upload below and by the
-        // next clear.  Instrumented / verifying runs also hash, to skip an
-        // identical upload.  Before this, the shipping path memset and
-        // uploaded the WHOLE panel on every redraw (3.7 MB each at 1280x720,
-        // every frame an animated banner or the tally was up).
+        // Row flags for the upload below and the next clear; instrumented /
+        // verify runs also hash to skip an identical upload.
         OvTimer t(hash_ms, perf_ms, stats_on);
         if (stats_on || verify_) {
             std::uint64_t h = 0;
@@ -186,11 +176,9 @@ void TextOverlay::flush(SDL_Renderer* ren, int logical_w, int logical_h) {
             // A fresh texture holds garbage: the first upload is the panel.
             SDL_UpdateTexture(tex_, nullptr, buf_.data(), w_ * 4);
         } else {
-            // Upload runs of rows that hold content now OR held it in the
-            // texture (those must be overwritten with their cleared bytes, or
-            // moved text — a bobbing banner — leaves its old rows behind).
-            // A HUD at the top and a banner mid-screen are two short runs,
-            // not the span between them.
+            // Upload runs of rows that have content now or had it in the
+            // texture (those must be cleared, or moved text leaves old rows).
+            // Separate runs, not the span between them.
             const std::size_t row = static_cast<std::size_t>(w_) * 4;
             int y = 0;
             while (y < h_) {
@@ -212,80 +200,62 @@ void TextOverlay::flush(SDL_Renderer* ren, int logical_w, int logical_h) {
         tex_has_content_ = true;
     }
     OvTimer t(blit_ms, perf_ms, stats_on);
-    // Disable logical scaling so 1 buffer unit maps to 1 physical pixel; the
-    // overlay is already at output resolution.
-    SDL_RenderSetLogicalSize(ren, 0, 0);
+    // The overlay is at output resolution; the scene's size comes back after.
+    const LogicalScalingOff out(ren, logical_w, logical_h);
     SDL_RenderCopy(ren, tex_, nullptr, nullptr);
-    // Restore the HD logical size for the next scene frame.
-    SDL_RenderSetLogicalSize(ren, logical_w, logical_h);
 }
 
-void draw_centered_overlay_row(std::vector<std::uint8_t>& out, int ow, int oh,
+void draw_centered_overlay_row(const enhance::Canvas& cv,
                                const enhance::HdText& font,
                                int native_baseline_y, const std::string& text) {
     const int w = font.measure(text);
-    const int x = ow / 2 - w / 2;
+    const int x = cv.w / 2 - w / 2;
     const int baseline_y =
-        static_cast<int>(native_baseline_y * (oh / 200.0) + 0.5);
-    font.draw(out, ow, oh, x, baseline_y, text, 235, 235, 235);
+        static_cast<int>(native_baseline_y * (cv.h / 200.0) + 0.5);
+    font.draw(cv, x, baseline_y, text, {235, 235, 235});
 }
 
-void draw_centered_overlay_row_banner(std::vector<std::uint8_t>& out, int ow,
-                                      int oh, const enhance::HdText& font,
+void draw_centered_overlay_row_banner(const enhance::Canvas& cv,
+                                      const enhance::HdText& font,
                                       int native_baseline_y,
                                       const std::string& text,
                                       const enhance::BannerShader& shader) {
     const int w = font.measure(text);
-    const int x = ow / 2 - w / 2;
+    const int x = cv.w / 2 - w / 2;
     const int baseline_y =
-        static_cast<int>(native_baseline_y * (oh / 200.0) + 0.5);
-    font.draw_banner(out, ow, oh, x, baseline_y, text, shader);
+        static_cast<int>(native_baseline_y * (cv.h / 200.0) + 0.5);
+    font.draw_banner(cv, x, baseline_y, text, shader);
 }
 
-void draw_tally_rows_overlay(std::vector<std::uint8_t>& out, int ow, int oh,
+void draw_tally_rows_overlay(const enhance::Canvas& cv,
                              const enhance::HdText& font,
                              const std::vector<HdTextRow>& rows) {
-    // Fixed-anchor tally columns (mirrors the reference's _tally_anchors).  Derived
-    // ONLY from fixed reference strings + ow — NOT from the current row text —
-    // so the colon/value columns are identical on every frame regardless of the
-    // bonus/lives/score digit widths.  That is what stops the labels (and the
-    // value column) from sliding while the counters run.
-    //   label_w : widest of the three right-aligned labels
-    //   gap     : 16 native px → output px (reference _TALLY_VALUE_GAP)
-    //   unit_w  : widest possible value unit — "888888 x 10" / "888888 x 1000"
-    //             / "888888" (6-digit fields; never narrower at runtime)
+    // Fixed-anchor tally columns (as the reference's _tally_anchors), from
+    // fixed strings and the canvas width only, so labels do not slide as
+    // digits change.
+    //   label_w : widest of the three labels
+    //   gap     : 16 native px (_TALLY_VALUE_GAP)
     const int label_w = std::max({font.measure("BONUS:"), font.measure("LIFE:"),
                                    font.measure("SCORE:")});
-    const int gap = static_cast<int>(std::lround(16.0 * ow / 320.0));
-    //   unit_w  : the widest VALUE actually being drawn, floored at the score
-    //             row's width.  This used to reserve "888888  x  1000" — six
-    //             digits in every field — but the real formats are "%d  x  10"
-    //             (bonus, unpadded), "%d  x  1000" (lives, unpadded) and
-    //             "%06ld" (score, always exactly six).  Only the score ever has
-    //             six digits, so the reservation was far wider than anything
-    //             drawn and the whole block sat left of centre inside it: rows
-    //             measured -40, -27 and -50 px off the window centre while the
-    //             title rows were exact.
-    //
-    //             The floor is what keeps the columns from sliding: the score
-    //             is fixed-width, so unit_w cannot shrink below it as the
-    //             counters run, and the anchors only move if a value is
-    //             genuinely wider than the score — which is a real content
-    //             change, not counter noise.
+    const int gap = static_cast<int>(std::lround(16.0 * cv.w / 320.0));
+    //   unit_w  : widest value being drawn, floored at the score row's
+    //             width.  The score is always six digits ("%06ld"), so the
+    //             floor keeps the columns still; bonus and lives are
+    //             unpadded (reserving six digits put the block off centre).
     int unit_w = font.measure("888888");
     for (const auto& row : rows) {
         if (row.align == 2 || row.align == 3)   // 3 = a width reservation
             unit_w = std::max(unit_w, font.measure(row.text));
     }
     const int content_w = label_w + gap + unit_w;
-    const int left = ow / 2 - content_w / 2;
+    const int left = cv.w / 2 - content_w / 2;
     const int colon_x = left + label_w;   // labels right-aligned, ending here
     const int value_x = colon_x + gap;    // values left-aligned, starting here
 
     for (const auto& row : rows) {
         if (row.align == 3) continue;   // reservation only — not drawn
         const int baseline_y =
-            static_cast<int>(row.native_baseline_y * (oh / 200.0) + 0.5);
+            static_cast<int>(row.native_baseline_y * (cv.h / 200.0) + 0.5);
         int x;
         switch (row.align) {
             case 1:   // label — right-aligned, ending at the colon column
@@ -295,10 +265,10 @@ void draw_tally_rows_overlay(std::vector<std::uint8_t>& out, int ow, int oh,
                 x = value_x;
                 break;
             default:  // 0 — centred (title rows)
-                x = ow / 2 - font.measure(row.text) / 2;
+                x = cv.w / 2 - font.measure(row.text) / 2;
                 break;
         }
-        font.draw(out, ow, oh, x, baseline_y, row.text, 235, 235, 235);
+        font.draw(cv, x, baseline_y, row.text, {235, 235, 235});
     }
 }
 

@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Game-file detection and checksumming.
-//
-// Locates the five required Prehistorik files in a game directory
-// (case-insensitively — DOS media is often upper-case, extracted copies
-// often lower) and checksums each with FNV-1a/64.
+// Game-file detection and checksumming: find the five required files in a
+// directory (case-insensitive) and FNV-1a/64 each.
 
 #pragma once
 
@@ -15,13 +12,9 @@
 
 namespace olduvai::prepare {
 
-// Whole-file byte reader: the file's bytes, or an empty vector if it cannot
-// be opened.  (A missing file and an empty file are indistinguishable here —
-// callers that care test for existence separately.)
-//
-// Exported from prepare/ rather than any higher layer because prepare is the
-// lowest layer every caller may legally include, and because its absence is
-// why the engine had accumulated nine private copies of these four lines.
+// The file's bytes, or empty if it cannot be opened (missing and empty look
+// the same; test existence separately).  In prepare/, the lowest layer every
+// caller may include.
 std::vector<std::uint8_t> slurp_file(const std::filesystem::path& p);
 
 // The required game files, in a fixed order.
@@ -50,33 +43,24 @@ struct GameFiles {
 
 };
 
-// Detect + checksum the required files in `game_dir`.  Files that are absent
-// are recorded with present=false; this never throws on a missing file.
-//
-// The executable requirement is satisfied by either HISTORIK.EXE or
-// PREH.SQZ (the compressed form CD-era distributions such as GOG ship it
-// in); the entry keeps its canonical name with via_sqz set and the
-// checksum taken over the actual on-disk bytes.
+// Detect and checksum the required files in `game_dir`; absent files get
+// present=false (never throws).  HISTORIK.EXE or PREH.SQZ (the CD-era /
+// GOG form) satisfies the executable: the entry keeps its canonical name with
+// via_sqz set, checksummed over the bytes on disk.
 GameFiles detect_game_files(const std::filesystem::path& game_dir);
 
-// Map a user-supplied directory to the one actually holding the game
-// files.  Returns `dir` itself when it contains FILESA.CUR; otherwise
-// probes the known GOG-install layout (<dir>/data/PREH, <dir>/PREH,
-// case-insensitively) so `--game-dir <GOG install root>` just works.
-// Falls back to `dir` unchanged when nothing matches.
+// The directory actually holding the files: `dir` if it has FILESA.CUR, else
+// the GOG layouts <dir>/data/PREH and <dir>/PREH (case-insensitive), else
+// `dir`.
 std::filesystem::path resolve_game_dir(const std::filesystem::path& dir);
 
-// Directories worth probing when the user configured no game directory at
-// all: the machine's GOG install of the game.  On Windows this is the
-// GOG-installer registry entry (works for custom install paths) followed
-// by the conventional GOG Galaxy / standalone locations; empty elsewhere.
-// Candidates are returned unverified — detect_game_files() each.
+// Directories to probe when none is configured: the GOG install (Windows: the
+// installer registry entry, then the usual Galaxy / standalone paths; empty
+// elsewhere).  Unverified; detect_game_files() each.
 std::vector<std::filesystem::path> default_game_dir_candidates();
 
-// Read the executable image the table readers consume: HISTORIK.EXE bytes
-// as-is, or PREH.SQZ decoded, whichever detection would pick.  Returns an
-// empty vector when neither is present or the SQZ container is malformed
-// (never throws across the module boundary).
+// The executable image for the table readers: HISTORIK.EXE as-is or PREH.SQZ
+// decoded.  Empty if neither is present or the SQZ is malformed; never throws.
 std::vector<std::uint8_t> load_game_executable(
     const std::filesystem::path& game_dir);
 

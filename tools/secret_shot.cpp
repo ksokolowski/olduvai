@@ -61,18 +61,18 @@ int main(int argc, char** argv) {
         [&](presentation::RenderTarget& frame) {
             for (const auto& b : bubbles) {
                 const int idx = b.sprite_idx;
-                if (idx >= 0 && idx < (int)ra.tile_sprites.size())
+                if (idx >= 0 && idx < static_cast<int>(ra.tile_sprites.size()))
                     presentation::blit_sprite_keyed(
-                        frame, ra.tile_sprites[(std::size_t)idx], ra.palette,
-                        (int)b.x, (int)b.y);
+                        frame, ra.tile_sprites[static_cast<std::size_t>(idx)], ra.palette,
+                        static_cast<int>(b.x), static_cast<int>(b.y));
             }
         };
     presentation::compose_frame(rt, st, ra, /*draw_player=*/true, hook);
     std::ofstream out("/tmp/secret_olduvai.ppm", std::ios::binary);
     out << "P6\n" << fb.w << " " << fb.h << "\n255\n";
     for (std::size_t i = 0; i < static_cast<std::size_t>(fb.w) * fb.h; ++i) {
-        out.put((char)fb.px[i * 4]); out.put((char)fb.px[i * 4 + 1]);
-        out.put((char)fb.px[i * 4 + 2]);
+        out.put(static_cast<char>(fb.px[i * 4])); out.put(static_cast<char>(fb.px[i * 4 + 1]));
+        out.put(static_cast<char>(fb.px[i * 4 + 2]));
     }
     std::printf("wrote /tmp/secret_olduvai.ppm (%dx%d)\n", fb.w, fb.h);
     return 0;

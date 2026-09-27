@@ -1,16 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
 // Baseline seeding of an Options bindings instance (`cur` + the mem map)
-// from the current runtime values.  The same ~17 keys were seeded verbatim
-// at the three Options environments (surface pause, title menu, boss
-// pause); drifting copies is exactly how a new setting ends up showing a
-// stale value in one menu only (CC3 phase 4, slice 2).
-//
-// SDL-free on purpose: the fullscreen flag arrives as a bool (the caller
-// reads the SDL window), so this seeds in the headless-testable tier.
-// Templated over the bind type because each site's bindings struct is its
-// own MenuBindings subclass — they share the `mem`/`cur` field shape, not
-// a base class (yet; unifying set()/get() is a later slice).
+// from the runtime values, shared by the three Options menus.  SDL-free: the
+// caller reads the fullscreen flag.
 
 #pragma once
 
@@ -33,6 +25,15 @@ struct SettingsSeed {
     EnhanceFlags flags;
     std::string profile_family;   // "" resolves as desktop (apply_preset)
 };
+
+// The seed of the runtime options (a template, as display_settings_of).
+template <class Opts>
+SettingsSeed settings_seed_of(const Opts& o, const EnhanceFlags& flags,
+                              bool fullscreen) {
+    return {o.enhanced,     o.hd_profile, o.render_scale, o.music_device,
+            o.sfx_backend,  o.aspect,     fullscreen,     flags,
+            o.profile_family};
+}
 
 template <class Bind>
 void seed_settings_mem(Bind& b, const SettingsSeed& s) {

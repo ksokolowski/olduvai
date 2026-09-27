@@ -50,7 +50,7 @@ build() {   # device arch sysroot xtool
         -DCMAKE_TOOLCHAIN_FILE="$SRC/cmake/toolchains/$arch-zig.cmake" \
         -DOLDUVAI_ZIG_SYSROOT="$sysroot" -DOLDUVAI_ZIG_XTOOL="$xtool" \
         -DSDL2_DIR="$sysroot/usr/lib/cmake/SDL2" >/dev/null
-    cmake --build "$b" --target olduvai -j8 >/dev/null
+    cmake --build "$b" --target olduvai -j"$(getconf _NPROCESSORS_ONLN)" >/dev/null
     "$STRIP" -o "$OUT/olduvai.$arch" "$b/olduvai"
     rm -rf "${OUT:?}/${dev:?}"
     bash "$SRC/packaging/build_port_knulli.sh" --public --device "$dev" \

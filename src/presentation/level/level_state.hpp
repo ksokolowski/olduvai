@@ -2,10 +2,8 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 // Surface-level gameplay state: the `Loaded` blob + authored per-level config.
 //
-// Hoisted out of game_app.cpp (CC2a, 2026-07-09) so the level bind/load/compose
-// helpers can move to their own TU (level_setup.cpp) — the first wave of
-// decomposing the 3,450-line run_platform_level. Types + constexpr data only;
-// no logic. See the internal codebase-review notes (CC2).
+// Its own header so the level bind/load/compose helpers (level_setup.cpp) and
+// game_app.cpp share one definition. Types + constexpr data only; no logic.
 
 #pragma once
 
@@ -27,8 +25,9 @@
 
 namespace olduvai::presentation {
 
-// Authored per-level configuration (parity with the runtime catalog).
-struct LevelConfig {
+// Authored per-level configuration (parity with the runtime catalog).  Four
+// constexpr rows in the catalog's field order; the padding is immaterial.
+struct LevelConfig {   // NOLINT(clang-analyzer-optin.performance.Padding)
     int internal_id;
     const char* background_pc1;   // nullptr = no visual background
     bool visual_background;
@@ -53,7 +52,7 @@ constexpr LevelConfig kLevels[] = {
 
 // The L3 main palette — hand-authored approximation (L3 ships no
 // background PC1 to take a palette from); the values are the project's
-// and appear nowhere in the executable (byte-searched 2026-07-19).
+// and appear nowhere in the executable (byte-searched).
 constexpr formats::Rgb kL3Palette[16] = {
     {0,0,0}, {227,162,130}, {162,97,65}, {130,65,32}, {97,65,32},
     {162,0,32}, {227,195,32}, {130,97,65}, {0,97,65}, {32,130,97},

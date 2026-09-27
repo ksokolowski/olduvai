@@ -1,12 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Linear-interpolation upsampler for the 8-bit VOC SFX.  Zero-order hold
-// (sample repetition) injects spectral images of the ~8-11 kHz source all
-// the way up the device band — an artificial harshness neither the real
-// Sound Blaster (DAC + analog reconstruction filter) nor the reference
-// (SDL's filtered resampler via pygame.mixer.Sound) produces.  Linear
-// interpolation is the DOSBox mixer's SB-DAC behaviour: era-authentic
-// 8-bit character without the added grit.
+// Linear-interpolation upsampler for the 8-bit VOC effects (the DOSBox SB-DAC
+// behaviour); sample repetition would add spectral images the real SB's
+// reconstruction filter removes.
 #pragma once
 
 #include <algorithm>
@@ -36,9 +32,7 @@ inline std::vector<std::int16_t> resample_linear_u8(
         const std::size_t i1 = std::min(i0 + 1, src.size() - 1);
         const std::int32_t frac =
             static_cast<std::int32_t>((pos & 0xFFFFFFFFu) >> 17);  // 15-bit
-        // * 256, not << 8: the operand is negative below the 0x80 midpoint and
-        // left-shifting a negative value is UB in C++17 (same class as the
-        // test_resample fix; caught by the OLDUVAI_SANITIZE lane).
+        // * 256, not << 8: left-shifting a negative value is UB in C++17.
         const std::int32_t a = (static_cast<std::int32_t>(src[i0]) - 128) * 256;
         const std::int32_t b = (static_cast<std::int32_t>(src[i1]) - 128) * 256;
         out[i] = static_cast<std::int16_t>(a + (((b - a) * frac) >> 15));
@@ -46,13 +40,10 @@ inline std::vector<std::int16_t> resample_linear_u8(
     return out;
 }
 
-// Band-limited (windowed-sinc) upsampler — the proper conversion for the
-// VOC effects.  Their content presses right against the source Nyquist
-// (mean|dx|/mean|x| up to 0.95 on the 4 kHz spring), so linear interpolation
-// leaves audible spectral images in the 2-6 kHz band; a Blackman-windowed
-// sinc kernel (cutoff = source Nyquist) removes them.  The reference plays
-// VOCs through SDL's filtered resampler, so this is parity, not enhancement.
-// Upsampling only; falls back to linear when dst < src.
+// Band-limited (Blackman-windowed sinc, cutoff = source Nyquist) upsampler for
+// the VOC effects: their content reaches the source Nyquist, so linear leaves
+// audible images at 2-6 kHz.  The reference plays VOCs through SDL's filtered
+// resampler.  Upsampling only; linear when dst < src.
 inline std::vector<std::int16_t> resample_sinc_u8(
     const std::vector<std::uint8_t>& src, int src_rate, int dst_rate) {
     if (src.empty() || src_rate <= 0 || dst_rate <= 0) return {};
@@ -101,10 +92,9 @@ inline std::vector<std::int16_t> resample_sinc_u8(
     return out;
 }
 
-// Edge declick: ~2 ms linear fade-in/out applied once at load.  Every VOC in
-// the game opens ~28% of full scale above the midpoint, so a hard start pops
-// on every trigger; the real SB's analog output stage smoothed that step —
-// a short ramp is the conservative digital stand-in.
+// Edge declick: a ~2 ms fade-in/out, once at load.  Every VOC starts ~28% of
+// full scale off the midpoint and would pop; the SB's analog stage smoothed
+// it.
 inline void apply_edge_fade(std::vector<std::int16_t>& pcm, int rate,
                             int fade_ms = 2) {
     if (pcm.empty() || rate <= 0 || fade_ms <= 0) return;
@@ -120,10 +110,5 @@ inline void apply_edge_fade(std::vector<std::int16_t>& pcm, int rate,
     }
 }
 
-// (An s16 twin of resample_linear_u8 lived here — the same fixed-point loop
-// with a different sample conversion.  It was the HD SFX bake's, and the bake
-// was deleted in a730c00; the helper outlived it with no caller and no test,
-// then rode the directory split into this file.  Deleted 2026-08-02: it read
-// as duplication of the live resampler when it was really a leftover.)
 
 }  // namespace olduvai::presentation

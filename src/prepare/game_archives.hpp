@@ -1,27 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// The game's four archives, opened once and indexed by entry name.
-//
-// FILESA.CUR, FILESB.CUR, FILESA.VGA and FILESB.VGA were opened and scanned
-// in-place at a dozen sites, each repeating the same four constructions and
-// the same linear "which archive has this name?" loop.
-//
-// MEASURED on a full game copy: 60 entries across the four archives, 58 unique
-// names, 0.94 MB decompressed, 9.3 ms to read, decompress and index all of it.
-// Holding that is free, and it replaces a per-lookup scan over four archives
-// with one map lookup.
-//
-// A FIXED search order is safe here, and that is a measured claim rather than
-// an assumption: exactly two names appear in more than one archive
-// (BONUS.MDI, BONUSBUZ.MDI) and both are byte-identical, so first-wins cannot
-// resolve differently from any other order.  Call sites that deliberately
-// searched .CUR-before-.VGA for one asset and .VGA-before-.CUR for another are
-// therefore unaffected.  Re-check with that scan if the archive set ever
-// changes.
-//
-// Lives in prepare/ because it needs formats::CurArchive and slurp_file, and
-// prepare is the lowest layer every caller (presentation, app, tools) may
-// legally include.
+// The four archives (FILESA/B.CUR, FILESA/B.VGA), read once and indexed by
+// entry name (60 entries, 0.94 MB decompressed, 9.3 ms).  A fixed search order
+// is safe: the only names in two archives (BONUS.MDI, BONUSBUZ.MDI) are
+// byte-identical.  Re-check if the archive set changes.  In prepare/, the
+// lowest layer every caller may include.
 
 #pragma once
 
@@ -35,10 +18,8 @@ namespace olduvai::prepare {
 
 class GameArchives {
 public:
-    // Reads and indexes all four archives.  A missing or malformed archive
-    // leaves ok() false rather than throwing across the module boundary;
-    // partial results are kept, since a caller wanting one entry from a
-    // readable archive should not be denied it by an unrelated bad one.
+    // Read and index all four.  A missing or malformed archive sets ok() false
+    // (no throw); entries from the readable ones are kept.
     explicit GameArchives(const std::filesystem::path& game_dir);
 
     // The entry's decompressed bytes, or nullptr when no archive has it.

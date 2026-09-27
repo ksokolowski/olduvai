@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Player state + physics — headless game mechanics.
-//
-// Mirrors the original player state machine:        // FUN_27f7_1b51
-//   walking (6-frame cycle), counter-based integer gravity, two-probe
-//   ground detection, club attack with edge-trigger latch, post-hit
-//   invulnerability, death animation + ghost float, respawn.
-// Damage entry point:                               // FUN_27f7_18d4
-// Death animation / respawn block:                  // FUN_27f7_1921
-// Per-frame invulnerability tick:                   // FUN_27f7_12c7
+// Player state and physics, headless.  The original state machine:
+// walking (6-frame cycle), counter-based integer gravity, two-probe ground
+// detection, club attack with an edge-trigger latch, post-hit
+// invulnerability, death animation + ghost float, respawn.
+//   state machine          // FUN_27f7_1b51
+//   damage                 // FUN_27f7_18d4
+//   death / respawn        // FUN_27f7_1921
+//   invulnerability tick   // FUN_27f7_12c7
 
 #pragma once
 
@@ -55,11 +54,9 @@ struct PlayerState {
     int x = 40;               // DS:0x988e
     int y = 100;              // DS:0x97f2
     int prev_x = 40, prev_y = 100;  // smooth-motion render interp only
-    // NOTE: the player's sub-pixel render position lives on RenderTarget
-    // (player_fx/player_fy), NOT here — PlayerState is memcpy'd whole into the
-    // POD SaveHeader, so adding render-only float fields here would change the
-    // save layout and break existing saves.  (Entity::fx/fy is fine: entities
-    // serialize via the separate EntitySnapshot.)
+    // The sub-pixel render position lives on RenderTarget, not here:
+    // PlayerState is memcpy'd into the POD SaveHeader, so a new field changes
+    // the save layout.
     int prev_dx = 0, prev_dy = 0;
     int y_vel = core::kJumpYVel;    // DS:0x97f4
     int gravity_flag = 0;     // DS:0x9868 — 0 grounded, >0 ascending counter
@@ -74,14 +71,11 @@ struct PlayerState {
     int climb_y_min = 0;
     int climb_y_max = 200;
     int cave_warp_freeze = 0; // DS:0x987e
-    // Presentation-only fade signal for cave-warp screen changes that DON'T
-    // route through cave_warp_freeze's 0xFA1>>2==0x3E8 path (the L3 11→12
-    // trunk-cave EXIT and the L7-style screen-9 cave ENTRY).  The EXE fades
-    // these via bp-6=0 → Sprite_DrawDispatch mode=2 (FUN_1052_0c15 fade-out →
-    // blit → fade-in); see cave_warp_fade_via_bp6_dispatch.md.  Logic-neutral:
-    // set in the transition branch, consumed+cleared in the screen-change
-    // classifier to pick the fade transition_kind, touches no RNG/logic state.
-    // Mirrors state.cave_warp_pending in the Python reference.
+    // Render-only fade signal for cave-warp screen changes that do not go
+    // through cave_warp_freeze's 0x3E8 path (L3 11->12 trunk-cave exit, the
+    // screen-9 cave entry).  The EXE fades these via bp-6=0 ->
+    // Sprite_DrawDispatch mode 2 (FUN_1052_0c15).  Set in the transition
+    // branch, cleared by the screen-change classifier; no RNG or logic effect.
     bool cave_warp_pending = false;
     int halo_spr = 0;
     int hit_counter = 0;      // DS:0x9874
@@ -98,12 +92,10 @@ struct PlayerState {
     int restart_screen = 0;   // DS:0x9866
     int restart_cave_index = -1;
     int restart_secret_index = -1;
-    // True when the restart point was saved mid-flight (L5 glider / L1 balloon).
-    // The flight restart is at altitude (restart_y=100), so respawn must put the
-    // player back ON the glider/balloon — otherwise they respawn mid-air with no
-    // craft and fall to an unrecoverable death.  The EXE respawns with the craft
-    // (user-confirmed; the hardcoded flight-altitude restart only makes sense in
-    // flight).  Grounded saves clear it → normal grounded respawn.
+    // The restart point was saved in flight (L5 glider / L1 balloon): respawn
+    // puts the player back on the craft at altitude (restart_y=100), as the EXE
+    // does; otherwise they would fall to certain death.  Grounded saves clear
+    // it.
     bool restart_glider = false;
     int saved_y_vel = 0;      // DS:0x9c70
     int sprite = kSprPlayerStand;
@@ -116,8 +108,7 @@ struct InputState {
          attack = false;
 };
 
-// The slice of game state the player systems touch.  Mirrors the reference
-// engine's duck-typed state; grows as more systems land.
+// The slice of game state the player systems touch.
 struct SystemsState {
     PlayerState player;
     InputState input;
@@ -129,7 +120,7 @@ struct SystemsState {
     bool game_over = false;
     int frame_counter = 0;
     int timer = 99;
-    // Engine cave/secret render-mode flags (the original folds these into
+    // Cave/secret render-mode flags (the original folds them into
     // current_screen >= 100).
     int cave_flag = 0, cave_index = -1;
     int cave_return_screen = 0, cave_return_x = 0, cave_return_y = 0;
@@ -141,38 +132,23 @@ struct SystemsState {
     int halo_flight_flag = 0;  // DS:0x97f8 — "axe-powered" power-up
     bool god_mode = false;
     int flash_frames = 0;
-    // Cave-EMERGE animation countdown — intentional divergence (owner
-    // ruling 2026-07-05, same class as the in-game-font tally screens):
-    // after exit_cave the player renders kSprPlayerTurn (134,
-    // front-facing; catalog-verified PLAYER_TURN, FUN_27f7_1b51 0x1da1)
-    // over the standing pose.  The DOS EXE restores with a bare fade and
-    // no emerge frames (full scan of DS:0x987e writes — no exit re-arm);
-    // owner deems that a DOS oversight vs the Amiga port.
-    // v2 pacing (2026-07-05, teleport idiom): ENHANCED arms 9 ticks — 3
-    // dim stages x 3-tick holds (1/3 → 2/3 → full palette thirds) — and
-    // frame_runner freezes the player for the duration (owner-approved
-    // "stop game time"); a hit or death cancels the emerge cleanly
-    // (hit_player / frame_runner).  CLASSIC arms 2 lit ticks, draw-only,
-    // no freeze — classic gameplay timing stays EXE-identical.
-    // Transient (not serialized in saves); decremented once per logic
-    // tick at END-OF-TICK (game_app), after every present path has shown
-    // the value — decrementing before the presents hid the first reveal
-    // stage on the widescreen re-compose path (the fullscreen bug).
+    // Cave-emerge countdown, an intentional divergence: after exit_cave the
+    // player shows kSprPlayerTurn (134, front-facing; FUN_27f7_1b51 0x1da1).
+    // The DOS EXE has no emerge frames (no DS:0x987e re-arm on exit); the Amiga
+    // port does.  Enhanced: 9 ticks, 3 dim stages x 3, player frozen
+    // (frame_runner); a hit or death cancels it.  Classic: 2 lit ticks, draw
+    // only, EXE timing. Transient.  Decremented at the end of the tick, after
+    // every present path has shown the value.
     int cave_emerge_frames = 0;
-    // Third-descent-frame latch (46 restored — owner ruling 2026-07-05;
-    // see tick_cave_descent).  Transient, not serialized.
+    // Third-descent-frame latch (frame 46; see tick_cave_descent).  Transient.
     bool cave_descent_third_shown = false;
-    // Mirror of GameOptions::enhanced for render-only cosmetic gates
-    // (the render layer sees SystemsState, not GameOptions).
+    // GameOptions::enhanced, for render-only cosmetic gates.
     bool enhanced_active = false;
-    // Enhanced #20 — teleport cloud sequence (cave-sign teleports).
-    // Departure: 3 ticks, clouds 87→86→85 at the sign-cross spot, player
-    // hidden, teleport DEFERRED (pending fields hold the destination).
-    // Arrival: 4 ticks, empty→85→86→85, player hidden, then the player
-    // appears in the EXE's own 0x27-tick halo shield.  Armed by
-    // collision_dispatch when enhanced_active; progressed once per logic
-    // tick in game_app; drawn by game_app's draw_teleport_fx; player
-    // hidden by game_render.  Transient, not serialized.
+    // Enhanced teleport clouds (cave signs).  Departure: clouds shrink at the
+    // sign, player hidden, teleport deferred (pending fields hold the
+    // destination). Arrival: clouds grow, then the player appears in the EXE's
+    // own 0x27-tick halo.  Armed by collision_dispatch, ticked and drawn by
+    // game_app. Transient.
     int teleport_out_ticks = 0;
     int teleport_in_ticks = 0;
     bool pending_sign_teleport = false;
@@ -201,42 +177,33 @@ struct SystemsState {
     bool sfx_spring_pending = false;   // trampoline/lava spring
     // DS:0x9860 — true only when every monster slot is permanently dead.
     bool screen_clear_of_monsters = true;
-    // Rolling-stone hazard (one per screen).  // FUN_27f7_089f
-    // Death halo (rises 8 px/frame during balloon/glider death).
-    // Dual-purpose DS slots: 0x9876 / 0x9804.   // FUN_27f7_1921
+    // Rolling stone (one per screen).  // FUN_27f7_089f
+    // Death halo (rises 8 px/frame on a balloon/glider death).
+    // Dual-purpose DS slots 0x9876 / 0x9804.   // FUN_27f7_1921
     bool death_halo_active = false;
     int death_halo_x = 0, death_halo_y = 0;
     int stone_state = 0;               // DS:0x97e4 — 0 off, 1 right, 2 left
     int stone_x = 0;                   // DS:0x97f6
     int stone_y = 0;                   // DS:0x9884
-    // Smooth-motion render interpolation only — previous-tick snapshots
-    // of the global hazard/overlay positions (never read by game logic).
+    // Previous-tick positions for smooth-motion interpolation only.
     int prev_stone_x = 0, prev_stone_y = 0;
     int prev_fireball_x = 0, prev_fireball_y = 0;
     int prev_glider_x = 0, prev_glider_y = -100;
     int prev_death_halo_x = 0, prev_death_halo_y = 0;
-    // Float render shadows (smooth-motion HD path, use_float_pos gate) for the
-    // global hazard/overlay movers — 1-HD-pixel granularity.  Render-only;
-    // NOT in the POD SaveHeader (which copies the int x/y by value).
+    // Float render shadows for the smooth HD path; render only, not saved.
     float stone_fx = 0.0f, stone_fy = 0.0f;
     float fireball_fx = 0.0f, fireball_fy = 0.0f;
     float death_halo_fx = 0.0f, death_halo_fy = 0.0f;
     float glider_fx = 0.0f, glider_fy = -100.0f;   // L5 screen-12 detached glider
-    // L3 trunk-descent smoke Y jitter — pre-rolled from the global LCG
-    // at the same logic moment as the reference (FUN_2276_03d9 iters 0..19).
-    // 20 pairs of (jitter_a, jitter_b), each 0..9; rolled before Phase 2
-    // animation, consumed read-only by the renderer.  Mirrors reference
-    // state.l3_descent_smoke_jitter (cd78dcf / 789541c).
+    // L3 descent smoke jitter: 20 (a, b) pairs, each 0..9, pre-rolled from the
+    // global LCG at the reference's logic moment (FUN_2276_03d9 iters 0..19),
+    // before Phase 2; read-only for the renderer.
     std::array<std::pair<int,int>, 20> l3_descent_smoke_jitter{};
-    // True for exactly the frame on which the secret-room trampoline fired
-    // (update_secret_trampoline returned true).  Read by compose_frame to
-    // select the raised spring Y position (148 vs 164).  Mirrors
-    // state.secret_spring_bouncing in the Python reference.
+    // Set on the frame the secret-room trampoline fired; the spring draws
+    // raised (y 148 instead of 164).
     bool secret_spring_bouncing = false;
-    // Player X at the moment check_secret_exit fires (before the x is
-    // overwritten with the return position).  Used by the enhanced-mode
-    // exit slide to start the arc at the correct departure x.
-    // Mirrors state.secret_exit_x in the reference implementation.
+    // Player x when check_secret_exit fired (before the return x overwrites
+    // it): the start of the enhanced exit slide's arc.
     int secret_exit_x = 0;
 };
 
@@ -251,9 +218,8 @@ void update_death(SystemsState& state);
 void trigger_death(SystemsState& state);
 void hit_player(SystemsState& state, int damage = 2);
 void respawn(SystemsState& state);
-// How far the balloon bunch rises per logic tick — the death halo
-// (FUN_27f7_1921, 8 px per frame), and the Enhanced fly-away after a landing
-// (presentation/render/rising_balloons.hpp) that reuses it.
+// Balloon bunch rise per tick: the death halo (FUN_27f7_1921, 8 px) and the
+// enhanced fly-away after a landing.
 constexpr int kBalloonRisePerTick = 8;
 void init_death_halo(SystemsState& state);   // death_counter == 1
 void tick_death_halo(SystemsState& state);   // death_counter > 1

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 // Command-line parsing: the ~40-flag argv lexer, lifted out of main() into a
 // testable unit (SOC roadmap: cli_args).  CliArgs bundles the bootstrap
-// locals main() used to declare loose; parse_args fills it plus the
+// locals main() declares loose here; parse_args fills it plus the
 // PlaySettings CLI fields, and reports help/version/errors via ParseOutcome
 // so parse_args itself does no stdout (main renders help/version).
 #pragma once
@@ -67,5 +67,8 @@ struct ParseOutcome {
 // Lex argv into `args` (+ the CLI-flagged PlaySettings fields).  No stdout;
 // error messages go to stderr and set should_exit + exit_code = 2.
 ParseOutcome parse_args(int argc, char** argv, CliArgs& args, PlaySettings& ps);
+
+// The option sections of --help, from the table parse_args reads.
+std::string flag_usage();
 
 }  // namespace olduvai::app

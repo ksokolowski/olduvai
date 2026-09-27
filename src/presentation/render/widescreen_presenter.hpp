@@ -1,32 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Widescreen presenter (OL-B5).
-//
-// Extracted from run_platform_level (game_app.cpp): the §8.7 widescreen
-// presentation STATE (margin/native width/active flag, the wide SDL texture,
-// the neighbour peek cache + seam lists, the Tier-1 living-margin monster
-// clones, the FOND backdrop, the reusable HD wide frame) and its MACHINERY
-// (margin math + Alt+Enter/resize recompute, peek-cache rebuild, the
-// wrap_wide* family, reapply_seam_bands, and the steady widescreen present
-// with both its HD fast path and the whole-frame slow path).
-//
-// The class owns everything that was per-level widescreen shell state; it is
-// constructed once per run_platform_level over a WidescreenShellCtx — a
-// narrow view of the shell (renderer, level-fixed presentation params, the
-// live state/render aggregates, and the few callbacks that reach back into
-// the TU-private `Loaded` helpers), mirroring OL-B3's TransitionShellCtx
-// discipline.  BEHAVIOR-PRESERVING move: method internals are verbatim from
-// game_app.cpp; the block comments moved with them.
-//
-// CC2d moved the rest of the wide PRESENT machinery in: the wide-transition
-// present (present_transition) and the wide HUD-text mapping
-// (draw_wide_hud_text; banners stay a shell hook — they are state-driven).
-//
-// What did NOT move (still in game_app.cpp, reaching this state through the
-// accessors): the blocking transition players' ctx wiring (OL-B3), the L3
-// trunk-descent presenter (welded to the descent phase sequencing + F5
-// latch), upload_and_show's pillarbox branch (part of the shell's own
-// general present), save/load and pause.
+// Widescreen presenter: margin math and resize recompute, the wide texture,
+// the neighbour peek cache and seam lists, the living-margin monsters, the FOND
+// backdrop, the wrap_wide* family and the steady / transition wide presents.
+// Built once per run_platform_level over a WidescreenShellCtx.
 #pragma once
 
 #include "presentation/render/level_surface.hpp"
@@ -51,43 +28,29 @@ namespace olduvai::systems { struct SystemsState; }
 
 namespace olduvai::presentation {
 
-// Narrow shell context for the widescreen presenter.  Built ONCE per
-// run_platform_level; every pointer refers to a shell object that outlives
-// the presenter (the per-level locals of run_platform_level).
+struct FrameStats;
+
+// Shell view for the presenter, built once per level; every pointer outlives
+// the presenter.
 struct WidescreenShellCtx {
-    // The level's presentation surface: renderer, texture, vector font,
-    // overlay, logical size and the HD settings.  These were EIGHT separate
-    // members, copied out of run_platform_level's prologue one at a time — the
-    // same eight FramePresenter had (§3.7 cluster 1).
+    // Renderer, texture, vector font, overlay, logical size and HD settings.
     LevelSurface* surface = nullptr;
 
-    // Live-mutable shell string (Tier-1 Aspect edits write it).  Stays here:
-    // the aspect is a widescreen concern, not a property of the surface.
+    // The live Aspect setting (a widescreen concern, not the surface's).
     const std::string* aspect = nullptr;
 
-    // Live per-level aggregates (rebound in place across screens; the
-    // compose/draw functions take SystemsState by non-const ref).
+    // Live per-level aggregates, rebound in place across screens.
     systems::SystemsState* state = nullptr;        // g.state
     const LevelRenderAssets* render = nullptr;     // g.render
     enhance::HdAssetCache* hd_cache = nullptr;     // g.hd_cache
     int internal_level_id = 0;                     // g.config.internal_id
     int surface_screen_count = 0;                  // g.tiles.screens.size()
-    // The LEVEL has a FOND backdrop (g.config.visual_background).  Not
-    // render->visual_background: that is the CURRENT screen's, false in a
-    // cave or secret room, and the backdrop is built once per level.
+    // The LEVEL has a FOND backdrop.  Not render->visual_background, which is
+    // the current screen's (false in caves / secret rooms).
     bool level_visual_background = false;
 
-    // Shell logical-size mirrors: the text-overlay flush restores SDL's
-    // logical size from these, so the resize recompute must keep them in
-    // lockstep (see rebuild_if_resized).  fallback_ld = the non-widescreen
-    // (margin-0) logical dims.
-    // The shell's logical size AND the mirror the text-overlay flush restores
-    // from — one object, because they must never disagree (§3.13).
-    LogicalDims fallback_ld{};
-
-    // Callbacks into the TU-private `Loaded` helpers (game_app.cpp).
-    // compose_surface_screen_static(g, screen, out, ra, underlay,
-    //                               frozen_full, peek_monsters).
+    // Callback into game_app's TU-private helpers:
+    // compose_surface_screen_static.
     std::function<void(int screen, FrameBuffer& out, LevelRenderAssets* ra,
                        const std::vector<LevelRenderAssets::TileDraw>* underlay,
                        bool frozen_full, bool peek_monsters)>
@@ -95,231 +58,156 @@ struct WidescreenShellCtx {
     // collect_spawn_post_monsters(g, screen) — Tier-1 living-margin clones.
     std::function<std::vector<core::Entity>(int screen)> collect_monsters;
 
-    // Shell overlay hooks (assigned via the setters below once the shell
-    // lambdas they wrap exist — they are defined after the presenter is
-    // constructed, exactly like the old in-loop ordering):
-    //   draw_overlay_tail    — draw_l3_smoke_tail (enhanced descent dust).
-    //   draw_banners         — draw_enhanced_banners (level/food banner
-    //                          substitutes; shell-owned, state-driven).  The
-    //                          HUD-text mapping itself is presenter-internal
-    //                          (draw_wide_hud_text) since CC2d.
+    // Shell overlay hooks, set after construction: draw_overlay_tail (L3 dust,
+    // teleport clouds, balloons) and draw_banners (state-driven banner
+    // substitutes).
     std::function<void(RenderTarget&)> draw_overlay_tail;
-    std::function<void(std::vector<std::uint8_t>& b, int ow, int oh)>
-        draw_banners;
-    // Companion to draw_banners: 0 means "the banner is drawing something
-    // wall-clock animated, never skip the overlay".  ABSENT IS TREATED AS 0,
-    // so a caller that wires draw_banners without this can never trigger a
-    // skip.  Fail-safe by default; opting in is explicit.
+    std::function<void(const enhance::Canvas&)> draw_banners;
+    // Banner overlay key; 0 = animating, never skip the overlay.  Unset counts
+    // as 0, so skipping is opt-in.
     std::function<std::uint64_t()> banners_key;
 };
 
 class WidescreenPresenter {
 public:
-    // Computes the margin from the CURRENT renderer output size and creates
-    // the wide texture when active — the level-entry half of the old inline
-    // block.  The level-derived state (peek cache, FOND backdrop) is built
-    // by the explicit update_cache()/build_backdrop() calls at the original
-    // level-entry sites.
+    // Computes the margin from the current output size and creates the wide
+    // texture if active.  Level-derived state is built by update_cache() /
+    // build_backdrop().
     explicit WidescreenPresenter(WidescreenShellCtx ctx);
-    ~WidescreenPresenter();
+    ~WidescreenPresenter() = default;
     WidescreenPresenter(const WidescreenPresenter&) = delete;
     WidescreenPresenter& operator=(const WidescreenPresenter&) = delete;
 
     // Late hook wiring (the shell lambdas are defined after construction).
     void set_draw_overlay_tail(std::function<void(RenderTarget&)> fn);
     void set_banners_key(std::function<std::uint64_t()> fn);
-    void set_draw_banners(
-        std::function<void(std::vector<std::uint8_t>&, int, int)> fn);
+    void set_draw_banners(std::function<void(const enhance::Canvas&)> fn);
 
-    // Vector HUD text + banners over the centre 320 sub-region of a WIDE
-    // output — the ONE mapping shared by present(), present_transition()
-    // and upload_and_show's pillarboxed-WS branch (which calls it from the
-    // shell).  Moved verbatim from run_platform_level (CC2d).
+    // Vector HUD text + banners over the centre 320 of a wide output; the one
+    // mapping for present(), present_transition() and the pillarboxed path.
     std::uint64_t overlay_key(const enhance::EnhancedHudLayout& L,
                               int ow, int oh) const;
-    void draw_wide_hud_text(std::vector<std::uint8_t>& b, int ow, int oh,
-                            const enhance::EnhancedHudLayout& L);
+    void draw_wide_hud_text(const enhance::Canvas& cv,
+                            const enhance::EnhancedHudLayout& L) const;
 
-    // The wide foreground pass: entities (player included), then un-clip and
-    // reflect the L7 lava bubbles into the margin, then the caller's overlay
-    // tail and the Tier-1 living-margin monsters.  present()'s fast and slow
-    // paths both ran this, identically.
-    //
-    // What comes BEFORE it — the player-only margin clips — legitimately
-    // differs (HD scale vs native, and the fast path exempts the L5 glider
-    // fly-off) and stays at each site.  Sharing the tail is what makes that
-    // difference visible instead of buried at the end of two long branches.
+    // Wide foreground: entities, unclip + L7 lava-bubble reflection, overlay
+    // tail, margin monsters, on a foreground_target after clip_foreground.
     void draw_wide_foreground(RenderTarget& wrt);
 
-    // Clear, copy the wide texture across the canvas, and lay the vector HUD
-    // text over it.  The three places that show `wtex_` — present()'s fast
-    // path, present()'s slow path and present_transition() — each wrote this
-    // out: the same clear/copy plus the same begin → draw_wide_hud_text →
-    // flush.  They differ only in what they uploaded BEFORE it and whether
-    // they present after, so neither end is in here.
-    //
-    // Caller must have filled wtex_ already.
-    void show_wide_with_hud(const enhance::EnhancedHudLayout& hud_layout,
-                            bool draw_hud_overlay);
+    // Clear, copy the wide texture across the canvas, draw the vector HUD
+    // text (none for a null layout).  Caller must have filled the texture.
+    void show_wide_with_hud(const enhance::EnhancedHudLayout* hud) const;
 
     // ── State accessors (the shell paths that stayed behind read these) ──
 
-    // Surface reads, named as the members they replace so the body below is
-    // unchanged apart from losing the `ctx_.` prefix.  Shorter at every site
-    // than the fields were.
+    // Surface reads.
     SDL_Renderer* ren() const { return ctx_.surface->ren(); }
     bool hd() const { return ctx_.surface->hd(); }
     int hd_scale() const { return ctx_.surface->hd_scale(); }
     bool use_hd_text() const { return ctx_.surface->use_hd_text(); }
     const std::string* hd_profile() const { return ctx_.surface->hd_profile(); }
     enhance::HdText& hd_text() const { return ctx_.surface->hd_text(); }
-    TextOverlay& overlay() const { return ctx_.surface->overlay(); }
     LogicalSize& lsz() const { return ctx_.surface->lsz(); }
 
     bool active() const { return active_; }
     int margin() const { return margin_; }
     int native_w() const { return native_w_; }
-    // The live Aspect setting (Tier-1 edits write through this pointer).
-    // Exposed for the F5 report's Display section: active()/margin() alone
-    // cannot distinguish "too narrow a display" from "widescreen not chosen".
+    // The Aspect setting, for the F5 report: active()/margin() alone cannot
+    // tell "display too narrow" from "widescreen not chosen".
     const std::string& aspect() const { return *ctx_.aspect; }
-    SDL_Texture* wide_tex() const { return wtex_; }
+    // The surface's wide texture at this width; null when inactive.
+    SDL_Texture* wide_tex() const {
+        return active_ ? ctx_.surface->wide_tex(native_w_) : nullptr;
+    }
     bool left_ok() const { return left_ok_; }
     bool right_ok() const { return right_ok_; }
     bool backdrop_ok() const { return backdrop_ok_; }
     const FrameBuffer& backdrop() const { return backdrop_; }
 
-    // ONE authoritative present-path predicate: widescreen runs (peek OR
-    // secret self-tile).  Selects present() (composes its own wide buffer
-    // with the entity-overflow pass) over upload_and_show — this SAME
-    // predicate gates every present call site, so the "is the overflow pass
-    // running this frame?" decision cannot diverge between sites.
+    // The one present-path predicate (peek, secret self-tile, no-neighbour
+    // surface fill), shared by every present call site.
     bool present_path() const;
 
-    // Recompute widescreen state when the renderer output size changes
-    // (Alt+Enter fullscreen toggle / window resize).  Cheap no-op when
-    // unchanged.  Rebuilds the level-derived state when widescreen turns ON
-    // mid-level (the old ws_refresh_on_activate wiring, now internal).
-    void rebuild_if_resized();
+    // Before every present: follow the output size (Alt+Enter, resize) and
+    // the Aspect setting, which the pause edits live.  The logical size is
+    // derived here and nowhere else; a no-op when neither changed.  Builds
+    // the level-derived state when widescreen turns on mid-level.
+    void sync_output();
 
-    // Recompute after a LIVE Aspect change (the size is unchanged, so
-    // rebuild_if_resized alone is a no-op — and is a no-op in the leaving
-    // direction whatever the size does).  Safe to call when nothing changed.
-    void aspect_changed();
-
-    // Rebuild the neighbour peek cache (+ seam lists + living-margin monster
-    // clones) for the CURRENT screen.  Call after every screen bind.
+    // Rebuild the peek cache, seam lists and margin monsters for the current
+    // screen.  Call after every screen bind.
     void update_cache();
 
     // Build (or rebuild) the pure-FOND backdrop for the CURRENT level.
     void build_backdrop();
 
-    // Tier-1 living margins: cycle the peek monsters' walk sprites IN PLACE,
-    // once per logic tick (tick site stays in the run loop).
+    // Margin monsters: cycle walk sprites in place, once per logic tick.
     void tick_margin_monsters();
 
-    // Part 1 smooth plumbing: the smooth sub-frame caller sets the float
-    // render position around its present so the overflow draw reads fx/fy.
+    // Set around a smooth sub-frame present so the overflow draw reads fx/fy.
     void set_float_pos(bool use, float fx = 0.0f, float fy = 0.0f);
 
-    // ── Widescreen present (§8.7, Option A) — steady-frame present with the
-    // HD fast path (cached static wide bg) and the whole-frame slow path.
+    // Steady present: HD fast path (cached static wide bg) or whole-frame slow
+    // path.
     void present(const std::function<void(RenderTarget&)>& bubble_hook_w,
                  bool do_present = true);
 
-    // ── Wide-transition present (§8.7 wide transitions): present a ready-
-    // made WIDE native buffer (native_w()x200, no baked HUD) through the
-    // wide texture, exactly like present()'s tail — fixed HUD over the
-    // centre 320 so width and HUD position stay continuous with the steady
-    // widescreen frame.  Moved verbatim from run_platform_level (CC2d).
+    // Present a wide native buffer (no baked HUD) with the HUD fixed over the
+    // centre 320, so transitions keep the steady frame's width and HUD
+    // position.  do_present=false leaves the frame for a readback; flip()
+    // then presents it.
     void present_transition(std::vector<std::uint8_t>& wide,
-                            bool with_hud = true, bool pre_upscaled = false);
+                            bool with_hud = true, bool pre_upscaled = false,
+                            bool do_present = true) const;
+    // OLDUVAI_DUMP_OUTPUT, then the flip, timed as the vsync block: presents
+    // what a do_present=false call left.
+    void flip() const;
 
-    // ── Wide-buffer wraps for the transition/fade paths (stay in the shell,
-    // sequenced around the cache rebuild there) ──
+    // Wide-buffer wraps for the transition and fade paths.
     void wrap_wide(const FrameBuffer& center, std::vector<std::uint8_t>& out);
     void wrap_wide_bezel(const FrameBuffer& center,
-                         std::vector<std::uint8_t>& out);
+                         std::vector<std::uint8_t>& out) const;
     void wrap_wide_for(const FrameBuffer& center, bool is_present,
                        std::vector<std::uint8_t>& out);
     void wrap_wide_static(const FrameBuffer& center,
                           std::vector<std::uint8_t>& out);
 
-    // Re-apply the neighbour seam content (straddler completions + row
-    // bridges) that a raw 320-centre memcpy just buried.  Shared with the L3
-    // trunk-descent presenter (which stays in the shell).
-    // centre_has_entities: the caller's centre is a COMPOSED frame, not an
-    // entity-free background — re-draw entities after the tile pass or it
-    // erases them inside the band.  See the definition.
+    // Re-apply seam content (straddlers, row bridges) covered by a 320 centre
+    // copy.  centre_has_entities: the centre is a composed frame, so redraw its
+    // entities after the tile pass.
     void reapply_seam_bands(std::vector<std::uint8_t>& wide,
                             bool centre_has_entities = false,
                             bool draw_player = false);
 
-    // Compose the CURRENT screen's static wide background (no centre
-    // overlay) from the presenter's cache — the descent margins builder.
+    // The current screen's static wide background (no centre overlay), for the
+    // descent margins.
     void compose_static_wide_bg(std::vector<std::uint8_t>& out);
 
-    // ── OLDUVAI_FRAME_STATS present accounting ─────────────────────────
-    // The SAME three fields FramePresenter carries, and they are here because
-    // their absence made the stat lie.  `--aspect widescreen` — which is what
-    // the handheld port ships — presents through wsp.present(), NOT
-    // fp.present(), so the only present timer in the engine sat on a path the
-    // device never took.  `present=0.00ms` was then read off a device log as
-    // evidence about SDL's cost; it was evidence of nothing at all.
-    // Inert when `stats_on` is false: the counter is not even read.
-    double* present_ms = nullptr;   // &diag.stats.present_ms
-    double* swap_ms = nullptr;                // SDL_RenderPresent only
-    double* upload_ms = nullptr;              // SDL_UpdateTexture only
-    unsigned long* present_calls = nullptr;   // present/present_transition
-    // draw_wide_foreground: entities, the Tier-1 margin monsters (neighbour
-    // screens' live monsters drawn into the peek margins), mirrored lava
-    // bubbles, and the overlay tail.
-    //
-    // WHY IT NEEDS ITS OWN NUMBER.  WsPresentTimer starts on the FIRST line of
-    // present(), so present_ms has never meant "presenting" -- it is
-    // compose + present, and every one of those passes is inside it.  Three
-    // readings of that column have now been wrong partly because its name
-    // promised something narrower than it measures.
-    double* fg_ms = nullptr;
-    // Per-present interval sampling (see LevelDiag::FrameStats).
-    std::vector<float>* present_iv = nullptr;
-    Uint64* last_present_pc = nullptr;
-    // The two FULL-FRAME COPIES the fast path makes of the same 2.56 MB frame
-    // (1068x600x4 at scale-3 widescreen): the cached HD background memcpy'd
-    // into frame_hd_, and then frame_hd_ copied again into the texture.  They
-    // are separated because eliminating one -- composing straight into a
-    // locked streaming texture -- is only worth attempting if they are as
-    // comparable as their identical size suggests.
-    double* bg_copy_ms = nullptr;
-    // show_wide_with_hud: RenderClear + RenderCopy of the scene, plus the
-    // glyph rasterisation that feeds the overlay.  The overlay's own three
-    // buckets are subtracted from this by their own timers.
-    double* scene_ms = nullptr;
-    // Vector glyph rasterisation into the overlay buffer, at OUTPUT
-    // resolution, every present.  Separated because `scene` WRAPS the
-    // overlay's own buckets -- an earlier description of these instruments
-    // wrongly claimed they subtracted out -- and the remainder after that
-    // subtraction is Clear + Copy + these glyphs.  ov_blit (a full-screen
-    // BLENDED RenderCopy) is 27.5 ms a session, so the GPU ops cannot be
-    // large, which puts the remainder here.  This measures it instead of
-    // inferring it.
-    double* glyph_ms = nullptr;
-    // Set true whenever present_transition runs, i.e. the sim was PAUSED for
-    // part of this tick.  A transition plays its whole animation inside one
-    // main-loop iteration, so that wall time is a deliberate animation and not
-    // the logic clock falling behind -- counting it as lateness made classic
-    // mode read 15.70 Hz when it was in fact running at 18.27.
-    bool* tick_paused = nullptr;
-    double perf_ms = 0.0;           // ms per SDL performance-counter tick
-    bool stats_on = false;          // OLDUVAI_FRAME_STATS
+    // OLDUVAI_FRAME_STATS: the same counters as FramePresenter.  Widescreen
+    // (what the handheld port ships) presents here, not through fp.present().
+    // present_ms spans compose + present, so the foreground, scene and glyph
+    // passes time their own buckets.  No-op when the env var is unset.
+    FrameStats* stats = nullptr;    // &diag.stats
 
 private:
+    // present()'s two paths: the HD cached-background compose, and the
+    // whole-frame upscale when the wide texture is missing.  Both fill the
+    // wide texture.
+    void present_fast(const std::function<void(RenderTarget&)>& bubbles,
+                      const enhance::EnhancedHudLayout* hud);
+    void present_slow(const std::function<void(RenderTarget&)>& bubbles,
+                      const enhance::EnhancedHudLayout* hud);
+    // The foreground target over a wide buffer: origin at the margin, no
+    // state advance, the smooth float position.
+    RenderTarget foreground_target(std::uint8_t* px, int w, int h, int scale,
+                                   enhance::HdAssetCache* cache,
+                                   const std::string* profile) const;
+    // Its clips, after any bubble pass: the secret room's floor and the
+    // player-only clip at a no-neighbour margin.
+    void clip_foreground(RenderTarget& wrt) const;
     int compute_margin(int ow, int oh) const;
-    // The FOND backdrop to hand the wide composers, or nullptr when this
-    // screen has none.  The same ternary appeared verbatim at five call sites
-    // (present fast + slow paths, present_transition, wrap_wide_static,
-    // compose_static_wide_bg), so a change to the rule had to be made five
-    // times.
+    // The FOND backdrop for the wide composers, or nullptr when this screen has
+    // none.
     const FrameBuffer* ws_backdrop() const;
     bool secret_selftile() const;
     bool surface_selffill() const;
@@ -328,45 +216,36 @@ private:
 
     WidescreenShellCtx ctx_;
 
-    // Last renderer output size the widescreen state was computed for; the
-    // Alt+Enter/resize recompute compares against it.
+    // Output size the state was last computed for.
     int ow0_ = 0, oh0_ = 0;
-    // Mutable: Alt+Enter fullscreen toggle / window resize recomputes the
-    // margin (and so active_/native_w_/logical size) via rebuild_if_resized.
+    std::string applied_aspect_;   // the Aspect sync_output last applied
     void note_no_margin_(int ow, int oh);
     int margin_ = 0;
-    bool said_no_margin_ = false;   // the §3.25 line, printed at most once
+    bool said_no_margin_ = false;   // the one-time margin warning, printed at most once
     bool active_ = false;
     int native_w_ = 320;   // wide native width (320 + 2*margin)
-    SDL_Texture* wtex_ = nullptr;   // wide texture (lazy; recreated on resize)
 
-    // ── Widescreen neighbor cache (§8.7) ─────────────────────────────────
-    // STATIC per-screen (bg + terrain, no entities, no RNG), composed once on
-    // screen-bind and reused every frame.
+    // Neighbour peeks: static per screen (bg + terrain, no entities, no RNG).
     FrameBuffer left_, right_;
     bool left_ok_ = false, right_ok_ = false;
     int left_screen_ = -1, right_screen_ = -1;   // wide-bg cache key
     // Seam-column completion (tile_patterns) + authored seam-hole bridges.
     std::vector<LevelRenderAssets::TileDraw> left_seam_, right_seam_,
         left_bridge_, right_bridge_;
-    // Tier-1 living margins: animated spawn-post monster clones for the two
-    // peeks (sprite-cycled in place once per logic tick; drawn live over the
-    // cached static bg — which excludes them).
+    // Animated margin monster clones, drawn live over the cached bg (which
+    // excludes them).
     std::vector<core::Entity> left_mons_, right_mons_;
-    // Bumped on every peek rebuild — keys the wide static-bg HD cache to the
-    // peek CONTENT (see get_static_wide_bg_hd).
+    // Bumped on every peek rebuild; keys the wide static-bg HD cache to the
+    // peek content.
     std::uint64_t peek_generation_ = 0;
     // Reusable per-frame HD wide buffer (fast widescreen present).
     std::vector<std::uint8_t> frame_hd_;
 
-    // Pure-FOND backdrop (320x200 RGBA) for the no-neighbour margin
-    // extension.  Built once per level (background is level-stable).
+    // FOND backdrop (320x200 RGBA), built once per level.
     FrameBuffer backdrop_;
     bool backdrop_ok_ = false;
 
-    // Part 1: set by the smooth sub-frame caller so present()'s own overflow
-    // draw_entities reads the float render positions (fx/fy); false on every
-    // other call (screenshot, non-smooth present) → integer path.
+    // Set by the smooth sub-frame caller: the overflow draw reads fx/fy.
     bool use_float_pos_ = false;
     float player_fx_ = 0.0f, player_fy_ = 0.0f;
 };

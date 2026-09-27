@@ -28,7 +28,8 @@ TEST_CASE("built_in_menu_model: the shipped menus.json yields the expected scree
     for (const auto& [sid, _] : m.screens) ids.insert(sid);
 
     const std::set<std::string> expected = {
-        "main", "options", "audio", "video", "cheats", "cheat_bonus",
+        "main", "options", "audio", "video", "controls", "cheats",
+        "cheat_bonus",
         "pause", "pause_boss", "dev", "bug_report", "quit", "about",
         "audio_advanced"};
     CHECK(ids == expected);
@@ -120,4 +121,24 @@ TEST_CASE("built_in_menu_model: one Quit entry, and About on the title menu") {
     for (std::size_t i = 0; i + 1 < a.size(); ++i)
         CHECK(a[i].type == "readout");
     CHECK(a.back().type == "back");
+}
+
+TEST_CASE("menu_model: the button rows are labelled for the pad family") {
+    using olduvai::presentation::label_pad_rows;
+    using olduvai::presentation::PadFamily;
+    auto m = olduvai::presentation::built_in_menu_model();
+    label_pad_rows(m, PadFamily::kNintendo);
+    const auto& items = m.screens.at("controls").items;
+    int rows = 0;
+    for (const auto& it : items) {
+        if (it.key.rfind("pad_", 0) != 0) continue;
+        ++rows;
+        REQUIRE(it.value_labels.size() == it.values.size());
+        for (std::size_t i = 0; i < it.values.size(); ++i)
+            if (it.values[i] == "b") CHECK(it.value_labels[i] == "A - right");
+    }
+    CHECK(rows == 4);
+    // Other rows keep their labels.
+    for (const auto& it : items)
+        if (it.key == "button_layout") CHECK(it.value_labels.at(0) == "Xbox");
 }

@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
     const auto tiles = prepare::read_tile_table(exe, level);
     const auto objs = prepare::read_object_table(exe, cfg.obj);
     const auto mt = systems::MonsterTables::from_exe(exe);
-    const int surface_count = (int)tiles.screens.size();
+    const int surface_count = static_cast<int>(tiles.screens.size());
 
     // Resolve which neighbors are coherent for this state (no peek → -1).
     const auto neigh = presentation::widescreen_neighbors(
@@ -100,10 +100,10 @@ int main(int argc, char** argv) {
         st.current_level = level;
         ra.tiles.clear();
         if (s >= 0 && s < surface_count)
-            for (const auto& tp : tiles.screens[(std::size_t)s].tiles)
+            for (const auto& tp : tiles.screens[static_cast<std::size_t>(s)].tiles)
                 ra.tiles.push_back({tp.sprite_idx, tp.x, tp.y});
-        if (with_entities && s >= 0 && s < (int)objs.size()) {
-            st.entities = systems::spawn_screen_entities(objs[(std::size_t)s], mt);
+        if (with_entities && s >= 0 && s < static_cast<int>(objs.size())) {
+            st.entities = systems::spawn_screen_entities(objs[static_cast<std::size_t>(s)], mt);
             for (auto& e : st.entities) if (e.sprite < 0) e.sprite = 0;
         }
         st.player.sprite = -1;
@@ -138,17 +138,18 @@ int main(int argc, char** argv) {
     }
 
     std::vector<std::uint8_t> wide;
-    presentation::compose_widescreen(wide, margin, center, left, right,
-                                     /*hud_rows=*/0, backdrop);
+    presentation::MarginFill fill;
+    fill.backdrop = backdrop;
+    presentation::compose_widescreen(wide, margin, center, left, right, fill);
     const int W = 320 + 2 * margin, H = 200;
 
     // Nearest-upscale x4 for a clear view.
     const int K = 4, UW = W * K, UH = H * K;
-    std::vector<std::uint8_t> up((std::size_t)UW * UH * 4);
+    std::vector<std::uint8_t> up(static_cast<std::size_t>(UW) * UH * 4);
     for (int y = 0; y < UH; ++y)
         for (int x = 0; x < UW; ++x) {
-            const std::uint8_t* s = &wide[((std::size_t)(y/K) * W + (x/K)) * 4];
-            std::uint8_t* d = &up[((std::size_t)y * UW + x) * 4];
+            const std::uint8_t* s = &wide[(static_cast<std::size_t>(y/K) * W + (x/K)) * 4];
+            std::uint8_t* d = &up[(static_cast<std::size_t>(y) * UW + x) * 4];
             d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=255;
         }
 

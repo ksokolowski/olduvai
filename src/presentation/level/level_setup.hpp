@@ -2,12 +2,9 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 // Surface-level asset loading, screen binding and static composition.
 //
-// The bind/load/compose helpers moved verbatim out of game_app.cpp (CC2a-2,
-// 2026-07-09) — the second step of decomposing the 3,450-line
-// run_platform_level. Only the functions run_platform_level/run_game actually
-// call are declared here; the rest (store_key, bind_store, load_level_impl)
-// stay file-local in level_setup.cpp. See the internal codebase-
-// review notes (CC2a).
+// Only the functions run_platform_level/run_game actually call are declared
+// here; the rest (store_key, bind_store, load_level_impl) stay file-local in
+// level_setup.cpp.
 
 #pragma once
 
@@ -22,8 +19,6 @@
 
 namespace olduvai::presentation {
 
-const char* level_music_name(int internal);
-
 // Read the runtime gameplay tables (cave widths, secret scores) and the
 // AdLib SFX voice patches from the user's executable bytes and install
 // them (core::install_game_tables + install_adlib_sfx_voices).  Idempotent;
@@ -35,6 +30,11 @@ void load_sfx_bank(SdlAudio& audio,
                        const std::string&)>& entry);
 
 void refresh_secret_tiles(Loaded& g, bool draw_scatter);
+
+// Warm the HD sprite cache while "Please Wait" shows.  Lazily, the upscales
+// hit the first frame that draws each sprite (1138 ms for 56 sprites entering
+// the L1 secret room on a Cortex-A53).
+void warm_level_sprites(Loaded& g, int hd_scale, const std::string& profile);
 
 void bind_screen(Loaded& g, int screen);
 

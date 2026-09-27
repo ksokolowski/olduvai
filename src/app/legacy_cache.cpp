@@ -23,21 +23,21 @@ std::string env(const char* name) {
 // migration that ignored the override would leave exactly those directories
 // behind.
 fs::path legacy_cache_root() {
-    if (std::string ov = env("OLDUVAI_CACHE_DIR"); !ov.empty()) {
+    if (const std::string ov = env("OLDUVAI_CACHE_DIR"); !ov.empty()) {
         return fs::path(ov);
     }
 #if defined(_WIN32)
-    if (std::string local = env("LOCALAPPDATA"); !local.empty()) {
+    if (const std::string local = env("LOCALAPPDATA"); !local.empty()) {
         return fs::path(local) / "olduvai" / "cache";
     }
     return fs::path("olduvai") / "cache";
 #elif defined(__APPLE__)
-    if (std::string home = env("HOME"); !home.empty()) {
+    if (const std::string home = env("HOME"); !home.empty()) {
         return fs::path(home) / "Library" / "Caches" / "olduvai";
     }
     return fs::path(".cache") / "olduvai";
 #else
-    if (std::string xdg = env("XDG_CACHE_HOME"); !xdg.empty()) {
+    if (const std::string xdg = env("XDG_CACHE_HOME"); !xdg.empty()) {
         return fs::path(xdg) / "olduvai";
     }
     if (std::string home = env("HOME"); !home.empty()) {

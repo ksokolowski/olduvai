@@ -48,7 +48,7 @@ bool drive_menu_script(MenuScript& ms, ReportFormService* form) {
         // Modifier chords the plain key-pusher can't express.
         const SDL_Keycode sym = tok == "stab" ? SDLK_TAB : SDLK_RETURN;
         const Uint16 mod = tok == "stab" ? KMOD_LSHIFT : KMOD_LCTRL;
-        for (bool down : {true, false}) {
+        for (const bool down : {true, false}) {
             SDL_Event e{};
             e.type = down ? SDL_KEYDOWN : SDL_KEYUP;
             e.key.state = down ? SDL_PRESSED : SDL_RELEASED;

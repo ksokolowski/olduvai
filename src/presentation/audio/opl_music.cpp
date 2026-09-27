@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Authentic AdLib music driver — port of the reference EXE-faithful OPL
-// renderer onto the vendored
-// Nuked-OPL3 core.  Transcribed 1:1 so the PCM output byte-matches the
-// reference render (same emulator, same integer/double arithmetic, same
-// register-write order); the parity harness is tools/opl_music_dump.cpp.
+// AdLib music driver on the vendored Nuked-OPL3 core, transcribed 1:1 from the
+// reference renderer (same arithmetic and register-write order), so the PCM
+// matches; parity harness: tools/opl_music_dump.cpp.
 
 #include "presentation/audio/opl_music.hpp"
 
@@ -37,18 +35,17 @@ constexpr int kRhythmBits[11] = {0, 0, 0, 0, 0, 0, 0x10, 0x08, 0x04, 0x02, 0x01}
 
 constexpr double kOplClockHz = 49716.0;
 
-// EXE-faithful TL scaling per AdLib_ChangeVolume (FUN_1fe0_0234):
+// TL scaling per AdLib_ChangeVolume (FUN_1fe0_0234):
 //   tmp = 0x3f - (patch_tl & 0x3f)
 //   tl  = 0x3f - ((velocity & 0x7f) * tmp + 0x40) >> 7
-// velocity 0x7f → tl == patch_tl (max output); velocity 0 → 0x3f (silent).
+// velocity 0x7f -> patch_tl (max output); 0 -> 0x3f (silent).
 int scale_tl_by_velocity(int patch_tl, int velocity) {
     const int tmp = 0x3f - (patch_tl & 0x3f);
     return 0x3f - (((velocity & 0x7f) * tmp + 0x40) >> 7);
 }
 
-// frequency → (fnum, block).  Mirrors the reference: Python round() is
-// ties-to-even, matched here by nearbyint under FE_TONEAREST (the default
-// mode); ldexp scales by the exact power of two.
+// frequency -> (fnum, block).  Python round() is ties-to-even: nearbyint
+// under FE_TONEAREST (the default); ldexp scales by an exact power of two.
 void frequency_to_fnum_block(double frequency, int& fnum, int& block) {
     for (block = 0; block < 8; ++block) {
         const long v = std::lrint(std::nearbyint(
@@ -120,9 +117,9 @@ int OplMusicPlayer::advance_events() {
     for (;;) {
         if (cursor_ >= stream_.events.size()) {
             if (loop_ && !stream_.events.empty()) {
-                // EXE loop: the MDI dispatcher resets the stream pointer
-                // (DS:0x8834) without touching the chip — gapless, ringing
-                // notes carry into the next iteration.
+                // EXE loop: the dispatcher resets the stream pointer
+                // (DS:0x8834) without touching the chip, so ringing notes carry
+                // into the next pass.
                 cursor_ = 0;
                 last_tick_ = 0;
                 tempo_us_ = 500000;
@@ -287,13 +284,11 @@ void OplMusicPlayer::apply_slot_state(
 }
 
 void OplMusicPlayer::apply_channel_volume(int logical_channel, int velocity) {
-    // Mirrors AdLib_ChangeVolume (FUN_1fe0_0234) via MDI_ChannelNoteSet
-    // (FUN_1ecd_045a): only rewrite R40 when the velocity changed (the EXE
-    // caches it at DS:0x88c0+ch*2).  Applies to BOTH operator slots — the
-    // carrier-only gating at FUN_1fe0_0635:0x0685 is deferred until the
-    // reference lands it too (its Finding notes a parser-side patch_tl
-    // mismatch that must be resolved first; parity means matching the
-    // reference as-is).
+    // AdLib_ChangeVolume (FUN_1fe0_0234) via MDI_ChannelNoteSet
+    // (FUN_1ecd_045a): rewrite R40 only when the velocity changed (the EXE
+    // caches it at DS:0x88c0+ch*2).  Both operator slots, as the reference does
+    // today (the EXE's carrier-only gating at FUN_1fe0_0635:0x0685 waits for
+    // the reference).
     if (logical_channel < 0 || logical_channel >= 11) return;
     ChannelState& ch = channels_[static_cast<std::size_t>(logical_channel)];
     if (ch.cached_velocity == velocity) return;

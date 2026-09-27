@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Surface-level asset loading / screen binding / static composition.
-// Moved verbatim from game_app.cpp (CC2a-2) — see level_setup.hpp.
+// Surface-level asset loading, screen binding and static composition.
 
 #include "presentation/level/level_setup.hpp"
+
+#include "presentation/render/hd_warm.hpp"   // warm_hd_sprite_cache
 
 #include "presentation/game_app.hpp"
 
@@ -92,17 +93,6 @@ void install_exe_game_data(const std::vector<std::uint8_t>& exe) {
     install_adlib_sfx_voices(prepare::read_adlib_sfx_voices(exe));
 }
 
-const char* level_music_name(int internal) {
-    switch (internal) {
-        case 1: return "RIK1.MDI";
-        case 2: case 4: case 6: return "ROCKY.MDI";
-        case 3: return "BOY16.MDI";
-        case 5: return "RIK6.MDI";
-        case 7: return "RIK8.MDI";
-        default: return nullptr;
-    }
-}
-
 
 void load_sfx_bank(SdlAudio& audio,
                    const std::function<const std::vector<std::uint8_t>*(
@@ -116,14 +106,11 @@ void load_sfx_bank(SdlAudio& audio,
 }
 
 
-// Per-frame secret-room scenery: floor every 48 px at y=168, plus the
-// random bubble scatter (the room render consumes the LCG every tick —
-// faithful to the original's per-frame draw loop).
-// draw_scatter=false (enhanced fluid-bubble mode): still roll the LCG every
-// iteration (replay parity) but DON'T push the EXE scatter bubble tiles — the
-// 60 persistent fluid bubbles REPLACE the scatter, matching the Python
-// reference (`if state.fluid_bubbles_animation: draw_fluid_bubbles +
-// floor` else `floor + scatter`).  Drawing both stacks two bubble systems.
+// Secret-room scenery, rebuilt every frame: floor every 48 px at y=168 plus
+// the bubble scatter, which consumes the LCG each tick (as the original).
+// draw_scatter=false (enhanced fluid bubbles): still roll the LCG (replay
+// parity) but push no scatter tiles; the fluid bubbles replace them, as in the
+// reference.
 void refresh_secret_tiles(Loaded& g, bool draw_scatter) {
     g.render.tiles.clear();
     for (int si = 0; si < 0x2710; si += 0x30) {
@@ -153,23 +140,16 @@ void bind_store(Loaded& g, int screen) {
                            ? std::move(it->second)
                            : std::vector<core::Entity>{};
     g.bound_key = key;
-    // The rebound list is composed BEFORE any entity update — recompute
-    // monster sprites from state so init placeholders / stale frames
-    // don't leak into the first frame (which the transition slide now
-    // shows for its whole duration).
+    // Recompute monster sprites before the first frame (which a transition
+    // shows for its whole duration), so init placeholders do not leak.
     systems::refresh_entity_sprites_on_screen_bind(
         g.state.entities, g.state.l3a_phase_counter);
 }
 
-// (normalize_glider_water + l7_bridge_ceiling_to_wall live in
-// presentation/screen_tiles.cpp now — build_screen_tiles applies both.)
 
-// Assemble the shared pure-constructor inputs from the live session.  ONE
-// builder for BOTH the bind path and the peek path — the whole point of
-// OL-B2 is that the two can no longer drift apart at the call sites.
-// `tile_sprites` is the caller's final atlas (surface tiles + GROT3 for L3):
-// g.render.tile_sprites for bind_screen, the scratch ra.tile_sprites copy
-// for the peek.
+// The shared inputs for build_screen_tiles, for both the bind and the peek
+// path.  `tile_sprites` is the caller's final atlas (surface tiles + GROT3 on
+// L3).
 ScreenTileContext screen_tile_ctx(
     const Loaded& g, const std::vector<formats::Sprite>& tile_sprites) {
     ScreenTileContext ctx;
@@ -197,15 +177,11 @@ void setup_enhanced_glider_water(Loaded& g, bool enhanced, int internal) {
         normalize_glider_water(g.render.tiles, g.glider_water_y);
 }
 
-// ── One binder per screen kind ──────────────────────────────────────────────
-// bind_screen was 195 lines and 89 cognitive-complexity points (BACKLOG
-// §3.12) holding three unrelated bindings that share only their last two
-// lines.  Each is moved VERBATIM and keeps its own comments; bind_screen is
-// the dispatch it always described.  The shared tail (bind_store + the
-// current_screen write) stays in one place, at the bottom of bind_screen.
+// One binder per screen kind; bind_screen dispatches and keeps the shared tail
+// (bind_store + current_screen).
 
-// A secret room: fixed palette, no visual background, surface tiles, and
-// the enhanced fluid bubbles on first entry.
+// Secret room: fixed palette, no visual background, surface tiles, fluid
+// bubbles on first entry.
 void bind_secret_screen(Loaded& g, int screen) {
     systems::setup_secret_collision(g.state);
     g.render.visual_background = false;
@@ -213,15 +189,10 @@ void bind_secret_screen(Loaded& g, int screen) {
     g.render.palette.assign(std::begin(kSecretPalette),
                             std::end(kSecretPalette));
     g.render.tile_sprites = g.surface_tiles;
-    // Bubble scatter is generated by the per-frame render gate (the
-    // entry frame included — secret_flag is already set when the
-    // render runs); a bind-time refresh here would double-consume
-    // the LCG on entry and fork the streams.
-    //
-    // Enhanced-mode: init fluid bubbles on first entry to this room.
-    // fluid_bubbles_initialized persists across secret entries so the
-    // bubble positions are continuous (not reset every entry), matching
-    // the Python reference (cleared only in _setup_level).
+    // No scatter here: the per-frame render gate generates it (entry frame
+    // included); a bind-time refresh would consume the LCG twice on entry.
+    // Enhanced: init the fluid bubbles on first entry only, so they continue
+    // across entries (reset per level, as the reference).
     if (!g.fluid_bubbles_initialized) {
         g.fluid_bubbles.init();
         g.fluid_bubbles_initialized = true;
@@ -247,10 +218,9 @@ void bind_cave_screen(Loaded& g, int screen) {
     }
     g.render.tiles.clear();
     if (g.config.internal_id == 3) {
-        // Dark-woods caves: the table-driven multi-platform layout.
-        // Sprites < 30 draw from the combined surface tile list AND
-        // stamp their collision shapes; >= 30 draw decorative pieces
-        // from the cave MAT (appended after the 33 surface tiles).
+        // Dark Woods caves: table-driven layout.  Sprites < 30 come from the
+        // surface tiles and stamp collision; >= 30 are decorative pieces from
+        // the cave MAT (after the 33 surface tiles).
         const auto& recs = ((cave_idx - 22) & 1) ? g.l3_caves.odd
                                                  : g.l3_caves.even;
         g.render.tile_sprites = g.surface_tiles;
@@ -274,12 +244,9 @@ void bind_cave_screen(Loaded& g, int screen) {
             }
         }
     } else if (g.config.internal_id == 7) {
-        // L7 (Volcanic) caves use NO GROT file — the interior is tiled
-        // from ELEML7.MAT (the surface tile sheet): sprite 29 stalactite
-        // wall at y=87 + sprite 31 ceiling strip at y=50, stepping 64 px,
-        // sprite 30 as the right-edge cap.  EXE FUN_2759_033a; matches the
-        // Python renderer._cave_tiles_l7.  Without this the cave had no
-        // background (only objects drew → black screen).
+        // L7 caves have no GROT file: tiled from ELEML7.MAT, sprite 29 wall at
+        // y=87 + sprite 31 ceiling at y=50 every 64 px, sprite 30 as the right
+        // cap (FUN_2759_033a).
         systems::setup_cave_collision(g.state);
         g.render.tile_sprites = g.surface_tiles;   // ELEML7 sheet
         if (g.surface_tiles.size() > 31) {
@@ -318,8 +285,6 @@ void bind_cave_screen(Loaded& g, int screen) {
 }
 
 void bind_screen(Loaded& g, int screen) {
-    // Each binder ends with the shared bind_store + current_screen write it
-    // always did; the dispatch does not repeat it.
     if (screen >= 100 && g.state.secret_flag) {   // secret room
         bind_secret_screen(g, screen);
         return;
@@ -331,13 +296,10 @@ void bind_screen(Loaded& g, int screen) {
     }
     g.render.visual_background = g.config.visual_background;
     if (g.config.internal_id == 3) {
-        // Inside-the-big-tree trunk (S10/S11): the EXE reaches these screens
-        // ONLY via the cave-exit warp (S9 right edge), which loads the L3 CAVE
-        // palette (brown wood at idx 8/9) and holds it until the S11->S12
-        // boundary — the cave palette IS the inside-the-tree palette by design.
-        // The green surface (main) palette renders the trunk teal (wrong).
-        // Finding: l3_s10_s11_cave_palette_persists.md (capstone-verified;
-        // matches the Python port, which the C port had regressed).
+        // Inside the tree (S10/S11): reachable only through the cave-exit warp,
+        // which loads the L3 cave palette (brown at idx 8/9) and keeps it until
+        // the S11->S12 boundary.  The surface palette would render the trunk
+        // teal.
         if (screen == 10 || screen == 11) {
             g.render.palette.clear();
             for (int pi = 0; pi < 16; ++pi)
@@ -353,39 +315,25 @@ void bind_screen(Loaded& g, int screen) {
     }
     g.render.tile_sprites = g.surface_tiles;
     const int level = g.config.internal_id;
-    // L3 surface screens: append GROT3.MAT sprites after the 33 surface tiles
-    // so indices 33=GROT3[0] (body) and 34=GROT3[1] (cap) are addressable.
-    // Matches the cave-screen convention (bind_screen cave path appends g.grot3
-    // the same way).  Finding: l3_grot3_trunk_column_missing.md.
+    // L3 surface: append GROT3 after the 33 surface tiles (33 = body, 34 =
+    // cap), as the cave path does.
     if (level == 3 && !g.grot3.empty()) {
         g.render.tile_sprites.insert(g.render.tile_sprites.end(),
                                      g.grot3.begin(), g.grot3.end());
     }
     const int tile_screen = resolve_tile_screen(level, screen);
 
-    // ── Collision side-effects (bind path ONLY — the pure constructor never
-    // stamps; the read-only peek path must not touch the live bitmap). ──
+    // Collision stamping: bind path only (the peek must not touch the live
+    // bitmap).
     g.state.collision.clear();
     if (level == 7 && screen >= 10 && screen <= 12) {
-        // EXE FUN_25b2_000c special-path floor for the L7 lava-cave-warp
-        // area (screens 10-12; screen-range gate at capstone 0x0047-0x00ae).
-        // Per iteration with si in {0,64,128,192,256,320} it stamps DUR
-        // idx 29 — (dx=0, dy=81, width=64), raw-byte-verified in
-        // LEVEL7.DUR — at (si, 79), laying a CONTINUOUS COLLISION floor at
-        // Y=79+81=160 across X=0..319 (the si=320 stamp is bounds-clipped
-        // to a no-op, mirroring Collision_SetPixel's x-bound check at
-        // capstone 0x00f3-0x00f7).  idx 31 has no segments in LEVEL7.DUR →
-        // those stamps are no-ops in the EXE too.
-        //
-        // The screen-9→10 warp (enter_cave marker, x=10 y=131) is the ONLY
-        // way onto screen 10 (screen 9's right edge is x-clamped), and there
-        // are no level-data tiles under x<48; without this collision floor
-        // the player drops straight through the lava to a y>180 death.  The
-        // collision bitmap is 320-wide and built identically in classic +
-        // widescreen, so this restores EXE fidelity in both modes (it is a
-        // faithfulness fix, not a widescreen change).
-        // Mirrors the Python reference.
-        for (int si : {0, 64, 128, 192, 256, 320}) {
+        // L7 screens 10-12 floor (FUN_25b2_000c, screen gate at 0x0047-0x00ae):
+        // for si in {0..320 step 64} stamp DUR idx 29 (dx=0, dy=81, w=64) at
+        // (si, 79), a continuous floor at y=160 (the si=320 stamp clips to
+        // nothing, as Collision_SetPixel's x check at 0x00f3).  idx 31 has no
+        // segments.  The S9->10 warp is the only way in, and without this floor
+        // the player falls through the lava.
+        for (const int si : {0, 64, 128, 192, 256, 320}) {
             if (29 < static_cast<int>(g.dur.tiles.size()))
                 g.state.collision.stamp_tile(g.dur.tiles[29].segments, si,
                                              79);
@@ -405,59 +353,35 @@ void bind_screen(Loaded& g, int screen) {
         }
     }
 
-    // ── Render tile list: the shared pure constructor (screen_tiles.cpp) —
-    // per-level backdrops, authored placements, L7 bridge, glider water,
-    // HUD-band column extension.  Identical for bind + peek by construction.
+    // Render tile list from the shared pure constructor (screen_tiles.cpp),
+    // identical for bind and peek.
     g.render.backdrop_tile_count = build_screen_tiles(
         screen_tile_ctx(g, g.render.tile_sprites), screen, g.render.tiles);
     bind_store(g, screen);
     g.state.current_screen = screen;
 }
 
-// Compose a SURFACE screen's background + terrain into a native 320x200
-// FrameBuffer for the widescreen adjacent-screen peek (§8.7), WITHOUT entities
-// and WITHOUT disturbing live `g`/RNG.
-//
-// Fidelity (the key point): this is strictly read-only w.r.t. the live session.
-//   * It NEVER touches core::global_rng() — the surface tile list is built
-//     deterministically from g.tiles (the static per-screen placement table),
-//     not from refresh_secret_tiles (the only RNG-driven tile path, and it is
-//     a secret-room concern excluded by widescreen_neighbors anyway).
-//   * It NEVER mutates g.state, g.store, g.bound_key, g.render.tiles, or the
-//     collision bitmap.  All neighbor work lands in caller-owned scratch
-//     (`out`, a local LevelRenderAssets, a local SystemsState).
-//   * The shared, already-loaded level assets (background, palette,
-//     tile_sprites) are COPIED out of g.render by value into the scratch
-//     LevelRenderAssets — g.render is observed, not changed.
-//
-// The tile-construction IS bind_screen's surface path — both call the shared
-// pure build_screen_tiles (screen_tiles.cpp) with the same screen_tile_ctx
-// inputs, so the margin reads identically to the center for any peek-enabled
-// level.  Peek is enabled for internal 1/3/5/7 (widescreen.cpp
-// level_supports_peek; warp-seam neighbours are suppressed there).
+// Compose a surface screen's background + terrain (no entities) for the
+// widescreen peek.  Read-only on the session: never touches the RNG (tiles
+// come from the static table), never mutates g.state / g.store / g.render /
+// the collision bitmap; all work lands in caller scratch.  Tiles come from the
+// same build_screen_tiles call as bind_screen, so a margin matches the centre.
 void build_surface_screen_assets(const Loaded& g, int screen,
                                         presentation::LevelRenderAssets& ra,
                                         systems::SystemsState& st) {
     const int level = g.config.internal_id;
-    // Peek-neighbour frames carry the same top-HUD-band backdrop treatment as
-    // the live screen, so a widescreen margin peeking this neighbour shows the
-    // backdrop (not a black strip) behind the HUD line.
+    // Same HUD-band backdrop treatment as the live screen.
     ra.extend_top_backdrop = g.render.extend_top_backdrop;
-    // Enhanced replaces the classic NOT ENOUGH FOOD sprites with the vector
-    // banner; a frame built here must not bring the sprites back.  Before
-    // this was copied, every transition frame of the food-gate screen showed
-    // them in Enhanced (owner report, 2026-09-17).
+    // Keep the enhanced banner flag, or transition frames of the food-gate
+    // screen bring the classic sprites back.
     ra.enhanced_vector_banners = g.render.enhanced_vector_banners;
 
-    // Scratch assets: copy the shared, immutable level render data.  The
-    // HUD-erased background (use_hd_text path clears rows 0-8 of
-    // g.render.background ONCE at setup) is reused as-is, so no neighbor HUD
-    // bleeds into the margin.
+    // Scratch copy of the level render data; the background is already
+    // HUD-erased.
     ra.background = g.render.background;
     ra.visual_background = g.config.visual_background;
-    // Match bind_screen: the trunk-interior screens (S10/S11) use the L3 CAVE
-    // palette (brown), the rest of L3 the surface (green) palette — so a peeked
-    // trunk neighbour is brown, not teal.  (See l3_s10_s11_cave_palette_persists.)
+    // As bind_screen: S10/S11 use the brown cave palette, the rest of L3 the
+    // green one.
     if (g.config.internal_id == 3) {
         const bool trunk = (screen == 10 || screen == 11);
         ra.palette.clear();
@@ -473,51 +397,31 @@ void build_surface_screen_assets(const Loaded& g, int screen,
         ra.palette = g.render.background.palette;
     }
     ra.tile_sprites = g.surface_tiles;
-    // Entity sprite atlas (LxSPR.MAT) is level-wide, not per-screen — needed so
-    // the static-object peek (below) actually draws (draw_entities skips any
-    // entity whose sprite index is out of the atlas; the old tiles-only peek
-    // left this empty).
+    // The level-wide entity atlas, needed for the static-object peek below.
     ra.entity_sprites = g.render.entity_sprites;
     if (level == 3 && !g.grot3.empty()) {
         ra.tile_sprites.insert(ra.tile_sprites.end(), g.grot3.begin(),
                                g.grot3.end());
     }
     ra.bg_fill_index = g.render.bg_fill_index;
-    // hud_strip intentionally left empty — the wide compositor only peeks the
-    // margins of this buffer and the caller passes hud_rows so the HUD band is
-    // excluded; the HUD-erased background already carries no baked labels.
+    // No hud_strip: the compositor excludes the HUD band (hud_rows).
 
-    // Tile list: the SAME shared pure constructor bind_screen uses, fed from
-    // the same screen_tile_ctx builder — backdrops, placements, L7 bridge,
-    // glider-water normalisation and column extension included.  Read-only on
-    // g by the constructor's purity contract; the bind path's collision
-    // stamping is a call-site side-effect there and never runs here.
+    // Tiles from the same constructor and inputs as bind_screen (collision
+    // stamping stays on the bind path).
     ra.backdrop_tile_count = build_screen_tiles(
         screen_tile_ctx(g, ra.tile_sprites), screen, ra.tiles);
 
-    // Scratch state: empty entities, no player, surface render mode.  Only the
-    // fields compose_frame reads (current_level, current_screen, the
-    // cave/secret flags = 0) matter; everything else is default-constructed.
+    // Scratch state: only the fields compose_frame reads matter.
     st.current_level = level;
     st.current_screen = screen;
-    // The food-gate cue reads the food count: the live one, or the gate screen
-    // would show NOT ENOUGH FOOD in a transition frame with a full food bar.
+    // The live food count, or a transition frame would show NOT ENOUGH FOOD.
     st.food_count = g.state.food_count;
     st.player.sprite = -1;   // suppress the player (draw_player=false too)
-    // Enhanced widescreen peek (Option A): also show the neighbour screen's
-    // STATIC-class objects — fixed-position scenery + collectibles that read
-    // correctly FROZEN (stairs, springs, food/eggs, cave entrances/signs, vines,
-    // breakable rocks, animated food).  Read straight from the already-pre-
-    // spawned per-screen store (g.store[screen], populated once at level load) —
-    // so this adds NO simulation and NO RNG draws (draw_entities is RNG-free; the
-    // entities already exist).  Dynamic monsters / fish / birds / projectiles are
-    // deliberately EXCLUDED: frozen they'd look wrong, and their real spawn on
-    // entry re-rolls position so a peeked one wouldn't match.  g.store is live-
-    // updated (bind_store moves the live list back on leave), so a collected food
-    // does NOT reappear in the peek.  Only the margin columns of this buffer are
-    // sampled by the compositor, so only objects near the shared edge show.
-    // store_key(screen) == screen for surface screens (<100); peeks are always
-    // surface neighbours, so a plain find(screen) is the right key.
+    // Enhanced peek: the neighbour's static objects (stairs, springs, food,
+    // cave entrances/signs, vines, breakable rocks), read from the pre-spawned
+    // g.store[screen]: no simulation, no RNG.  Moving things (monsters, fish,
+    // birds, projectiles) are excluded: their entry spawn re-rolls position.
+    // g.store is live, so collected food stays gone.
     auto is_static_peek_obj = [](core::ObjType t) {
         switch (t) {
             case core::ObjType::Stairs:
@@ -545,21 +449,12 @@ void build_surface_screen_assets(const Loaded& g, int screen,
                 st.entities.push_back(e);
 }
 
-// Enemies in the peek (owner request 2026-07-04): still-alive shared-machine
-// monsters at their SPAWN POSTS (init_x/init_y, heading sprite) — the position
-// they materialize at on entry, so the margin PREDICTS what you'll meet (a
-// frozen mid-walk pose would mismatch the respawn re-roll, the reason monsters
-// were excluded before).  Permanently dead ones (no respawns left) stay hidden
-// — the live-updated g.store knows.  Tier-1 living margins animate these
-// per logic tick (walk cycle IN PLACE — no translation, no RNG, no collision:
-// anchoring at the spawn post is what makes entry pop-free, since the reset
-// materializes them exactly where the margin showed them).
+// Peek monsters: live shared-machine monsters at their spawn posts
+// (init_x/init_y), where they appear on entry, so the margin predicts them
+// and entry does not pop.  Dead ones (no respawns left) stay hidden.
 std::vector<core::Entity> collect_spawn_post_monsters(const Loaded& g,
                                                              int screen) {
-    // The peeking monsters ARE the shared-state-machine monsters: this used to
-    // carry its own byte-identical copy of that ten-type truth table, which is
-    // the third copy `systems/sprite_ids.hpp` was written to prevent — its own
-    // comment names the two it collapsed and this one outlived it.
+    // The monster set is defined once in systems/sprite_ids.hpp.
     std::vector<core::Entity> out;
     auto sit = g.store.find(screen);
     if (sit == g.store.end()) return out;
@@ -580,45 +475,31 @@ std::vector<core::Entity> collect_spawn_post_monsters(const Loaded& g,
     return out;
 }
 
-// `out_ra` (optional): also hand the composed screen's resolved render assets
-// to the caller — WidescreenPresenter::update_cache derives the seam-column
-// tile lists
-// from them, so the neighbour's assets are built ONCE per bind instead of
-// twice (compose + a separate seam collection).
+// `out_ra` (optional): the composed screen's render assets, from which
+// update_cache derives the seam tile lists (built once per bind).
 void compose_surface_screen_static(const Loaded& g, int screen,
                                    presentation::FrameBuffer& out,
                                    presentation::LevelRenderAssets* out_ra,
-                                   // Optional UNDERLAY tiles (in THIS screen's
-                                   // coordinates), inserted at the backdrop/
-                                   // level split: they draw over the backdrop
-                                   // but UNDER the screen's authored level
-                                   // tiles.  Used to complete the ADJACENT
-                                   // screen's seam-straddling tiles inside
-                                   // this peek with correct z-order — S13's
-                                   // rock (4,288,141) reaches 16px into S14,
-                                   // where S14's dirt-top row (1,0,159) must
-                                   // still draw over it.
+                                   // Optional underlay tiles (this screen's
+                                   // coordinates), inserted at the
+                                   // backdrop/level split: over the backdrop,
+                                   // under the authored tiles.  Completes the
+                                   // adjacent screen's straddlers (S13's rock
+                                   // reaches into S14, under S14's dirt-top
+                                   // row).
                                    const std::vector<
                                        presentation::LevelRenderAssets::
                                            TileDraw>* underlay,
-                                   // frozen_full: overlay the screen's stored
-                                   // entity list VERBATIM (visible flags and
-                                   // positions as-is) instead of the peek
-                                   // treatment.  Used for the panorama pan's
-                                   // OUTGOING slot: after the rebind the store
-                                   // holds exactly the last live state, and
-                                   // the EXE pans the last presented frame
-                                   // with its sprites frozen in place
-                                   // (Finding transition_pan_content_frozen_
-                                   // sprites.md: WipeDown dst=[0x8bfa]+0x1f40
-                                   // — the visible page is never touched).
+                                   // frozen_full: overlay the stored entity
+                                   // list verbatim.  For the panorama's
+                                   // outgoing slot: the EXE pans the last
+                                   // presented frame with sprites frozen
+                                   // (WipeDown dst=[0x8bfa]+0x1f40: the visible
+                                   // page is never touched).
                                    bool frozen_full,
                                    // peek_monsters: bake spawn-post monsters
-                                   // into the static compose.  The STEADY
-                                   // widescreen peek passes false — its
-                                   // monsters are drawn live per frame by the
-                                   // Tier-1 animated-margin overlay instead
-                                   // (baked + live would double them).
+                                   // in.  The steady peek passes false: the
+                                   // live margin overlay draws them.
                                    bool peek_monsters) {
     presentation::LevelRenderAssets ra;
     systems::SystemsState st;
@@ -639,10 +520,8 @@ void compose_surface_screen_static(const Loaded& g, int screen,
         ra.backdrop_tile_count = at + static_cast<int>(underlay->size());
     }
     out = presentation::FrameBuffer{};   // native 320x200
-    // Render-only: advance_state=false so the static-peek entity draw runs no
-    // per-entity "advance" side effects.  (draw_entities makes no RNG calls and
-    // st is a throwaway scratch copy, so g.state / g.store / the global RNG are
-    // never perturbed — the compose_surface_screen_static contract holds.)
+    // advance_state=false; st is scratch and draw_entities is RNG-free, so the
+    // read-only contract holds.
     presentation::RenderTarget rt{out.px.data(), out.w, out.h, 1, nullptr,
                                   nullptr};
     rt.advance_state = false;
@@ -650,12 +529,9 @@ void compose_surface_screen_static(const Loaded& g, int screen,
     if (out_ra != nullptr) *out_ra = std::move(ra);
 }
 
-// Compose the WIDE (320 + 2*margin) static background for an arbitrary surface
-// screen the EXACT way the steady view does — compose_static_wide_bg_native:
-// torus sky + mirror ground + the extended bg-tile rows (forest backdrop #31,
-// dirt floor #1) re-drawn into the no-neighbour margin.  The panorama pan uses
-// the OUTER margin of this to fill an off-level edge slot, so the pan's edge is
-// pixel-identical to the static margin it hands off to (no 1-frame pop).
+// Wide static background of any surface screen, exactly as the steady view
+// composes it.  The panorama pan fills off-level slots from its outer margin,
+// so the hand-off to the steady frame does not pop.
 void compose_surface_screen_wide_native(
     const Loaded& g, int screen, int margin,
     const presentation::FrameBuffer* backdrop,
@@ -667,9 +543,8 @@ void compose_surface_screen_wide_native(
         st, ra, margin, /*left=*/nullptr, /*right=*/nullptr, backdrop, wide);
 }
 
-// The loader's three phases, each taking what it always read.  `entry_data`
-// is the archive lookup the caller already built; the art and table phases
-// answer false for a missing file, which is the loader's failure contract.
+// Loader phases.  `entry_data` looks up archive entries; art and table phases
+// return false for a missing file.
 using EntryLookup =
     std::function<const std::vector<std::uint8_t>*(const std::string&)>;
 
@@ -679,7 +554,7 @@ bool load_level_art(Loaded& g, const std::vector<std::uint8_t>& exe,
     const auto* font = entry_data("CHARSET1.MAT");
     const auto* spr = entry_data(g.config.sprite_mat);
     if (font == nullptr || spr == nullptr) return false;
-    g.charset = formats::MatFile(*font, "CHARSET1.MAT").sprites();
+    g.charset = formats::load_mat_sprites(font, "CHARSET1.MAT");
     const auto* fond = (g.config.background_pc1 != nullptr)
                            ? entry_data(g.config.background_pc1) : nullptr;
 
@@ -691,28 +566,23 @@ bool load_level_art(Loaded& g, const std::vector<std::uint8_t>& exe,
         if (mat == nullptr) continue;
         const auto* d = entry_data(mat);
         if (d == nullptr) return false;
-        const auto sprites = formats::MatFile(*d, mat).sprites();
+        const auto sprites = formats::load_mat_sprites(d, mat);
         g.surface_tiles.insert(g.surface_tiles.end(), sprites.begin(),
                                sprites.end());
     }
     if (g.config.grot_mat != nullptr) {
-        if (const auto* grot = entry_data(g.config.grot_mat)) {
-            g.cave_tiles = formats::MatFile(*grot, g.config.grot_mat)
-                               .sprites();
-        }
+        g.cave_tiles = formats::load_mat_sprites(entry_data(g.config.grot_mat),
+                                                 g.config.grot_mat);
     }
     if (internal_level == 3) {
         g.l3_caves = prepare::read_l3_cave_tables(exe);
-        if (const auto* g3 = entry_data("GROT3.MAT")) {
-            g.grot3 = formats::MatFile(*g3, "GROT3.MAT").sprites();
-        }
+        g.grot3 = formats::load_mat_sprites(entry_data("GROT3.MAT"), "GROT3.MAT");
     }
     g.render.entity_sprites =
-        formats::MatFile(*spr, g.config.sprite_mat).sprites();
+        formats::load_mat_sprites(spr, g.config.sprite_mat);
 
-    // HUD label strip: the level's own background bakes the labels for
-    // visual-background levels; FOND7.PC1 (label-bar-only) supplies them
-    // everywhere else (and for cave screens).
+    // HUD labels: baked into the background on visual-background levels;
+    // FOND7.PC1 (label bar only) supplies them elsewhere and in caves.
     if (const auto* f7 = entry_data("FOND7.PC1")) {
         const auto img = formats::parse_pc1(*f7);
         if (img.width == 320 && img.height >= 9) {
@@ -738,8 +608,8 @@ bool load_level_art(Loaded& g, const std::vector<std::uint8_t>& exe,
     return true;
 }
 
-// The EXE-side tables plus the collision map: tile table, DUR, the object /
-// cave / secret screen lists, the monster tables, and the ending picture.
+// EXE tables + collision map: tile table, DUR, object / cave / secret screen
+// lists, monster tables, ending picture.
 bool load_level_tables(Loaded& g, const std::vector<std::uint8_t>& exe,
                        const EntryLookup& entry_data, int internal_level) {
     g.tiles = prepare::read_tile_table(exe, internal_level);
@@ -757,19 +627,14 @@ bool load_level_tables(Loaded& g, const std::vector<std::uint8_t>& exe,
     return true;
 }
 
-// Per-level state reset.  Returns the screen to bind: `start_screen` clamped
-// to the level's screen count, else 0 for a real level start.
+// Per-level reset.  Returns the screen to bind: `start_screen` clamped to the
+// screen count, else 0.
 int reset_level_state(Loaded& g, int internal_level, int start_screen) {
     g.fluid_bubbles_initialized = false;
     g.hd_cache.clear();
 
-    // NO reseed here: the EXE seeds the LCG once at static init (DS:0x87ac=1)
-    // and never again — the Python oracle mirrors that (it seeds at boot
-    // only).  A bootstrap-era reseed(1) at this site forked the whole-game
-    // stream from the second surface level onward (2026-07-03 review F1).
-    // The only legitimate reseed is the save-state restore in apply_save.
-    // Populate the persistent store for every area of this level — the
-    // once-per-level reset walk.
+    // No reseed: the EXE seeds the LCG once at static init (DS:0x87ac=1); only
+    // apply_save reseeds.  Then populate the per-screen store for the level.
     for (std::size_t scr = 0; scr < g.object_screens.size(); ++scr) {
         g.store[static_cast<int>(scr)] = systems::spawn_screen_entities(
             g.object_screens[scr], g.monster_tables);
@@ -784,24 +649,16 @@ int reset_level_state(Loaded& g, int internal_level, int start_screen) {
                                            g.monster_tables);
     }
     g.state.current_level = internal_level;
-    // "GET READY !" banner counter — every surface level's init sets DS:0x97e0
-    // = 0x11 (EXE Level1_InitGlobals 21f3:0000 + L3/L5/L7 equivalents; the
-    // Python reference _setup_level state.get_ready_counter = 0x11).  Was only set by the
-    // construction default → the banner showed on the first level but never on
-    // subsequent ones; reset it per level so it shows on every level start.
+    // GET READY counter: every surface level's init sets DS:0x97e0 = 0x11
+    // (Level1_InitGlobals 21f3:0000 and the L3/L5/L7 equivalents).
     g.state.get_ready_counter = 0x11;
-    // Full level-entry player reset — includes the 40-frame spawn
-    // invulnerability (an EXE-confirmed write the spike on L1 screen 0
-    // exists to be survived by).
+    // Includes the 40-frame spawn invulnerability (EXE-confirmed; the L1
+    // screen-0 spike relies on it).
     g.state.player.reset_for_level(g.config.spawn_x, g.config.spawn_y);
-    // The original's loop pre-increments the frame counter, so the first
-    // gameplay frame updates entities with fc=1 (parity-gated monster
-    // stepping depends on this phase); the wrap then yields the same
-    // 62-value cycle in both engines.
+    // The original pre-increments the frame counter, so the first frame updates
+    // entities with fc=1 (parity-gated monster stepping).
     g.state.frame_counter = 1;
-    // --start-screen DEBUG jump: bind a non-zero surface screen at entry (clamped
-    // to the level's screen count).  Suppress the GET READY banner — it belongs
-    // to a real level start (screen 0) only.
+    // --start-screen (debug): bind that surface screen, clamped; no GET READY.
     int entry_screen = 0;
     if (start_screen > 0) {
         const int last = static_cast<int>(g.tiles.screens.size()) - 1;
@@ -839,10 +696,8 @@ bool load_level_impl(const std::filesystem::path& dir, Loaded& g,
     return true;
 }
 
-// Corrupt/truncated game files throw from the format parsers (CurError,
-// LzssError, MatError, Pc1Error…).  Catch here so the caller prints ONE
-// clean "could not load" message instead of std::terminate with no context
-// — the filename-presence preflight can't catch a bad-content file.
+// Format parsers throw on corrupt files; report one "could not load" message
+// instead of terminating.
 bool load_level(const std::filesystem::path& dir, Loaded& g,
                 int internal_level, int start_screen) {
     try {
@@ -852,6 +707,21 @@ bool load_level(const std::filesystem::path& dir, Loaded& g,
                      dir.string().c_str(), e.what());
         return false;
     }
+}
+
+void warm_level_sprites(Loaded& g, int hd_scale, const std::string& profile) {
+    const auto t0 = SDL_GetPerformanceCounter();
+    const std::size_t n =
+        warm_hd_sprite_cache(g.hd_cache, g.render.tile_sprites,
+                             g.render.palette, hd_scale, profile) +
+        warm_hd_sprite_cache(g.hd_cache, g.render.entity_sprites,
+                             g.render.palette, hd_scale, profile);
+    if (std::getenv("OLDUVAI_FRAME_STATS") == nullptr) return;
+    const double ms = 1000.0 *
+        static_cast<double>(SDL_GetPerformanceCounter() - t0) /
+        static_cast<double>(SDL_GetPerformanceFrequency());
+    std::fprintf(stderr, "hd-warm: %zu upscales in %.1f ms (cache now %zu)\n",
+                 n, ms, g.hd_cache.size());
 }
 
 }  // namespace olduvai::presentation

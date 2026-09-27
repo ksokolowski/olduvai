@@ -122,9 +122,9 @@ int main(int argc, char** argv) {
             ++phase1_frames;
             return true;
         };
-        presentation::run_l3_screen17_descent(
+        presentation::run_l3_screen17_descent({
             state, tile_sprites, entity_sprites, palette, tiles, grot3,
-            native, /*enhanced=*/true, /*extend_band=*/false, present);
+            native, /*enhanced=*/true, /*extend_band=*/false, present});
     }
     // Full-enhanced Phase 1 (substeps=3, NO trim) — built by forcing the
     // descent-pan flag OFF but smooth-motion semantics on is not exposed here,
@@ -139,9 +139,9 @@ int main(int argc, char** argv) {
         auto present = [&](const presentation::FrameBuffer&) -> bool {
             ++phase1_frames_classic; return true;
         };
-        presentation::run_l3_screen17_descent(
+        presentation::run_l3_screen17_descent({
             state, tile_sprites, entity_sprites, palette, tiles, grot3,
-            native, /*enhanced=*/false, /*extend_band=*/false, present);
+            native, /*enhanced=*/false, /*extend_band=*/false, present});
     }
 
     // ── Pan: dump every frame ────────────────────────────────────────────────
@@ -155,9 +155,9 @@ int main(int argc, char** argv) {
             ++pan_frames;
             return true;
         };
-        presentation::run_l3_descent_pan(
+        presentation::run_l3_descent_pan({
             state, tile_sprites, entity_sprites, palette, tiles, grot3,
-            native, /*enhanced=*/true, /*extend_band=*/false, present);
+            native, /*enhanced=*/true, /*extend_band=*/false, present});
     }
 
     std::printf("Phase 1 enhanced TRIMMED: %d presented frames\n",

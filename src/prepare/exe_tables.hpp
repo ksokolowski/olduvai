@@ -1,24 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// First-run table readers: level data that lives inside the game
-// executable's data segment rather than the asset archives.
-//
-// File-offset mapping for a data-segment address:
+// Readers for level data stored in the executable's data segment.
+// File offset of a data-segment address:
 //   file = 0x2000 + (0x2D99 - 0x1000) * 16 + ds_offset
-// (8192-byte MZ header; load-base paragraph 0x1000; DGROUP paragraph
-// 0x2D99 — verified against the relocation table.)
-//
-// Tile placement tables (levels 1, 3, 5, 7): per level, a counts array
-// (one u16le per screen, stored as count-1) followed by flat records of
-// {i16 x_raw, i16 y, u16 sprite_1based}.  x_raw's low nibble is the
-// collision layer; the pixel x is the high bits re-aligned to 16.  The
-// sprite index converts to 0-based.  19 playable screens (a 20th counts
-// slot, where present, is overread garbage).
-//
-// Object spawn tables (levels 1/3/5/7 + global secret/cave): variable-
-// stride records, first word = object type; type 0x0000 separates
-// screens, 0x00FF terminates the table.  Strides confirmed from the
-// reset/change-screen jump-table groupings.
+// (8192-byte MZ header, load base paragraph 0x1000, DGROUP 0x2D99; checked
+// against the relocation table.)
+// Tile placement tables (levels 1/3/5/7): a counts array (u16le per screen,
+// stored count-1), then records {i16 x_raw, i16 y, u16 sprite_1based}.  x_raw's
+// low nibble is the collision layer; the pixel x is the high bits aligned to
+// 16.  19 playable screens (a 20th count slot is overread garbage).
+// Object spawn tables (1/3/5/7 + global secret/cave): variable-stride records
+// led by the type word; 0x0000 separates screens, 0x00FF ends the table.
+// Strides from the reset/change-screen jump tables.
 
 #pragma once
 
@@ -35,16 +28,13 @@ public:
     using std::runtime_error::runtime_error;
 };
 
-// ── executable build variants ───────────────────────────────────────────
-// All table addresses in this module are data-segment offsets of the
-// canonical (floppy) build.  Re-linked distributions of the same program
-// exist: the CD-era build (shipped SQZ-packed by GOG and the 1995 Titus
-// compilation) has a 481-paragraph MZ header instead of 512 and 30 extra
-// bytes early in DGROUP, shifting every data offset by +30.  Known builds
-// are recognised by the FNV-1a/64 digest of the (decompressed) image and
-// mapped to a layout; unknown builds get the canonical layout, preserving
-// the old behaviour.  Every reader below detects the layout itself, so
-// callers pass exe bytes exactly as before.
+// ---- executable build variants ----
+// Offsets here are for the canonical (floppy) build.  The CD-era build (GOG's
+// SQZ-packed copy, the 1995 compilation) has a 481-paragraph header instead of
+// 512 and 30 extra bytes early in DGROUP (+30 on every data offset).  Known
+// builds are recognised by the FNV-1a/64 digest of the decompressed image;
+// unknown builds get the canonical layout.  Every reader detects the layout
+// itself.
 struct ExeLayout {
     std::size_t header_size = 0x2000;  // MZ header bytes (e_cparhdr x 16)
     std::int32_t ds_delta = 0;         // shift applied to canonical offsets
@@ -131,11 +121,10 @@ struct MonsterTableRef {
 // The ten shared-state-machine monster types and their table locations.
 const std::vector<MonsterTableRef>& monster_table_refs();
 
-// The dark-woods cave layouts: two blocks of 32 records x 3 i16 words at
-// the cave-table address (odd caves use block 0, even caves block +192).
-// Records carry the nibble-packed layer in x; the sprite passes through
-// the same alias chain as the surface tile renderer (operating on the
-// raw 1-based index: 30->31, 29->30, 20->32, 5->29).
+// Dark Woods cave layouts: two blocks of 32 records x 3 i16 at the cave-table
+// address (odd caves block 0, even caves +192).  x carries the layer nibble;
+// the sprite goes through the surface alias chain on the raw 1-based index
+// (30->31, 29->30, 20->32, 5->29).
 struct CaveTileRecord {
     int x = 0;        // 16-aligned
     int y = 0;
@@ -150,22 +139,20 @@ struct L3CaveLayouts {
 
 L3CaveLayouts read_l3_cave_tables(const std::vector<std::uint8_t>& exe);
 
-// ── cave-width table ────────────────────────────────────────────────────
-// 53 interior widths, one per cave index, composed from the three u16le
-// runs in the data segment: L1 caves 0-21 (22 entries @ DS:0x7CE8), L5
-// caves 26-38 (13 @ DS:0x7D14), L7 caves 39-52 (14 @ DS:0x7D2E).  The L3
-// range 22-25 has no width run — the L3 cave exit edge is hardcoded, so
-// those slots get an inert filler the runtime never reads.
+// ---- cave-width table ----
+// 53 interior widths, one per cave index, from three u16le runs: L1 caves 0-21
+// (22 @ DS:0x7CE8), L5 26-38 (13 @ DS:0x7D14), L7 39-52 (14 @ DS:0x7D2E).  L3's
+// 22-25 have no run (its exit edge is hardcoded) and get an unread filler.
 std::array<int, 53> read_cave_size_table(const std::vector<std::uint8_t>& exe);
 
 // ── secret-food score table (10 u16le @ DS:0x8094, by sprite number) ────
 std::array<int, 10> read_secret_score_table(
     const std::vector<std::uint8_t>& exe);
 
-// ── AdLib SFX voice records ─────────────────────────────────────────────
-// One record per SFX: 28 u16le — modulator patch [13], carrier patch [13],
-// modulator waveform, carrier waveform — at DS:0x80CC (generic), 0x810A
-// (jump apex), 0x8148 (hit).  // FUN_1fe0_018b voice-install walk
+// ---- AdLib SFX voice records ----
+// Per SFX, 28 u16le: modulator patch [13], carrier patch [13], modulator and
+// carrier waveform, at DS:0x80CC (generic), 0x810A (jump apex), 0x8148 (hit).
+// // FUN_1fe0_018b voice-install walk
 struct AdlibSfxVoice {
     std::array<int, 13> mod{};
     std::array<int, 13> car{};

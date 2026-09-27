@@ -49,7 +49,7 @@ void update_fireball(SystemsState& state) {
         state.fireball_flag = 0;
         return;
     }
-    PlayerState& p = state.player;
+    const PlayerState& p = state.player;
     if (p.death_counter == 0 && p.hit_counter == 0) {
         if (std::abs(state.fireball_x - p.x) < 20 &&
             std::abs(state.fireball_y - p.y) < 16) {
@@ -60,9 +60,8 @@ void update_fireball(SystemsState& state) {
 }
 
 void apply_sign_teleport(SystemsState& state, int screen, int x, int y) {
-    // EXE seg:0da6: 0x9872=1, 0x9c68=screen, 0x97fe=x, 0x9864=y,
-    // 0x9874=0x27 (hit_counter=39); transition code copies into
-    // player_x/restart_x + player_y/restart_y.
+    // EXE seg:0da6: 0x9872=1, 0x9c68=screen, 0x97fe=x, 0x9864=y, 0x9874=0x27
+    // (hit_counter 39); the transition code copies x/y into player and restart.
     PlayerState& p = state.player;
     state.cave_flag = 0;
     state.cave_index = -1;
@@ -96,10 +95,8 @@ bool try_complete_sign_teleport(SystemsState& state) {
 
 namespace {
 
-// The three deepest blocks of process_entity_collisions' result walk, moved
-// out whole.  Each takes the same two subjects the block always read — the
-// state and the collision result — and keeps its own evidence comments; the
-// dispatch below reads as the sequence it always described in prose.
+// The result walk's three deepest blocks, each over the state and the
+// collision result.
 
 void apply_spring_launch(SystemsState& state,
                          const core::CollisionResult& result) {
@@ -129,10 +126,9 @@ void apply_cave_entrance(SystemsState& state,
     if (result.cave_enter >= 0 && state.cave_flag == 0 && state.input.down) {
         if (state.cave_entrance_mask == 0 && p.cave_warp_freeze == 0) {
             state.cave_entrance_mask = (result.cave_enter << 2) | 1;
-            // EXE 2A04:0d09-0d0d (TYPE 0x12 handler): player_x = entrance_x
-            // before the descent arms — the +-8 px snap aligns the sprite
-            // with the hole art.  Faithful; owner-questioned + byte-verified
-            // 2026-07-05.
+            // 2A04:0d09-0d0d (TYPE 0x12 handler): player_x = entrance_x before
+            // the descent arms (the +-8 px snap lines the sprite up with the
+            // hole art).
             for (const Entity& e : state.entities) {  // snap to entrance x
                 if (e.obj_type == ObjType::CaveEntrance &&
                     e.counter == result.cave_enter) {
@@ -140,14 +136,12 @@ void apply_cave_entrance(SystemsState& state,
                     break;
                 }
             }
-            // EXE: the ARM frame already shows the first descent sprite —
-            // Objects_Update (2A04, L1 main 21f3:0313) arms the mask and
-            // FUN_27f7_1b51 (21f3:043a) draws (mask&3)+0x2c at player_x+4
-            // within the SAME frame, then increments (27f7:1b9c) and skips
-            // walk/gravity.  The port's descent tick runs before run_frame,
-            // so mirror the same-frame draw + increment here; without it the
-            // arm tick presented one extra snapped-standing frame the EXE
-            // never shows.  Finding cave_enter_exit_presentation_model.md.
+            // The arm frame already shows the first descent sprite:
+            // Objects_Update (2A04; L1 main 21f3:0313) arms the mask and
+            // FUN_27f7_1b51 (21f3:043a) draws (mask&3)+0x2c at player_x+4 in
+            // the same frame, then increments (27f7:1b9c) and skips
+            // walk/gravity.  Our descent tick runs before run_frame, so do the
+            // same here.
             p.sprite = kSprCaveDescent1;
             p.dx = 4;                       // FUN_27f7_1b51 0x1b7f
             ++state.cave_entrance_mask;     // FUN_27f7_1b51 0x1b9c
@@ -158,17 +152,13 @@ void apply_cave_entrance(SystemsState& state,
 
 void apply_cave_sign_teleport(SystemsState& state,
                               const core::CollisionResult& result) {
-    PlayerState& p = state.player;
+    const PlayerState& p = state.player;
     // Cave sign teleport out of the cave to a surface destination.
     if (result.cave_sign_screen >= 0 && state.cave_flag) {
-        // Enhanced #20 — teleport cloud sequence: in enhanced mode the
-        // teleport is DEFERRED 3 ticks so the departure clouds (87→86→85,
-        // big→small, player hidden) play at the sign-cross spot; the
-        // countdown completion in game_app applies the teleport and arms
-        // the arrival sequence (empty→85→86→85 → player in the EXE's own
-        // 0x27-tick halo shield).  Classic teleports immediately, exactly
-        // as the EXE.  The pending gate swallows the per-frame sign
-        // re-triggers while the clouds play.
+        // Enhanced teleport clouds: defer the teleport while the departure
+        // clouds play at the sign; the countdown in game_app applies it and
+        // arms the arrival. Classic teleports at once, as the EXE.  The pending
+        // gate swallows the sign's per-frame re-triggers.
         if (state.enhanced_active) {
             if (!state.pending_sign_teleport &&
                 state.teleport_out_ticks == 0) {
@@ -187,19 +177,16 @@ void apply_cave_sign_teleport(SystemsState& state,
     }
 }
 
-}  // namespace
-
-void process_entity_collisions(SystemsState& state) {
-    PlayerState& p = state.player;
-    if (p.death_counter > 0) return;
-
+// The player's view of this frame for check_player_collisions.
+CollisionContext collision_context(const SystemsState& state) {
+    const PlayerState& p = state.player;
+    const auto& caves = core::game_tables().cave_sizes;
     int cave_exit_x = -1;
     if (state.cave_flag && state.cave_index >= 0 &&
-        state.cave_index < static_cast<int>(core::game_tables().cave_sizes.size())) {
-        cave_exit_x = core::game_tables().cave_sizes[static_cast<std::size_t>(
-                          state.cave_index)] - kCaveExitOffset;
+        state.cave_index < static_cast<int>(caves.size())) {
+        cave_exit_x = caves[static_cast<std::size_t>(state.cave_index)] -
+                      kCaveExitOffset;
     }
-
     CollisionContext ctx;
     ctx.player_x = p.x;
     ctx.player_y = p.y;
@@ -213,13 +200,12 @@ void process_entity_collisions(SystemsState& state) {
     ctx.axe_flag = state.halo_flight_flag;   // axe-powered (DS:0x97f8)
     ctx.level = state.current_level;
     ctx.gravity_flag = p.gravity_flag;
+    return ctx;
+}
 
-    auto result = check_player_collisions(state.entities, ctx);
-
-    if (result.damage) hit_player(state, result.damage);
-    if (result.monster_hit) state.sfx_hit_pending = true;
-
-    // Rising-bonus completion (the icon finished its arc above the player).
+// A bonus touched this frame, else the first rising icon that finished its
+// arc above the player (consumed); the bonus's effect and its sound.
+void apply_bonus(SystemsState& state, core::CollisionResult& result) {
     if (result.bonus_type < 0) {
         for (Entity& e : state.entities) {
             if (e.bonus_pending) {
@@ -235,7 +221,9 @@ void process_entity_collisions(SystemsState& state) {
         dispatch_bonus_activate(state, result.bonus_type);
         state.sfx_generic_pending = true;
     }
+}
 
+void apply_pickups(SystemsState& state, const core::CollisionResult& result) {
     if (result.food_collected > 0) {
         state.food_count += result.food_collected;
         state.sfx_generic_pending = true;
@@ -244,12 +232,12 @@ void process_entity_collisions(SystemsState& state) {
     for (const auto& ev : result.score_events) {
         add_score_popup(state, ev.x, ev.y, ev.value);
     }
+}
 
-    apply_spring_launch(state, result);
-
-    // Climbing enter / clamp / exits.  y_vel is deliberately NOT touched
-    // anywhere here (the stairs handler never writes it — preserving the
-    // spring power-up's boosted velocity across ladder grabs).
+// Climbing enter / clamp / exit.  y_vel is never touched here (the stairs
+// handler never writes it), so a spring's boosted velocity survives a ladder
+// grab.
+void apply_climb(PlayerState& p, const core::CollisionResult& result) {
     if (result.can_climb && !p.climbing) {
         p.climbing = 1;
         p.walk_frame = 0;
@@ -269,17 +257,33 @@ void process_entity_collisions(SystemsState& state) {
         p.y = result.climb_exit_y;
     }
     if (result.climb_exit_bottom && p.climbing) p.climbing = 0;
+}
 
-    apply_cave_entrance(state, result);
-
-    apply_cave_sign_teleport(state, result);
-
-    // Platform riding: snap on top.
+// Platform riding: snap on top.
+void apply_platform(PlayerState& p, const core::CollisionResult& result) {
     p.platform_flag = 0;
     if (result.platform_y >= 0 && p.gravity_flag == 0) {
         p.platform_flag = 1;
         p.y = result.platform_y - 29;
     }
+}
+
+}  // namespace
+
+void process_entity_collisions(SystemsState& state) {
+    if (state.player.death_counter > 0) return;
+
+    auto result = check_player_collisions(state.entities,
+                                          collision_context(state));
+    if (result.damage) hit_player(state, result.damage);
+    if (result.monster_hit) state.sfx_hit_pending = true;
+    apply_bonus(state, result);
+    apply_pickups(state, result);
+    apply_spring_launch(state, result);
+    apply_climb(state.player, result);
+    apply_cave_entrance(state, result);
+    apply_cave_sign_teleport(state, result);
+    apply_platform(state.player, result);
 }
 
 }  // namespace olduvai::systems

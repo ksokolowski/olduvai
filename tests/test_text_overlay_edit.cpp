@@ -101,3 +101,34 @@ TEST_CASE("empty and blank logical lines each keep one visual row") {
     CHECK(rows[1].text == "x");
     CHECK(rows[2].text.empty());
 }
+
+TEST_CASE("cursor keys edit in place; the keypad enter is enter") {
+    EditOverlayState st;
+    edit_handle_event(st, text("abc"));
+    edit_handle_event(st, key(SDLK_LEFT));
+    edit_handle_event(st, key(SDLK_BACKSPACE));
+    CHECK(st.editor.text() == "ac");
+    edit_handle_event(st, key(SDLK_HOME));
+    edit_handle_event(st, key(SDLK_DELETE));
+    CHECK(st.editor.text() == "c");
+    edit_handle_event(st, key(SDLK_END));
+    edit_handle_event(st, text("d"));
+    CHECK(st.editor.text() == "cd");
+    CHECK(edit_handle_event(st, key(SDLK_KP_ENTER)) == EditResult::kNone);
+    CHECK(st.editor.text() == "cd\n");
+    edit_handle_event(st, key(SDLK_UP));
+    edit_handle_event(st, text("x"));
+    CHECK(st.editor.text() == "xcd\n");
+}
+
+TEST_CASE("buttons ignore editing keys; other events do nothing") {
+    EditOverlayState st;
+    edit_handle_event(st, text("a"));
+    edit_handle_event(st, key(SDLK_TAB));       // -> Save
+    CHECK(edit_handle_event(st, key(SDLK_BACKSPACE)) == EditResult::kNone);
+    CHECK(st.editor.text() == "a");
+    SDL_Event motion{};
+    motion.type = SDL_MOUSEMOTION;
+    CHECK(edit_handle_event(st, motion) == EditResult::kNone);
+    CHECK(st.focus == EditFocus::kSave);
+}

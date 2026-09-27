@@ -16,33 +16,32 @@ desktop builds, and are covered by the same `SHA256SUMS.txt`.
 Other devices and firmwares are not supported yet. The binary may well run on
 other KNULLI devices with the same CPU architecture, but nobody has checked,
 and the screen, video driver and audio setup differ from device to device.
-**Support through [PortMaster](https://portmaster.games/)** — which reaches
-many more devices and firmwares — **is the next goal.**
+**A [PortMaster](https://portmaster.games/) port is coming**; it reaches
+many more devices and firmwares.  It needs more time than planned: 0.9.10 or
+0.9.11, time will tell.
 
 ## Enhanced HD, in your hands
 
 The enhanced mode is not a desktop luxury that falls away on a handheld. On the
 TrimUI Smart Pro the full **Enhanced HD** experience runs at close to the
-original game's full speed — the boss fights at full speed, the levels within a
+original game's full speed: the boss fights at full speed, the levels within a
 few percent of it:
 
-- **smooth motion** — the 18 Hz game logic is interpolated into extra frames,
+- **smooth motion**: the 18 Hz game logic is interpolated into extra frames,
   so the caveman glides instead of stepping;
-- **widescreen** — the 16:9 panel is filled with the level itself, the
+- **widescreen**: the 16:9 panel is filled with the level itself, the
   neighbouring screens drawn live into the side margins, not black bars;
-- **HD graphics** — sprites and backgrounds upscaled for the panel, with a
+- **HD graphics**: sprites and backgrounds upscaled for the panel, with a
   crisp vector HUD and menus;
 - the enhanced transitions and animation touches of the desktop build.
 
 **Classic DOS** is one menu choice away and is exactly the 1991 game.
 
-The handheld profile is tuned for this class of device — a quad-core 64-bit
-ARM chip and a 720p screen, a common class among current handhelds — and
+The handheld profile is tuned for this class of device (a quad-core 64-bit
+ARM chip and a 720p screen, common among current handhelds), and
 that is where Enhanced HD is meant to be the natural way to play. On older,
 slower hardware such as the Powkiddy A12, Classic runs at full speed and
-Enhanced is smooth but a little slower than the original. Bringing the same
-experience to many more handhelds is what the planned PortMaster support is
-for.
+Enhanced is smooth but a little slower than the original.
 
 ## What you need
 
@@ -56,23 +55,23 @@ for.
 1. Unzip the download. You get `Olduvai.sh`, an `olduvai` folder and an
    `images` folder.
 2. Copy `Olduvai.sh` and the `olduvai` folder into **`/userdata/roms/ports/`** on
-   the SD card — the large "share" partition. KNULLI formats it as exFAT, so a
+   the SD card, the large "share" partition. KNULLI formats it as exFAT, so a
    Windows or macOS computer can write to it directly with the card in a reader;
    KNULLI's network share works too.
 3. Copy your game files into **`olduvai/game/`**:
    `FILESA.CUR`, `FILESB.CUR`, `FILESA.VGA`, `FILESB.VGA`, and either
    `HISTORIK.EXE` or `PREH.SQZ`. The GOG release has `PREH.SQZ` instead of
-   `HISTORIK.EXE` — that is correct, and Olduvai reads it directly.
+   `HISTORIK.EXE`. That is correct, and Olduvai reads it directly.
 4. On the device, refresh the game list (or restart EmulationStation) and start
    **Olduvai** from the **Ports** menu.
 
-If a file is missing or misnamed, the game says so on screen — which files, and
-the exact folder it looked in — and returns to the menu at the press of a
+If a file is missing or misnamed, the game says so on screen (which files, and
+the exact folder it looked in) and returns to the menu at the press of a
 button.
 
 `olduvai/README.txt` inside the download says the same, for reading on the card.
 
-**Optional — a name and icon in the Ports menu.** `olduvai/gamelist-entry.xml`
+**Optional: a name and icon in the Ports menu.** `olduvai/gamelist-entry.xml`
 holds the menu entry: a description of the game and its two modes, and the
 Olduvai icon. Paste its `<game>` block into
 `/userdata/roms/ports/gamelist.xml` (with EmulationStation stopped) and copy
@@ -83,20 +82,29 @@ or icon.
 
 ## Playing
 
-- **Controls:** d-pad or left stick to move, **A** jump, **X** attack,
-  **Start** pause menu, **B** back. The pad works without any setup — KNULLI
-  hands its own mapping to the game.
+- **Controls:** d-pad or left stick to move, **A** jump (and confirm in
+  menus), **B** attack, **Start** pause menu, **Select** back. The pad works
+  without any setup: KNULLI hands its own mapping to the game, and the
+  handheld launchers use the *Nintendo* button layout, which matches the labels
+  printed on both devices.
+- **Remapping:** *Options → Controls* in the pause menu. *Button layout*
+  switches between Nintendo and Xbox (for a pad that prints A at the bottom);
+  the rows below move one action at a time. Each row names the button as
+  your device prints it, with where it sits (*A - right*). Picking a button
+  another action uses swaps the two, so every action
+  keeps a button of its own; the change takes effect when you leave Options
+  and choose Apply, and is saved for the next launch.
 - **Style:** the TrimUI Smart Pro starts in **Enhanced HD** (smooth motion,
   widescreen); the Powkiddy A12 starts in **Classic DOS**, which runs there at
   the original game's full speed. Switch under *Options → Style* in the pause
   menu; your choice is remembered at the next launch. Enhanced on the A12 is
   smooth but a little slower than the original.
-- **Quit** with *Quit → Exit Game → Yes* in the pause menu — it returns to KNULLI.
+- **Quit** with *Quit → Exit Game → Yes* in the pause menu; it returns to KNULLI.
 
 ## Music
 
-By default you hear the **Sound Blaster** sound of 1991 — FM music (the AdLib
-chip) with digital sound effects — which needs nothing extra.
+By default you hear the **Sound Blaster** sound of 1991, FM music (the AdLib
+chip) with digital sound effects, which needs nothing extra.
 
 - **Roland MT-32 / CM-32L:** if you own the ROM images, copy them into
   `olduvai/mt32-roms/` (`CM32L_CONTROL.ROM` + `CM32L_PCM.ROM`, and/or
@@ -115,10 +123,10 @@ options are in [AUDIO.md](AUDIO.md).
 
 Read the log: **`/userdata/system/logs/olduvai.log`** (rewritten at every
 launch). Its first line names the exact build, for example
-`olduvai 0.9.7 (61a624e, 2026-09-13 15:08)` — include it in any bug report.
+`olduvai 0.9.7 (61a624e, 2026-09-13 15:08)`. Include it in any bug report.
 
 - **Nothing on screen:** the log names SDL and the video driver. Check that the
-  download matches your device — the two launchers differ exactly there.
+  download matches your device; the two launchers differ exactly there.
 - **The game does not start:** the log names the folder it searched and the
   files it expected. Check the names in `olduvai/game/`.
 

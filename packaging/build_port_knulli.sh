@@ -202,10 +202,12 @@ cat <<'LAUNCH'
 # Do NOT set SDL_GAMECONTROLLERCONFIG.  KNULLI's launcher already injected it
 # from the player's pad configuration, and overriding it loses that mapping.
 
-# Frame-stats prints per-level frame budget accounting to the log on exit. It
-# costs a counter per frame and is how a report tells "the port is slow" from
-# "the upscaler is slow".
-export OLDUVAI_FRAME_STATS=1
+# No debug hooks in a shipped launcher (owner, 2026-09-23): debug is switched
+# on deliberately, per session, through olduvai.env below.  Frame stats in
+# particular -- per-level frame budget accounting in the log on exit, how a
+# report tells "the port is slow" from "the upscaler is slow" -- is one line:
+#     echo 'export OLDUVAI_FRAME_STATS=1' >> olduvai/olduvai.env
+# (0.9.7 and 0.9.8 exported it here unconditionally.)
 
 # Optional local overrides (debug env vars) — absent in a release bundle.
 [ -f ./olduvai.env ] && . ./olduvai.env

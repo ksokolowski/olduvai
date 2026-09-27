@@ -5,7 +5,9 @@
 // the two engines prefill the same guidance.
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <iterator>
 #include <string>
 
 namespace olduvai::presentation {
@@ -41,9 +43,10 @@ inline const std::string& report_template(const std::string& tag) {
 // types, the field is theirs and tag changes leave it alone.
 inline bool is_report_template(const std::string& desc) {
     if (desc.empty()) return true;
-    for (const auto& t : kReportTags)
-        if (desc == report_template(t)) return true;
-    return false;
+    return std::any_of(std::begin(kReportTags), std::end(kReportTags),
+                       [&desc](const auto& t) {
+                           return desc == report_template(t);
+                       });
 }
 
 }  // namespace olduvai::presentation

@@ -1,38 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// LevelSurface — what a level draws ON: the renderer and window it borrows,
-// the streaming texture, the vector font, the text overlay, the logical size,
-// and the HD settings that decide how all of those behave.
-//
-// BACKLOG §3.7 cluster 1.  Both drivers declared these nine things separately
-// and both set them up the same way, including a twelve-line font load with
-// four branches that differed only in which options struct held `hd_font`.
-// This is not a new abstraction — `TextScreenDeps` below was already exactly
-// this list, discovered while unifying the tally presenter in §3.14a and
-// serving four call sites across both drivers before anyone named it.  The
-// class is that struct grown up enough to own the lifetimes too.
-//
-// It owns the texture (and destroys it), the font, the overlay and the logical
-// size.  It BORROWS the renderer and window, which belong to the SdlWindow that
-// outlives every level.
+// What a level draws on: the renderer and window (borrowed from the SdlWindow
+// that outlives every level), and the owned streaming texture, vector font,
+// text overlay and logical size, plus the HD settings.  Shared by both
+// drivers.
 #pragma once
 
+#include <cstdint>
+#include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <SDL.h>
 
+#include "enhance/enhanced_hud.hpp"
 #include "enhance/hd_asset_cache.hpp"
 #include "enhance/hd_text.hpp"
 #include "presentation/render/game_render.hpp"
 #include "presentation/render/logical_size.hpp"
 #include "presentation/render/text_overlay.hpp"
-#include "presentation/window_util.hpp"   // LogicalDims, create_stream_tex
+#include "presentation/window_util.hpp"   // LogicalDims, show_texture
 
 namespace olduvai::presentation {
 
-// What a full-screen text presenter borrows from its driver.  Kept as a plain
-// struct because that is how the presenter takes it; LevelSurface::text_screen
-// builds one.  See sequence/text_screen_present.hpp for the presenter itself.
+// What a full-screen text presenter borrows from its driver
+// (sequence/text_screen_present.hpp); LevelSurface::text_screen builds one.
 struct TextScreenDeps {
     SDL_Renderer* ren;
     SDL_Window* win;
@@ -47,12 +40,10 @@ struct TextScreenDeps {
 
 class LevelSurface {
 public:
-    // `hd` and `hd_scale` are the caller's, because both drivers compute them
-    // before load_level so bind-time decisions can key on the full vector-HUD
-    // gate.  `initial` is the starting logical size: the platform driver opens
-    // at 0x0 and lets the widescreen presenter set it, the boss driver opens at
-    // its aspect_logical fallback so the 320-wide loading card is not stretched
-    // across a wide canvas.
+    // `hd` / `hd_scale` come from the caller (computed before load_level).
+    // `initial` logical size: the platform driver starts at 0x0 and lets the
+    // widescreen presenter set it; the boss driver starts at its aspect_logical
+    // fallback so the loading card is not stretched.
     LevelSurface(SDL_Window* win, SDL_Renderer* ren, bool hd, int hd_scale,
                  const std::string& hd_font, const std::string& hd_profile,
                  LogicalDims initial);
@@ -63,18 +54,51 @@ public:
     SDL_Renderer* ren() const { return ren_; }
     SDL_Window* win() const { return win_; }
     SDL_Texture* tex() const { return tex_; }
+    // The wide canvas's texture, native_w x 200 at the HD scale: made on
+    // first use, remade when the width changes.  The level's widescreen
+    // presenter and the boss arena size it by their own margin rules.
+    SDL_Texture* wide_tex(int native_w);
     enhance::HdText& hd_text() { return hd_text_; }
     TextOverlay& overlay() { return overlay_; }
     LogicalSize& lsz() { return lsz_; }
 
     bool hd() const { return hd_; }
     int hd_scale() const { return hd_scale_; }
-    // hd && the font actually loaded.  A missing font file is a degradation to
-    // the bitmap path, not a failure, so every vector-text site gates on this.
+    // HD and the font loaded; a missing font falls back to the bitmap path.
     bool use_hd_text() const { return hd_ && hd_text_.ok(); }
-    // Live: Options can change the profile mid-level, so this is the ADDRESS
-    // the driver keeps writing, not a copy.
+    // The vector HUD's layout for `state`; none without the vector HUD.
+    std::optional<enhance::EnhancedHudLayout> hud_layout(
+        const systems::SystemsState& state) {
+        if (!use_hd_text()) return std::nullopt;
+        return enhance::compute_enhanced_hud_layout(hd_text_, state);
+    }
+    // Live: the address the driver keeps writing (Options change it mid-level).
     const std::string* hd_profile() const { return hd_profile_; }
+
+    // ---- the present every path shares: upload, show, overlay ----
+    // Pixels for a native_w x 200 canvas: kNative at 1x (upscaled here by
+    // the live profile), or kHd at the surface's scale already.
+    enum class Res { kNative, kHd };
+    // Into the texture for that width (320: tex(); wider: wide_tex()).
+    SDL_Texture* upload(const std::vector<std::uint8_t>& px, int native_w,
+                        Res res);
+    // The output cleared to black and `tex` over the whole canvas.
+    void show(SDL_Texture* tex) { show_texture(ren_, tex); }
+    // The 320 texture as the centre of a wide canvas, black either side:
+    // `margin` native px each side.
+    void show_pillarboxed(int margin) {
+        const SDL_Rect dst{margin * hd_scale_, 0, 320 * hd_scale_,
+                           200 * hd_scale_};
+        show_texture(ren_, tex_, &dst);
+    }
+    // One pass of the output-resolution overlay (TextOverlay::pass), flushed
+    // at the logical size.
+    template <class Draw>
+    void overlay_pass(Draw&& draw,
+                      std::uint64_t key = TextOverlay::kAlwaysRedraw) {
+        overlay_.pass(ren_, hd_text_, lsz_.w(), lsz_.h(),
+                      std::forward<Draw>(draw), key);
+    }
 
     TextScreenDeps text_screen(Uint32 frame_ms) {
         return TextScreenDeps{ren_,      win_,        tex_,
@@ -92,24 +116,13 @@ private:
     TextOverlay overlay_;
     LogicalSize lsz_;
     SDL_Texture* tex_ = nullptr;
+    SDL_Texture* wide_tex_ = nullptr;
+    int wide_w_ = 0;
 };
 
-// Build a RenderTarget over `b`, choosing the HD per-asset path or the native
-// scale-1 path by the buffer's ACTUAL width.
-//
-// Both drivers had this as a prologue lambda — `make_rt` in game_app,
-// `make_target` in boss_app — with DIFFERENT predicates: `hd && b.w == 320 *
-// hd_scale` against a bare `hd`.  The careful one wins, and it is provably
-// equivalent at every boss call site rather than merely gate-verified: boss
-// passes exactly one buffer, its arena `fb`, sized `hd ? 320 * hd_scale : 320`.
-// In HD both predicates are true; in classic `hd` is false and both are false.
-// (Same species of argument as the `hd` / `hd_scale > 1` equivalence the
-// 2026-07-24 dedup audit established for upload_native_frame.)
-//
-// Why the width test is the careful one: a NATIVE 320-wide buffer in HD mode —
-// the loading/tally scratch buffers — must take scale 1 and no cache so blits
-// land at native coordinates, because it is upscaled whole-frame later.  Only a
-// genuinely HD-sized buffer drives the per-asset cache path.
+// RenderTarget over `b`: the HD per-asset path only for a buffer that is
+// actually HD-sized (320 * hd_scale wide).  A native 320-wide scratch buffer in
+// HD (loading/tally) takes scale 1 and no cache: it is upscaled whole later.
 inline RenderTarget make_render_target(FrameBuffer& b, const LevelSurface& s,
                                        enhance::HdAssetCache& cache) {
     if (s.hd() && b.w == 320 * s.hd_scale()) {

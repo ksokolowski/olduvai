@@ -1,23 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Full-state save: the complete game logic state, restored exactly (not
-// reconstructed from an anchor — that was the broken checkpoint approach).
-//
-// Design (spec 2026-06-19-save-state-design.md, revised):
-//  * SaveHeader — POD: PlayerState (trivially-copyable, memcpy'd whole) + every
-//    gameplay scalar.  A new PlayerState field is auto-included; a SaveHeader
-//    field is guarded by static_assert(is_trivially_copyable) + the round-trip
-//    test.  Binary, magic + version tagged.
-//  * Entities — NOT serialized whole (Entity carries derived spawn-time data:
-//    walk_offsets, sprite indices, probe offsets).  Instead we snapshot only
-//    the MUTABLE runtime fields; on restore the screen is re-bound (entities
-//    re-spawn with correct derived data) and the snapshot is overlaid by index
-//    (spawn order is deterministic; entities are deactivated, never erased).
-//  * Multi-screen: the current live list + every visited screen's list (g.store)
-//    are captured, so revisited screens keep their state.
-//
-// `capture`/`apply` over the full Loaded (g.store, bind) live in game_app.cpp;
-// this header owns the schema, (de)serialization, and per-entity snap/overlay.
+// Full-state save: the complete logic state, restored exactly.
+//   * SaveHeader: POD, PlayerState (memcpy'd whole) + every gameplay scalar;
+//     static_assert(is_trivially_copyable) + a round-trip test guard it.
+//     Binary, magic + version.
+//   * Entities: only the mutable runtime fields are saved; on restore the
+//     screen is re-bound (derived spawn data recomputed) and the snapshot
+//     overlaid by index (spawn order is deterministic; entities are never
+//     erased).
+//   * Every visited screen's list (g.store) is saved too.
+// capture/apply over `Loaded` live in level_save; this header owns the schema,
+// (de)serialisation and the per-entity snapshot.
 
 #pragma once
 
@@ -34,12 +27,9 @@ namespace olduvai::presentation {
 
 struct SaveHeader {
     char magic[4] = {'O', 'L', 'S', 'V'};
-    // 3 = the sole save format: full-state + a trailing layout tag
-    // (sizeof(SaveHeader)) so a save written before/after any PlayerState/
-    // SaveHeader field change is rejected instead of silently loading shifted
-    // garbage (memcpy'd POD layout).  The pre-release v2 (untagged) read branch
-    // and the dead v1 checkpoint format were removed for the first public
-    // release — deserialize accepts version 3 only.
+    // Version 3, the only format: full state + a trailing layout tag
+    // (sizeof(SaveHeader)), so a save from a different layout is rejected
+    // instead of loading shifted data.
     std::int32_t version = 3;
     std::int32_t level = 1;            // DISPLAY level (run_game jumps here)
     std::uint32_t rng = 0;             // Rand_LCG16 32-bit state

@@ -16,20 +16,14 @@
 namespace olduvai::enhance {
 
 namespace {
-// FNV-1a 64-bit over the source bytes, then mix in w/h/scale/profile.
-// `bleed` IS part of the key, and must be: it changes the produced pixels.
-// It was omitted, which was harmless only by luck — nothing asked for the same
-// sprite both ways, so the collision never fired.  Pre-warming the cache makes
-// that luck run out: a warm pass using the default bleed=true would answer a
-// later bleed=false request (the fluid bubbles, which keep their water-blue
-// background instead of an edge-extended one) with the wrong bytes, and the
-// bubbles live in the very secret room the warm exists to speed up.
+// FNV-1a 64 over the source bytes, then w/h/scale/profile/bleed mixed in.
+// `bleed` must be in the key: it changes the pixels (the fluid bubbles use
+// bleed=false), and the pre-warm would otherwise answer them with the wrong
+// bytes.
 std::uint64_t key_of(const std::vector<std::uint8_t>& src, int w, int h,
                      int scale, const std::string& profile, bool bleed) {
-    // NOT formats::Hash64: the byte loop matches it, but the scalars below are
-    // mixed with the shift-and-add combine instead, and this value is a
-    // cache key with entries already written under it (hash64.hpp records
-    // this exception).
+    // Not formats::Hash64: the scalars use a shift-and-add combine, and
+    // existing cache entries are keyed on it (hash64.hpp notes the exception).
     std::uint64_t k = 1469598103934665603ull;
     for (std::uint8_t b : src) { k ^= b; k *= 1099511628211ull; }
     auto mix = [&](std::uint64_t v) {
@@ -38,14 +32,13 @@ std::uint64_t key_of(const std::vector<std::uint8_t>& src, int w, int h,
     mix(static_cast<std::uint64_t>(w));
     mix(static_cast<std::uint64_t>(h));
     mix(static_cast<std::uint64_t>(scale));
-    for (char c : profile) mix(static_cast<std::uint64_t>(c));
+    for (const char c : profile) mix(static_cast<std::uint64_t>(c));
     mix(bleed ? 1ull : 2ull);
     return k;
 }
 
-// Extend opaque colour one ring into transparent neighbours (4-neighbour),
-// leaving alpha 0 — only RGB is filled so the scaler reads a defined colour
-// at the edge.  Returns a copy with the bled RGB; alpha untouched.
+// Extend opaque colour one ring into transparent 4-neighbours (RGB only; alpha
+// stays 0), so the scaler reads a defined colour at the edge.
 std::vector<std::uint8_t> alpha_bleed(const std::vector<std::uint8_t>& src,
                                       int w, int h) {
     std::vector<std::uint8_t> out = src;
@@ -71,21 +64,17 @@ std::vector<std::uint8_t> alpha_bleed(const std::vector<std::uint8_t>& src,
     return out;
 }
 
-// ── disk block format ────────────────────────────────────────────────────
-// A baked HD block on disk is: 16-byte header then raw RGBA.
+// ---- disk block format ----
+// 16-byte header then raw RGBA:
 //   bytes 0..3   magic "OHD1"
 //   bytes 4..7   int32-le  w
 //   bytes 8..11  int32-le  h
-//   bytes 12..15 uint32-le payload length (must equal w*h*4)
-// The key (hex) is the filename, so the file is content-addressed: a hit can
-// only ever reproduce the exact bytes an upscale would have made.
+//   bytes 12..15 uint32-le payload length (= w*h*4)
+// The filename is the key (hex), so a hit reproduces exactly the upscale bytes.
 constexpr char kMagic[4] = {'O', 'H', 'D', '1'};
-// Compressed variant.  A DISTINCT magic rather than a flag byte, so the
-// compatibility falls out of the existing "any malformation is a silent miss"
-// rule: an older build (or one built without zlib) fails the magic compare,
-// treats the entry as absent and simply re-bakes it.  The cache is derived
-// data, so a miss costs time, never correctness.  Future codecs take their own
-// magic (OHDZ = deflate; a zstd variant would be OHDS).
+// Compressed variant, with its own magic: a build without zlib fails the magic
+// check, treats it as a miss and re-bakes (the cache is derived data).  Future
+// codecs get their own magic (OHDZ = deflate).
 constexpr char kMagicZ[4] = {'O', 'H', 'D', 'Z'};
 
 void put_le32(std::uint8_t* p, std::uint32_t v) {
@@ -108,9 +97,8 @@ std::string key_hex(std::uint64_t k) {
     return std::string(buf);
 }
 
-// Load a baked block.  Returns true and fills `a` only on a fully-valid file
-// (magic + dimensions + payload length all consistent).  Any malformation is
-// a silent miss — the caller then re-upscales and re-writes.
+// Load a baked block; true only for a fully valid file.  Anything malformed is
+// a silent miss (re-upscale and re-write).
 bool load_block(const std::filesystem::path& file, HdAsset& a) {
     std::ifstream in(file, std::ios::binary);
     if (!in) return false;
@@ -157,8 +145,7 @@ bool load_block(const std::filesystem::path& file, HdAsset& a) {
     return true;
 }
 
-// Write a baked block.  Best-effort: writes to a temp file then renames so a
-// reader never sees a half-written file (no torn cache entries on crash).
+// Write a baked block: temp file then rename, so no reader sees a torn file.
 bool store_block(const std::filesystem::path& file, const HdAsset& a) {
     const std::uint64_t expect =
         static_cast<std::uint64_t>(a.w) * static_cast<std::uint64_t>(a.h) * 4ull;
@@ -172,10 +159,8 @@ bool store_block(const std::filesystem::path& file, const HdAsset& a) {
         put_le32(hdr + 4, static_cast<std::uint32_t>(a.w));
         put_le32(hdr + 8, static_cast<std::uint32_t>(a.h));
 #ifdef OLDUVAI_HAVE_ZLIB
-        // The bake is upscaled PALETTE art: a 4x full screen holds ~17 distinct
-        // RGBA values in 4 MB, so deflate is ~40x here and the whole cache goes
-        // from hundreds of MB to ~10.  Level 6 rather than 9: measured within a
-        // few percent of 9 on this content for a fraction of the bake time.
+        // Upscaled palette art compresses ~40x (a 4x full screen: ~17 RGBA
+        // values in 4 MB).  Level 6: within a few percent of 9, much faster.
         uLongf cap = ::compressBound(static_cast<uLong>(a.px.size()));
         std::vector<std::uint8_t> comp(cap);
         if (::compress2(comp.data(), &cap, a.px.data(),
@@ -221,7 +206,14 @@ bool HdAssetCache::insert(std::uint64_t k, HdAsset a) {
 const HdAsset& HdAssetCache::get(const std::vector<std::uint8_t>& src, int w,
                                  int h, int scale, const std::string& profile,
                                  bool bleed) {
-    const std::uint64_t k = key_of(src, w, h, scale, profile, bleed);
+    return get_keyed(key_of(src, w, h, scale, profile, bleed), src, w, h,
+                     scale, profile, bleed);
+}
+
+const HdAsset& HdAssetCache::get_keyed(std::uint64_t k,
+                                       const std::vector<std::uint8_t>& src,
+                                       int w, int h, int scale,
+                                       const std::string& profile, bool bleed) {
     auto it = map_.find(k);
     if (it != map_.end()) return it->second;
     return map_
@@ -241,9 +233,8 @@ HdAsset HdAssetCache::build_with_key(std::uint64_t k,
                                      int w, int h, int scale,
                                      const std::string& profile,
                                      bool bleed) const {
-    // Disk layer: a baked block from a prior run reproduces the exact upscale
-    // output, so load it instead of recomputing.  scale<=1 is identity (never
-    // worth a disk round-trip) so it's excluded.
+    // Disk layer: a baked block reproduces the upscale exactly.  Not for scale
+    // 1.
     if (disk_enabled_ && scale > 1) {
         HdAsset loaded;
         const std::filesystem::path file = disk_dir_ / (key_hex(k) + ".bin");
@@ -270,18 +261,10 @@ HdAsset HdAssetCache::build_with_key(std::uint64_t k,
         a.w = w * scale;
         a.h = h * scale;
 
-        // Re-apply the alpha as a NEAREST upscale of the source mask ONLY for
-        // palette/binary-alpha-preserving scalers (mmpx, retro/native nearest,
-        // smooth's scale2x/3x, eagle).  Those copy whole source pixels and so
-        // never invent a partial-alpha edge; re-stamping the source mask keeps
-        // transparent borders crisp and prevents stray colour bleeding from
-        // the clamped-edge neighbourhood into the transparent halo.  Blending
-        // scalers (omniscale, xbr) already produce an anti-aliased alpha edge
-        // from the binary input mask — keeping it gives smooth silhouettes
-        // (matches Python, which leaves the scaler's blended alpha untouched).
-        // Overwriting it with nearest would re-introduce the blocky staircase.
-        // Single source of truth for the per-scaler alpha treatment; see
-        // profile_preserves_palette() in upscale.hpp (audit A4).
+        // Palette-preserving scalers (profile_preserves_palette): re-stamp
+        // alpha as a nearest upscale of the source mask, keeping transparent
+        // borders crisp. Blending scalers keep their anti-aliased alpha edge
+        // (as the reference).
         const bool palette_preserving = profile_preserves_palette(profile);
         if (has_alpha && palette_preserving) {
             for (int y = 0; y < a.h; ++y)
@@ -296,9 +279,7 @@ HdAsset HdAssetCache::build_with_key(std::uint64_t k,
         }
     }
 
-    // Persist the freshly-upscaled block so the next run loads it.  Only
-    // scale>1 (identity isn't worth a file).  Best-effort: a write failure
-    // leaves the in-memory result untouched.
+    // Persist the new block (scale > 1); a write failure is ignored.
     if (disk_enabled_ && scale > 1) {
         const std::filesystem::path file = disk_dir_ / (key_hex(k) + ".bin");
         if (store_block(file, a))
@@ -325,6 +306,9 @@ void HdAssetCache::enable_disk(const std::filesystem::path& dir) {
     disk_enabled_ = true;
 }
 
-void HdAssetCache::clear() { map_.clear(); }
+void HdAssetCache::clear() {
+    map_.clear();
+    source_keys_.clear();
+}
 
 }  // namespace olduvai::enhance

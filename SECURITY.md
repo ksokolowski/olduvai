@@ -16,4 +16,4 @@ that crashes or corrupts the engine, for example), please report it
 Private Vulnerability Reporting) rather than a public issue.
 
 Only the **latest release** is supported with fixes. There is no bounty
-program — this is a hobby project — but reports are read and credited.
+program (this is a hobby project), but reports are read and credited.

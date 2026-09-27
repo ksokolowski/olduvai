@@ -56,7 +56,7 @@ fi
 
 cd "${ROOT}"
 cmake --preset coverage >/dev/null
-cmake --build --preset coverage --parallel 8 \
+cmake --build --preset coverage --parallel "$(getconf _NPROCESSORS_ONLN)" \
     --target olduvai olduvai_trace olduvai_tests >/dev/null
 
 PROF="$(mktemp -d /tmp/olduvai_reach.XXXXXX)"

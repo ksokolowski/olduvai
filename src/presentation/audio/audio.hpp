@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// SDL audio output — music + effects mixer.
-// Effects: the digital path is a single voice (a new sample replaces the
-// playing one), 8-bit unsigned PCM from the VOC container.
-// Music: the AdLib path renders the RAW music container through the
-// EXE-faithful OPL driver (opl_music.cpp, vendored Nuked-OPL3 — always in
-// the build, no external dependency); the melodic paths (MT-32 / GM / host
-// MIDI) take the converted MIDI stream.
+// SDL audio output: music + effects mixer.  AdLib music plays the raw music
+// container through the EXE-faithful OPL driver (vendored Nuked-OPL3); the
+// melodic paths (MT-32 / GM / host MIDI) take the converted MIDI stream.
+// Effects are pre-rendered PCM voices.
 
 #pragma once
 
@@ -26,16 +23,11 @@
 
 namespace olduvai::presentation {
 
-// The melodic MIDI synth seam (audio DIP): the two sample-generating backends
-// — libmt32emu (Roland MT-32/CM-32L) and libfluidsynth (General MIDI + a
-// SoundFont) — behind one 2-method interface.  `send` feeds one parsed MIDI
-// channel-voice message (status, data1, data2); `render` pulls `frames` stereo
-// s16 sample-frames into `out` (2*frames interleaved L/R samples).  The
-// real-time mixer, play/stop key-off, and the offline SFX pre-render all drive
-// the active synth ONLY through these two calls — each implementation owns its
-// dlopen handle, its bound C-API subset, the per-library quirks (MT-32 takes a
-// raw packed message; GM demuxes into typed fluid_synth_* calls) and its whole
-// lifetime (see audio.cpp).  A null pointer means "no melodic synth".
+// The melodic synth seam: libmt32emu (MT-32/CM-32L) and libfluidsynth (GM +
+// SoundFont).  `send` feeds one channel-voice message; `render` pulls `frames`
+// stereo s16 frames (2*frames interleaved samples).  Everything drives the
+// synth through these two calls; each implementation owns its library and
+// quirks (audio.cpp).  Null = no melodic synth.
 class PcmMidiSynth {
 public:
     virtual ~PcmMidiSynth() = default;
@@ -43,40 +35,45 @@ public:
     virtual void render(int frames, std::int16_t* out) = 0;
 };
 
+// The devices an SdlAudio opens.
+struct AudioSetup {
+    std::string music_device = "auto";
+    std::string rom_dir;       // MT-32 / CM-32L ROMs (mt32-builtin)
+    std::string soundfont;     // .sf2 (gm-builtin)
+    std::string sfx_backend = "auto";
+    int rate = 0;              // Hz; 0 or out of range: 48000
+    int buffer = 0;            // frames, rounded to a power of two; 0: 2048
+    std::string midi_port;     // host MIDI port name; empty: the default
+    bool offline = false;      // no SDL device or callback: render_offline()
+    // "auto" (CM-32L if its ROMs are present, else MT-32), "cm32l", "mt32".
+    std::string mt32_model = "auto";
+};
+
+// The devices a runtime options struct names (GameOptions, the app's
+// PlaySettings); rate, buffer, port and offline are the caller's.
+template <class Opts>
+AudioSetup audio_setup_of(const Opts& o) {
+    AudioSetup s;
+    s.music_device = o.music_device;
+    s.rom_dir = o.rom_dir;
+    s.soundfont = o.soundfont;
+    s.sfx_backend = o.sfx_backend;
+    if (!o.mt32_model.empty()) s.mt32_model = o.mt32_model;
+    return s;
+}
+
 class SdlAudio {
 public:
-    // device: "auto" tries mt32 (library + ROMs) then opl; or force
-    // "mt32-builtin" / "opl" / "none".  rom_dir overrides ROM discovery.
-    //   "mt32" / "host-midi" — route MDI music to a real hardware/software
-    //     MIDI OUT port (opt-in; needs RtMidi in the build + a port).  No
-    //     audio rendering for music — a wall-clock thread streams events out
-    //     the host port.  SFX still render through the SDL device.
-    // sfx_backend:
-    //   "opl"     — AdLib FM rendered through Nuked-OPL3 (EXE-faithful default)
-    //   "sb-dac"  — digital VOC samples
-    //   "midi"/"mt32-sfx" — catalog note events through the active synth
-    //   "none"    — no sound effects (the Sound card's Off)
-    // audio_rate: SDL device sample rate in Hz (0 = device default / auto).
-    // audio_buffer: device buffer in sample frames, power-of-two (0 = the
-    // 2048-frame default).  Both mirror the reference --audio-rate /
-    // --audio-buffer knobs; out-of-range values are clamped/ignored.
-    // midi_port: host MIDI OUT port name for the host-midi music device
-    // (empty = pick a sensible default).  Ignored unless music_device selects
-    // host MIDI.
-    // `offline`: set up the synth backends at `audio_rate` but open NO SDL
-    // audio device and start no callback — for the deterministic headless
-    // render harness (render_offline).  device_ stays 0 (ok() is false); music
-    // still binds, driven by hand via render_offline / mix().
-    explicit SdlAudio(const std::string& music_device = "auto",
-                      const std::string& rom_dir = "",
-                      const std::string& soundfont = "",
-                      const std::string& sfx_backend = "auto",
-                      int audio_rate = 0, int audio_buffer = 0,
-                      const std::string& midi_port = "", bool offline = false,
-                      // "auto" (CM-32L if its ROMs are present, else MT-32),
-                      // "cm32l", or "mt32".  The two are different machines
-                      // and sound different; "auto" used to decide silently.
-                      const std::string& mt32_model = "auto");
+    // setup.music_device: "auto" (MT-32, GM, a host MIDI port if one opens, then
+    // OPL), "mt32-builtin", "gm-builtin", "opl", "none"; "host-midi" / "mt32" /
+    // "gm-host" send music to a MIDI OUT port (RtMidi) instead of rendering it.
+    // setup.rom_dir overrides ROM discovery.
+    // setup.sfx_backend:
+    //   "opl"      AdLib FM (Nuked-OPL3)
+    //   "sb-dac"   digital VOC samples
+    //   "midi" / "mt32-sfx" / "gm-sfx"  catalog notes via the active synth
+    //   "none"     no effects (the Sound card's Off)
+    explicit SdlAudio(const AudioSetup& setup = {});
     ~SdlAudio();
     SdlAudio(const SdlAudio&) = delete;
     SdlAudio& operator=(const SdlAudio&) = delete;
@@ -88,79 +85,64 @@ public:
     const std::string& active_music_backend() const { return music_backend_; }
     // False when the SFX backend is "none" (the Sound card's Off).
     bool sfx_enabled() const { return !sfx_off_; }
-    // True when the requested music device could not start and the AdLib
-    // FM driver is playing instead.  Play wants that; --render-audio, which
-    // must render exactly the backend it was asked for, treats it as a skip.
+    // A pre-rendered effect is ready to play (any backend).
+    bool has_sfx(const std::string& id) const;
+    // The requested music device could not start and AdLib FM plays instead.
+    // --render-audio treats it as a skip.
     bool music_fell_back() const { return music_fell_back_; }
-    // True when play_music() feeds a General MIDI synth, i.e. the MDI
-    // conversion must map Roland MT-32 programs to GM (build_gm_midi's
-    // gm_translate).  gm-builtin = FluidSynth; gm-host = host MIDI out to a
-    // GM device (e.g. the Windows GS Wavetable synth behind the MIDI mapper).
+    // play_music() feeds a GM synth, so MT-32 programs map to GM (build_gm_midi
+    // gm_translate).  gm-builtin = FluidSynth; gm-host = a GM device behind
+    // host MIDI (Windows GS Wavetable Synth).
     bool wants_gm_translation() const {
         return music_backend_ == "gm-builtin" || music_backend_ == "gm-host";
     }
-    // True when a MELODIC synth (MT-32 or GM/FluidSynth) will render the music.
-    // Callers pass this as build_gm_midi()'s mt32_strict so runtime CC /
-    // aftertouch / pitch-bend events (which the EXE 'R'/MPU-401 branch never
-    // forwards, per FUN_1ecd_0599) are dropped — matching the Python MT-32
-    // render and keeping GM's character close to the MT-32 (owner request).
-    // The OPL/AdLib backend (synth_ null) keeps those events, as the EXE 'A'
-    // branch genuinely uses them.
+    // A melodic synth or host MIDI renders the music: drop runtime CC /
+    // aftertouch / pitch bend in build_gm_midi (mt32_strict), as the EXE's
+    // MPU-401 branch never forwards them (FUN_1ecd_0599).  OPL keeps them (the
+    // EXE's AdLib branch uses them).
     bool drop_runtime_modulation() const {
-        // Host MIDI mirrors the EXE 'R'/MPU-401 branch (a real MT-32), so it
-        // drops runtime CC/aftertouch/pitch-bend just like the builtin MT-32.
         return synth_ != nullptr || host_midi_active_;
     }
 
     void load_sfx(const std::string& id, const formats::VocAudio& voc);
     void play_sfx(const std::string& id);          // backend dispatch
-    // Start the track (loops).  Takes the RAW music container: the backend
-    // decides the stream shape internally — the OPL driver consumes it as-is
-    // (the FF 7F voice patches must reach the chip), the melodic synths get
-    // build_gm_midi() with this backend's strict/translate flags.
+    // Start the track (loops), from the raw music container: OPL consumes it
+    // as-is (the FF 7F voice patches must reach the chip); melodic synths get
+    // build_gm_midi() with this backend's flags.
     void play_music(const std::vector<std::uint8_t>& raw_mdi, int track_id);
     void stop_music();
-    // Enhanced-mode mix balance.  Raises SFX polyphony (rapid retriggers
-    // overlap instead of cutting off) and ducks the music under the SFX so
-    // effects sit above the soundtrack.  No-op / single-voice + 1.0 gain in
-    // faithful (default) mode — original SB DAC was one voice at a fixed
-    // hardware balance.  music/sfx <0 keep the current value (knob override).
+    // Enhanced mix: SFX polyphony (retriggers overlap) and music ducked under
+    // the SFX.  Classic: one voice at a fixed balance, like the SB DAC.
+    // music/sfx < 0 keep the current value.
     void set_mix_balance(bool enhanced, float music = -1.0f, float sfx = -1.0f);
-    // Gradually ramp the music mix to silence, then leave it muted —
-    // blocks ~1.8s (mirrors EXE MDI_FadeStop 1f75:00e4).  The next
-    // play_music() restores full gain.  Used at the score-tally
-    // transition so the level/boss track fades before BONUS.MDI.
+    // Ramp the music to silence over ~1.8 s and leave it muted (EXE
+    // MDI_FadeStop 1f75:00e4); the next play_music() restores it.  Used before
+    // the tally's BONUS.MDI.
     void fade_out_music();
 
     void mix(std::int16_t* out, int frames);       // audio-thread callback
 
-    // Headless deterministic render (offline ctor only): render `frames` stereo
-    // samples, reproducible run-to-run.  Returns 2*frames s16.
-    //
-    // TWO ARMS, because the backends consume different streams:
-    //   sequencer-backed (mt32-builtin / gm) — loads the format-0 MIDI into
-    //     seq_ and drives mix() in fixed chunks, the same event quantisation
-    //     as real playback;
-    //   OPL — plays the RAW game-MDI container (FF 7F voice patches) through
-    //     opl_music_ directly, because it never goes through the sequencer.
-    // This comment used to say "sequencer-backed only", which is what the OPL
-    // arm was added to stop being true: without it `--render-audio
-    // --music-device opl` printed a digest of silence.
+    // Deterministic headless render (offline ctor only): 2*frames s16.
+    // Sequencer backends (mt32-builtin / gm) run mix() in fixed chunks, like
+    // real playback.  OPL plays the raw container through opl_music_ directly.
     std::vector<std::int16_t> render_offline(
         const std::vector<std::uint8_t>& midi_stream, int frames);
 
 private:
-    // Constructor phases (§3.7's D shape).  Order is load-bearing:
-    // resolve_and_bake_sfx reads music_backend_, so it runs second.
+    // Constructor phases, in order: resolve_and_bake_sfx reads music_backend_.
     void select_music_backend(const std::string& music_device,
                               const std::string& rom_dir,
                               const std::string& soundfont,
                               const std::string& midi_port,
                               const std::string& mt32_model);
+    // Phases of select_music_backend.
+    bool try_host_midi(const char* backend, const std::string& port);
+    void try_windows_host_fallback(const std::string& port);
+    void start_opl_music();
+    static void report_music_failure(const std::string& device,
+                                     const std::string& rom_dir);
     void resolve_and_bake_sfx(const std::string& sfx_backend);
-    // Bake phases of resolve_and_bake_sfx (the ctor-phase shape continued):
-    // resolution stays in the named function, each backend's pre-render is a
-    // method over the members it fills.
+    // Pre-render phases of resolve_and_bake_sfx.
     void bake_opl_sfx();
     void bake_midi_sfx();
 
@@ -169,36 +151,29 @@ private:
     std::uint16_t device_samples_ = 2048;   // for the unplug-reopen path
     bool event_watch_installed_ = false;
 public:
-    // SDL_AUDIODEVICEREMOVED recovery: close + reopen the output device with
-    // the original spec (called from the event watch installed in the ctor).
+    // Device-removed recovery: reopen the output with the original spec (from
+    // the ctor's event watch).
     void reopen_device();
 private:
     std::map<std::string, std::vector<std::int16_t>> sfx_;   // mono s16
-    std::mutex mu_;
-    // Polyphonic SFX: every triggered effect is a pre-rendered PCM wave mixed
-    // independently of the music synth.  Faithful mode caps the pool at 1
-    // (original single-voice SB DAC); enhanced mode raises it so rapid
-    // retriggers overlap.
+    mutable std::mutex mu_;
+    // Every effect is a pre-rendered PCM voice, mixed apart from the music
+    // synth. Classic caps the pool at 1 (the SB DAC); enhanced raises it.
     struct SfxVoice { const std::vector<std::int16_t>* buf = nullptr;
                       std::size_t pos = 0; };
     std::vector<SfxVoice> sfx_voices_;
     int sfx_poly_ = 1;            // max concurrent SFX voices (1 = faithful)
-    // Enhanced mode ducks the synth layer so effects sit above it.  Constant
-    // while enhanced, not gated on an effect actually playing.
+    // Enhanced ducks the synth layer under the effects (constant while
+    // enhanced).
     float music_balance_ = 1.0f;  // music level under SFX (1.0 = faithful)
     float sfx_balance_ = 1.0f;    // SFX level
-    // Authentic AdLib music driver (vendored Nuked-OPL3; null unless the
-    // OPL music path is the active backend).
+    // AdLib music driver; null unless OPL music is active.
     std::unique_ptr<OplMusicPlayer> opl_music_;
-    // Active melodic synth (MT-32 or GM); null when neither loaded (OPL / host
-    // MIDI / no music).  Owns its dlopen handle + backend objects — see the
-    // PcmMidiSynth impls in audio.cpp.
+    // Active melodic synth (MT-32 or GM); null for OPL, host MIDI or no music.
     std::unique_ptr<PcmMidiSynth> synth_;
     MidiSequencer seq_;
-    // Host-MIDI music path (opt-in, --music-device mt32/host-midi).  When
-    // active, music streams out a real MIDI OUT port on its own wall-clock
-    // thread and NONE of the synth handles above are used for music; the SDL
-    // device still renders SFX.
+    // Host MIDI music: streams to a MIDI OUT port on its own thread; the SDL
+    // device renders SFX only.
     HostMidiPlayer host_midi_;
     bool host_midi_active_ = false;
     std::string music_backend_ = "none";
@@ -206,40 +181,30 @@ private:
     bool opl_sfx_ = false;   // sfx_backend == "opl": render AdLib FM via Nuked
     bool sfx_off_ = false;   // sfx_backend == "none": play_sfx is silent
     bool music_fell_back_ = false;   // see music_fell_back()
-    // Music mix gain (0..1).  Read lock-free by the audio callback, ramped
-    // by fade_out_music() on the main thread; reset to 1 by play_music().
+    // Music gain (0..1): read lock-free by the callback, ramped by
+    // fade_out_music(), reset by play_music().
     std::atomic<float> music_gain_{1.0f};
-    // Real-time health counters (RB1 pre-emptive instrumentation): written by
-    // the audio callback only (single writer, relaxed stores), read at
-    // teardown.  Overrun = one callback took longer than its buffer budget
-    // (frames / device_rate) — the audible-dropout condition on slow hosts.
-    // Lock-wait = time the callback spent blocked on mu_ (main-thread
-    // contention, the RB1 hazard).  Summary printed at destruction when
-    // OLDUVAI_AUDIO_STATS is set; collection is always on (three perf-counter
-    // reads per callback).
+    // Real-time health counters, written only by the audio callback (relaxed).
+    // Overrun: a callback longer than its buffer budget (audible dropout).
+    // Lock-wait: time blocked on mu_ by main-thread contention.  Printed at
+    // teardown with OLDUVAI_AUDIO_STATS; always collected.
     std::atomic<std::uint64_t> cb_count_{0};
     std::atomic<std::uint64_t> cb_overruns_{0};
     std::atomic<std::uint64_t> cb_worst_ns_{0};
     std::atomic<std::uint64_t> cb_worst_wait_ns_{0};
-    // OLDUVAI_AUDIO_CAPTURE=<wav>: every mixed callback buffer (music + SFX,
-    // exactly what the device is handed), written as a WAV at teardown with a
-    // <wav>.sync sidecar holding the performance counter at the first
-    // captured callback — the clock the frame-dump hooks stamp their frames
-    // with (image_out.hpp note_dump_time), so a clip can line the two up
-    // (the owner's device-preview script, kept out of the public tree).  Appended under mu_, which mix() already holds.  The
-    // output is the GAME's music and effects: for the owner's own devices,
-    // never for the repo (check_tree rejects any clip with audio).
+    // OLDUVAI_AUDIO_CAPTURE=<wav>: every mixed buffer, written at teardown,
+    // plus a <wav>.sync with the performance counter at the first callback (the
+    // clock the frame dumps stamp, image_out.hpp).  Appended under mu_.  The
+    // game's audio: never for the repo (check_tree rejects clips with audio).
     void write_capture();
     std::string capture_path_;
     std::vector<std::int16_t> capture_;   // interleaved stereo s16
     std::uint64_t capture_t0_ = 0;
 };
 
-// Which Sound card choices can sound on this machine (sound_card.hpp):
-// libmt32emu + an MT-32/CM-32L ROM pair in the ROM search path; FluidSynth +
-// a SoundFont; host MIDI built in + an output port.  File and library checks
-// only — no synth is started — and cached per (rom_dir, soundfont), since
-// every menu that shows the row asks.
+// Which Sound cards can sound here (sound_card.hpp): libmt32emu + a ROM pair,
+// FluidSynth + a SoundFont, host MIDI + an output port.  File and library
+// checks only, cached per (rom_dir, soundfont).
 SoundCardAvail probe_sound_cards(const std::string& rom_dir,
                                  const std::string& soundfont);
 

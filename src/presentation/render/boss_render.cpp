@@ -38,9 +38,8 @@ void render_boss_player_fb(RenderTarget& t, const BossPlayerState& p,
     if (halo_pal.size() > 5 && rgb_close(halo_pal[5], 194, 130, 97)) {
         halo_pal[5] = {130, 0, 32};
     }
-    // Float render base on the HD smooth-motion path (Part 1 follow-up), else
-    // the integer logic position (byte-identical — lround of an exact int).
-    // All three player blits are this base + integer offsets, HD-rounded.
+    // Float base on the HD smooth path, else the integer position; the three
+    // player blits add integer offsets to it.
     const float ppx = t.use_float_pos ? t.player_fx : static_cast<float>(p.x);
     const float ppy = t.use_float_pos ? t.player_fy : static_cast<float>(p.y);
     if (p.sprite >= 0 && p.sprite < static_cast<int>(atlas.size())) {
@@ -84,11 +83,8 @@ static inline float fsel(bool use_float, float f, int i) {
     return use_float ? f : static_cast<float>(i);
 }
 
-// Float x/y: routes through blit_sprite's float overload (HD-rounds the dest).
-// Integer callers go through the int twin below, which converts explicitly and
-// round-trips exactly, so every fixed-position boss/scenery draw stays
-// byte-identical; the player draws pass a sub-pixel render position on the
-// smooth-motion HD path (Part 1 follow-up).
+// Float x/y through blit_sprite's float overload (HD-rounded).  Integer
+// callers use the int twin, which round-trips exactly.
 
 void blit_at(RenderTarget& t, const std::vector<Sprite>& atlas, int idx,
              const std::vector<Rgb>& pal, float x, float y) {
@@ -238,11 +234,8 @@ void render_l4_sprites(RenderTarget& t, const BossAssets& a,
         blit_flip(t, a.spr, head_spr, a.palette, fbx + rec.hx,
                   fby + pal_off + rec.hy, flip);
     }
-    // Spring pad — drawn EVERY frame (state 0 = the idle/compressed pose).
-    // EXE FUN_24cc_020c enqueues the sprite unconditionally; the prior
-    // `spring_state > 0` guard hid the idle sprite so only the expanded pose
-    // appeared on a bounce (and the animation popped in).  Matches
-    // boss_l4.py::_render_spring (L4_STOMP_ANIM[state & 3]).
+    // Spring pad, drawn every frame (state 0 = the idle pose): FUN_24cc_020c
+    // enqueues it unconditionally.
     {
         const auto& s = kL4Spring[boss.spring_state & 3];
         blit_at(t, a.spr, s[1] - 1, a.palette, 150, s[0]);
@@ -256,20 +249,18 @@ void render_l4_frame(RenderTarget& t, const BossAssets& a,
     render_l4_sprites(t, a, p, boss);
 }
 
-// ── L6 arena render ──────────────────────────────────────────────────────
-// (attack-frame table lives in systems/boss_l6.cpp::l6_select_hmat_parts —
-// DS:0x1fe4 {0,1,2,1,0}, raw EXE bytes at file 0x21974)
+// ---- L6 arena render ----
+// The attack-frame table is in systems/boss_l6.cpp (l6_select_hmat_parts,
+// DS:0x1fe4 {0,1,2,1,0}).
 
 void render_l6_sprites(RenderTarget& t, const BossAssets& a,
                        const BossPlayerState& p, const L6BossState& boss) {
-    // Giant = TWO H-atlas parts (l6_select_hmat_parts carries the capstone
-    // cites): part A body (H1/H2/H3) at (80,7) — 254f_0078:00c1/:01d9 col
-    // 0x50; part B arm+head strip (H4 sheet) at (208,7) — :00ee/:01f8 col
-    // 0xd0.  Swing window pairs body with the SAME table value (+3 atlas
-    // offset → H4[tbl]); the hit reaction draws the SHOCKED PAIR — H1 body
-    // (base+0, :01d1, NO table offset) + H4[3] (base+6, :01f0, the 96x57
-    // strip that also covers the right shoulder).  Matches
-    // boss_l6.py::_select_hmat_parts / _render_hmat.
+    // The giant is two H-atlas parts (citations at l6_select_hmat_parts): body
+    // (H1/H2/H3) at (80,7) (254f_0078:00c1/:01d9, col 0x50) and the arm+head
+    // strip (H4) at (208,7) (:00ee/:01f8, col 0xd0).  A swing pairs the body
+    // with the same table value (+3 -> H4[tbl]); a hit draws the shocked pair:
+    // H1 body (:01d1) + H4[3] (:01f0, the 96x57 strip covering the right
+    // shoulder).
     const L6HmatParts parts = l6_select_hmat_parts(boss);
     const std::vector<Sprite>* body = parts.body == 1 ? &a.h2
                                     : parts.body == 2 ? &a.h3
@@ -282,13 +273,9 @@ void render_l6_sprites(RenderTarget& t, const BossAssets& a,
                 std::min(parts.head, static_cast<int>(a.h4.size()) - 1),
                 a.palette, 208, 7);
     }
-    // Ground-punch trampoline — drawn EVERY frame at the current state
-    // (state 0 = the idle/collapsed pad, sprite 59, that shows the player
-    // where to step).  EXE FUN_254f_0003:003b-005d enqueues the sprite
-    // UNCONDITIONALLY; the prior `ground_punch_state > 0` guard hid the idle
-    // pad so the trampoline was invisible until triggered.  The lift + state
-    // advance stay gated on state>0 in update_ground_punch (boss_l6.cpp).
-    // Matches boss_l6.py::_update_ground_punch (L6_STOMP_ANIM[state]).
+    // Ground-punch trampoline, drawn every frame (state 0 = the idle pad,
+    // sprite 59): FUN_254f_0003:003b-005d enqueues it unconditionally.  The
+    // lift and state advance stay gated on state > 0 (update_ground_punch).
     {
         constexpr int kPunch[4][2] = {{170, 59}, {169, 60}, {168, 61},
                                       {169, 60}};
@@ -304,17 +291,14 @@ void render_l6_frame(RenderTarget& t, const BossAssets& a,
     render_l6_sprites(t, a, p, boss);
 }
 
-// ── L2 victory flash render (FUN_23cf_0a20 0x0db2, 18 frames) ────────────────
-// Even frames: sprites 54-57 at the four quadrant positions + closed jaw 38
-// at (136,170).  Odd frames: sprites 50-53 + open jaw 39 at (136,168).
-// Player frozen at current x/y, sprite 28 (standing).  RING.PC1 + body blit
-// each frame (no HUD lives redraw — EXE never redraws in victory flash).
+// ---- L2 victory flash (FUN_23cf_0a20 0x0db2, 18 frames) ----
+// Even frames: sprites 54-57 at the quadrant positions + closed jaw 38 at
+// (136,170).  Odd: 50-53 + open jaw 39 at (136,168).  Player frozen, sprite 28.
+// No lives redraw during the flash.
 
-// Sprite-only L2 victory pass (NO background) — drawable onto a WIDE target at
-// origin_x = ws_M so the defeated T-Rex stays in the centre 320 instead of being
-// mirrored into the no-neighbour margins (the "mirrored big T-Rex tail" the
-// margin reflection produced when a baked 320 frame was mirror-wrapped).  The
-// full-frame render_l2_victory_frame below = blit_bg + this.
+// Victory sprites only (no background), for a wide target at origin_x = M so
+// the T-Rex stays in the centre instead of being mirrored.
+// render_l2_victory_frame = blit_bg + this.
 
 void render_l2_victory_sprites(RenderTarget& t, const BossAssets& a,
                                const BossPlayerState& p, int flash_frame) {
@@ -346,16 +330,14 @@ void render_l2_victory_frame(RenderTarget& t, const BossAssets& a,
     render_l2_victory_sprites(t, a, p, flash_frame);
 }
 
-// ── L4 victory render (FUN_24cc_02f2 0x06bd-0x07a1) ──────────────────────────
-// Phase 1 (win_flag==1): boss still walking, player sprite 28 (standing).
-// Phase 2 (win_flag==2): player rising, sprite 3 (air).
-// Phase 3 (win_flag==3): player replaced by riding sprite 58 at (boss_x-12, 119).
-// Boss always drawn in all phases.
+// ---- L4 victory (FUN_24cc_02f2 0x06bd-0x07a1) ----
+// win_flag 1: boss walking, player sprite 28.  2: player rising, sprite 3.
+// 3: rider sprite 58 at (boss_x-12, 119) replaces the player.  The boss draws
+// in every phase.
 
-// Sprite-only L4 ride-off victory pass (NO background) — drawable onto a WIDE
-// target at origin_x = ws_M so the riding triceratops + player overflow into
-// the margins instead of being baked into a 320 frame and then mirrored.  The
-// full-frame render_l4_victory_frame below = blit_bg + this.
+// Ride-off sprites only (no background), for a wide target at origin_x = M
+// so rider and dino overflow into the margins.  render_l4_victory_frame =
+// blit_bg + this.
 
 void render_l4_victory_sprites(RenderTarget& t, const BossAssets& a,
                                const BossPlayerState& p,
@@ -376,10 +358,8 @@ void render_l4_victory_sprites(RenderTarget& t, const BossAssets& a,
         }
         blit_flip(t, a.spr, rec.b1s, a.palette, bx + rec.b1x, by + rec.b1y, flip);
         blit_flip(t, a.spr, rec.b2s, a.palette, bx + rec.b2x, by + rec.b2y, flip);
-        // Victory render: win_flag != 0 always, so the EXE draws the HORN-HIT
-        // sprite 30 in the TAIL's place (FUN_24cc_0007 0x0192-0x01db; same
-        // else-branch as render_l4_sprites + boss_l4.py:521-531).  The old victory
-        // render dropped this entirely → the "missing tail" during the ride-off.
+        // win_flag != 0: the horn-hit sprite 30 replaces the tail
+        // (FUN_24cc_0007 0x0192-0x01db).
         if (boss.direction == 0)
             blit_flip(t, a.spr, 30, a.palette, bx - 55, by + 9, false);
         else
@@ -388,12 +368,8 @@ void render_l4_victory_sprites(RenderTarget& t, const BossAssets& a,
                   by + pal_off + rec.hy, flip);
     }
 
-    // Victory player sprite — phases 1/2/3 ONLY.  win_flag >= 100 (done) draws
-    // NO player (matches boss_l4.py:625-643 — no else; the Python victory loop
-    // exits at 100 without rendering that frame).  The old `else` drew the
-    // standing sprite 28 at win_flag==100, and that final frame became the
-    // post-victory fade source → a one-frame "player standing on the left" flash
-    // before the fade-to-tally.
+    // Victory player, phases 1-3 only; win_flag >= 100 draws no standing
+    // player. That frame becomes the fade source.
     if (boss.win_flag == 1) {
         // Phase 1: player standing, sprite 28 (no flip — EXE Game_EnqueueSprite
         // flag 0; boss_l4.py:628-630).
@@ -403,24 +379,9 @@ void render_l4_victory_sprites(RenderTarget& t, const BossAssets& a,
         // boss_l4.py:634-636 blits unflipped).
         blit_at(t, a.spr, 3, a.palette, p.x, p.y);
     } else if (boss.win_flag >= 3) {
-        // Phase 3: riding sprite 58 at (boss_x-12, 119) — IS the player
-        // (boss_l4.py:641-643; no separate player draw).
-        //
-        // `>= 3`, not `== 3`, and that is the whole fix for the one-frame
-        // "riderless triceratops" reported from widescreen playtest 2026-07-28.
-        // The boss walk block ABOVE is unconditional, so at win_flag == 100
-        // (done) the dino still drew while this block drew nothing — and since
-        // the post-victory fade source is rebuilt from the CURRENT state, that
-        // riderless frame is the last thing on screen before the fade.
-        //
-        // This does NOT resurrect the bug the comment above describes. That one
-        // was an `else` drawing sprite 28 — the player STANDING, on the left,
-        // where he has not been since phase 1. Sprite 58 is the rider, already
-        // on the dino, at the dino's own x: holding it past 100 continues the
-        // ride-off instead of teleporting him. The reference sidesteps the
-        // question by never rendering a win_flag == 100 frame at all
-        // (boss_l4.py:625-643, the loop exits first); we need one because it is
-        // our fade source, so it must look like the frame before it.
+        // Phase 3 onward: sprite 58 is the rider, at the dino's x.  `>= 3`: the
+        // win_flag == 100 frame is the fade source and must still show the
+        // rider (the reference never renders that frame).
         blit_at(t, a.spr, 58, a.palette, boss.boss_x - 12, 119);
     }
 }
@@ -431,13 +392,11 @@ void render_l4_victory_frame(RenderTarget& t, const BossAssets& a,
     render_l4_victory_sprites(t, a, p, boss);
 }
 
-// ── L6 victory render (FUN_254f_02b5 0x0500-0x0641) ──────────────────────────
-// Static victory backdrop: PC1 + H1[pose2] at (80,7) + L6SPR[49] at (213,7).
-// Built once by caller (victory_bg); re-blitted each frame before drawing
-// moving sprites (prevents smear of prior player position).
-// Player: dropping = air sprite 3 (flip=facing_left); landed = sprite 28
-//   at (x,167) no flip.
-// Defeat cycle sprite: base 51 + cycle_idx at (208,7) throughout.
+// ---- L6 victory (FUN_254f_02b5 0x0500-0x0641) ----
+// Static backdrop, built once by the caller: PC1 + H1[pose2] at (80,7) +
+// L6SPR[49] at (213,7), re-blitted each frame.  Player: dropping = air sprite
+// 3 (flip = facing_left); landed = sprite 28 at (x,167), no flip.  Defeat
+// cycle sprite 51 + cycle_idx at (208,7).
 
 void render_l6_victory_frame(RenderTarget& t,
                               const std::vector<std::uint8_t>& victory_bg_px,
@@ -466,13 +425,9 @@ void render_l6_victory_frame(RenderTarget& t,
     blit_at(t, a.spr, 51 + boss.cycle_idx, a.palette, 208, 7);
 }
 
-// L6 victory SPRITES only (NO background) — for the widescreen clean-bg +
-// overflow present, so the beaten giant / landed player are NOT mirror-reflected
-// into the no-neighbour margins (the "big caveman reflection").  Mirrors
-// render_l2/l4_victory_sprites; draws everything render_l6_victory_frame does
-// except the bg copy: beaten giant pose (H3[0]@80,7), beaten face (L6SPR[49]@
-// 213,7), the player (air sprite 3 dropping / sprite 28 landed), and the cycling
-// defeat sprite (51+cycle_idx@208,7).
+// L6 victory sprites only (no background), for the widescreen overflow
+// present: beaten pose (H3[0] at 80,7), face (L6SPR[49] at 213,7), the player
+// (3 dropping / 28 landed), defeat cycle (51+cycle_idx at 208,7).
 
 void render_l6_victory_sprites(RenderTarget& t, const BossAssets& a,
                                const BossPlayerState& p, const L6BossState& boss) {
@@ -481,21 +436,9 @@ void render_l6_victory_sprites(RenderTarget& t, const BossAssets& a,
         blit_sprite(t, a.spr[49], a.palette, 213, 7);
     constexpr int kFloorY = 160;
     if (p.y < kFloorY) {
-        // THE DROP IS THE ONE MOVING THING IN THIS SCENE, so it takes the
-        // float render base on the HD smooth-motion path — exactly what
-        // render_boss_player_fb does for the fight player.
-        //
-        // Without it the victory drop moved in whole NATIVE pixels: +4 per
-        // logic tick is 16 output pixels at hd_scale 4, and the three lerped
-        // sub-frames could only land on 3 of them.  The smooth-motion lerp was
-        // running correctly and could not be seen — reported from playtest
-        // 2026-07-28 as "the sliding down is not smoothed", next to a fight
-        // that looks fine because the fight player has had this since the
-        // boss lerp landed.
-        //
-        // Classic path is byte-identical: use_float_pos false feeds the exact
-        // integers through the float overload, which HD-rounds an lround of an
-        // exact int.  Same argument as render_boss_player_fb's.
+        // The drop is the one moving thing: float base on the HD smooth path (4
+        // px per tick is 16 output px at hd_scale 4, too coarse for three
+        // sub-frames). Classic feeds exact integers.
         const float ppx =
             t.use_float_pos ? t.player_fx : static_cast<float>(p.x);
         const float ppy =
@@ -510,14 +453,6 @@ void render_l6_victory_sprites(RenderTarget& t, const BossAssets& a,
     blit_at(t, a.spr, 51 + boss.cycle_idx, a.palette, 208, 7);
 }
 
-// Settings values come from the user-editable play.json / the menu string
-// store — never bare-stof them: parse_f (parse_util.hpp, via
-// settings_preview.hpp) swallows a non-numeric value like "loud" that
-// would otherwise throw through the frame loop.  The former local mirror
-// collided with that include and is gone.
 
-// flow_key_from_sym (the SDL→SettingsFlow::Key bridge) is shared with
-// game_app via presentation/dialog_key_map.hpp (CC3) — previously mirrored
-// here per OL-B6, now unified without pulling SDL into the pure-logic layer.
 
 }  // namespace olduvai::presentation

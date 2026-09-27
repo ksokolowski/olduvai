@@ -282,5 +282,22 @@ int main() {
         REQUIRE(b3.mem["preset"] == "hd");
     }
 
+    // set_display_key: the one key -> DisplaySettings field mapping.
+    {
+        DisplaySettings d;
+        REQUIRE(set_display_key(d, "enhanced", "true") && d.enhanced);
+        REQUIRE(set_display_key(d, "enhanced", "0") && !d.enhanced);
+        REQUIRE(set_display_key(d, "render_scale", "3") && d.render_scale == 3);
+        REQUIRE(set_display_key(d, "render_scale", "x") && d.render_scale == 3);
+        REQUIRE(set_display_key(d, "hd_profile", "mmpx") &&
+                d.hd_profile == "mmpx");
+        REQUIRE(set_display_key(d, "music_device", "opl") &&
+                d.music_device == "opl");
+        REQUIRE(set_display_key(d, "sfx_backend", "sb-dac") &&
+                d.sfx_backend == "sb-dac");
+        REQUIRE(!set_display_key(d, "aspect", "4:3"));
+        REQUIRE(!set_display_key(d, "music_volume", "5"));
+    }
+
     return 0;
 }

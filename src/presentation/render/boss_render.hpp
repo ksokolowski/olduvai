@@ -29,7 +29,12 @@ using systems::L4BossState;
 using systems::L6BossState;
 
 struct BossAssets {
-    std::vector<std::uint8_t> bg;   // RGBA 320x200 (pip drain mutates it)
+    // RGBA 320x200, the arena as loaded; never changes after the load.
+    std::vector<std::uint8_t> bg_source;
+    // RGBA 320x200, the arena as shown: derived from bg_source by
+    // rebuild_arena_bg (classic: the fight's drained energy-bar columns;
+    // enhanced: the HUD strip cut out by the view).
+    std::vector<std::uint8_t> bg;
     std::vector<Sprite> spr;        // boss sprite atlas
     std::vector<Sprite> elem;       // arena body pieces (L2)
     std::vector<Sprite> h1, h2, h3, h4; // L6 body poses A/B/C + head sheet (H4)

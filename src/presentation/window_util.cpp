@@ -2,6 +2,9 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "presentation/window_util.hpp"
 
+#include "presentation/env_num.hpp"   // env_int
+
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 
@@ -24,40 +27,34 @@
 extern const unsigned char embedded_icon_png[];
 extern const unsigned long embedded_icon_png_len;
 
-#include <cstdio>
-
 #include "enhance/upscale.hpp"
 
 namespace olduvai::presentation {
 
-void pace_end_of_tick(SDL_Renderer* ren, SDL_Texture* tex, DosTicker& ticker,
-                      bool smooth_vsync_ran, bool vga_scan_enabled, bool hd,
-                      bool& vga_scan_ok, unsigned long* fill_presents,
-                      unsigned long* fill_ticks) {
+void TickPacer::end_tick(SDL_Renderer* ren, SDL_Texture* tex,
+                         bool smooth_vsync_ran, bool vga_scan, bool hd) {
     if (smooth_vsync_ran) {
         // The vsync render-fill already paced this tick to (about) frame_ms
         // via the panel; keep the ticker in phase without an extra sleep.
-        ticker.arm();
+        ticker_.arm();
         return;
     }
-    if (vga_scan_enabled && !hd && vga_scan_ok) {
-        // Hold-frame scanout: re-present the SAME uploaded frame every vblank
-        // until the tick expires.  Pixel-identical; vsync (implied for
-        // classic) paces each present.  A driver that REFUSED vsync returns
-        // instantly — three consecutive <1.5 ms presents disable the scanout
-        // for this level and fall back to timer pacing.
+    if (vga_scan && !hd && vga_scan_ok_) {
+        // Hold-frame scanout: re-present the same frame every vblank until the
+        // tick expires.  A driver that refused vsync returns instantly; three
+        // presents under 1.5 ms in a row switch to timer pacing for the level.
         int fast_presents = 0;
-        while (ticker.pending()) {
+        while (ticker_.pending()) {
             const Uint64 p0 = SDL_GetPerformanceCounter();
-            SDL_RenderClear(ren);
-            SDL_RenderCopy(ren, tex, nullptr, nullptr);
+            show_texture(ren, tex);
+            // Not present_output: this frame was dumped when first shown.
             SDL_RenderPresent(ren);
-            if (fill_presents != nullptr) ++*fill_presents;
+            ++fill_presents_;
             const double ms = (SDL_GetPerformanceCounter() - p0) * 1000.0 /
                               static_cast<double>(SDL_GetPerformanceFrequency());
             if (ms < 1.5) {
                 if (++fast_presents >= 3) {
-                    vga_scan_ok = false;
+                    vga_scan_ok_ = false;
                     std::fprintf(stderr,
                                  "pacing: vsync appears refused — "
                                  "vga-scan off, timer pacing\n");
@@ -67,15 +64,22 @@ void pace_end_of_tick(SDL_Renderer* ren, SDL_Texture* tex, DosTicker& ticker,
                 fast_presents = 0;
             }
         }
-        if (fill_ticks != nullptr) ++*fill_ticks;
-        if (ticker.pending()) ticker.wait_next();
-        else ticker.advance();
+        ++fill_ticks_;
+        if (ticker_.pending()) ticker_.wait_next();
+        else ticker_.advance();
         return;
     }
-    // Drift-free absolute-deadline wait at the DOS PIT rate — the old
-    // relative SDL_Delay oversleep-per-frame is what made classic feel
-    // choppier than DOSBox (owner report 2026-07-04).
-    ticker.wait_next();
+    // Absolute-deadline wait at the PIT rate (a relative SDL_Delay oversleeps
+    // every frame).
+    ticker_.wait_next();
+}
+
+void show_texture(SDL_Renderer* ren, SDL_Texture* tex, const SDL_Rect* dst) {
+    // Pinned: the renderer is shared, and a stale draw colour would tint the
+    // clear (the bars of a pillarbox).
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+    SDL_RenderClear(ren);
+    if (tex != nullptr) SDL_RenderCopy(ren, tex, nullptr, dst);
 }
 
 void upload_native_frame(SDL_Texture* tex, const FrameBuffer& fb, int hd_scale,
@@ -92,11 +96,18 @@ void upload_native_frame(SDL_Texture* tex, const FrameBuffer& fb, int hd_scale,
 LogicalDims aspect_logical(int scale, const std::string& aspect) {
     if (aspect == "stretch") return {0, 0};
     if (aspect == "4:3")     return {320 * scale, 240 * scale};
-    // "widescreen" without an active wide framebuffer (classic mode, or no
-    // coherent neighbor) falls back to keep — a clean pillarbox.  The active
-    // widescreen present path computes its own logical size from the wide
-    // framebuffer (320 + 2*margin) in run_platform_level.
+    // "widescreen" without a wide framebuffer (classic, no neighbour) falls
+    // back to keep; the wide present sets its own logical size (320 +
+    // 2*margin).
     return {320 * scale, 200 * scale};  // keep (default) / widescreen fallback
+}
+
+LogicalDims set_aspect_logical(SDL_Renderer* ren, int scale,
+                               const std::string& aspect) {
+    const LogicalDims ld = aspect_logical(scale, aspect);
+    SDL_RenderSetLogicalSize(ren, ld.w, ld.h);
+    SDL_RenderSetIntegerScale(ren, scale == 1 ? SDL_TRUE : SDL_FALSE);
+    return ld;
 }
 
 int desktop_integer_scale(int logical_w, int logical_h) {
@@ -128,107 +139,86 @@ int widescreen_default_w(const std::string& aspect, int base_w, int win_h,
     return w > base_w ? w : base_w;   // never NARROWER than the DOS window
 }
 
-ScaledWindow create_scaled_window(const char* title, int logical_w,
-                                  int logical_h, bool software, bool vsync,
-                                  const std::string& aspect, int win_w,
-                                  int win_h, bool integer_scale) {
+namespace {
+
+// --window WxH (e.g. 1680x720 to test ultrawide), else the integer-scaled
+// default.  --aspect widescreen without --window: a window of the desktop's
+// aspect, never wider than the desktop nor narrower than the default.  Only
+// that case is clamped: clamping the integer-scaled default shrank the 1280
+// default to 1024 on the headless driver.
+int initial_window_width(const WindowSpec& spec, int default_w, int win_h) {
+    if (spec.win_w > 0) return spec.win_w;
+    if (spec.aspect != "widescreen") return default_w;
+    SDL_Rect usable{0, 0, 0, 0};
+    double ratio = 0.0;
+    if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && usable.h > 0)
+        ratio = static_cast<double>(usable.w) / usable.h;
+    const int wide = widescreen_default_w(spec.aspect, default_w, win_h, ratio);
+    if (usable.w > 0 && wide > usable.w)
+        return usable.w > default_w ? usable.w : default_w;
+    return wide;
+}
+
+// --display-mode gpu = ACCELERATED, cpu = SOFTWARE; --vsync adds PRESENTVSYNC.
+// A refused create drops vsync first (a refused PRESENTVSYNC can fail the
+// whole create), then takes any driver.
+SDL_Renderer* create_renderer(SDL_Window* win, const WindowSpec& spec) {
+    const Uint32 base =
+        spec.software ? SDL_RENDERER_SOFTWARE : SDL_RENDERER_ACCELERATED;
+    SDL_Renderer* ren = SDL_CreateRenderer(
+        win, -1, spec.vsync ? base | SDL_RENDERER_PRESENTVSYNC : base);
+    if (ren == nullptr)
+        ren = SDL_CreateRenderer(win, -1,
+                                 spec.software ? SDL_RENDERER_SOFTWARE : 0);
+    if (ren == nullptr) ren = SDL_CreateRenderer(win, -1, 0);
+    return ren;
+}
+
+// OLDUVAI_FRAME_STATS: name the backend and whether it takes RGBA32 natively;
+// if not, SDL converts every full-screen upload on the CPU.
+void log_renderer_info(SDL_Renderer* ren) {
+    SDL_RendererInfo ri;
+    if (SDL_GetRendererInfo(ren, &ri) != 0) return;
+    const bool native = std::any_of(
+        ri.texture_formats, ri.texture_formats + ri.num_texture_formats,
+        [](Uint32 f) { return f == SDL_PIXELFORMAT_RGBA32; });
+    std::fprintf(stderr,
+                 "renderer: %s accel=%d vsync=%d max_tex=%dx%d "
+                 "rgba32_native=%s\n",
+                 ri.name != nullptr ? ri.name : "?",
+                 (ri.flags & SDL_RENDERER_ACCELERATED) ? 1 : 0,
+                 (ri.flags & SDL_RENDERER_PRESENTVSYNC) ? 1 : 0,
+                 ri.max_texture_width, ri.max_texture_height,
+                 native ? "yes" : "NO (SDL converts every upload)");
+}
+
+}  // namespace
+
+// Resizable: the margin recomputes on resize.
+ScaledWindow create_scaled_window(const WindowSpec& spec) {
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
-    const int k = desktop_integer_scale(logical_w, logical_h);
-    // Explicit --window WxH override (e.g. 1680x720 ≈ 21:9 to simulate an
-    // ultrawide viewport on a non-ultrawide panel for widescreen testing);
-    // otherwise the integer-scaled default.  RESIZABLE so the aspect can also be
-    // dragged at runtime (rebuild_ws_if_resized recomputes the margin).
-    const int win_px_h = win_h > 0 ? win_h : logical_h * k;
-    int win_px_w = win_w > 0 ? win_w : logical_w * k;
-    if (win_w <= 0 && aspect == "widescreen") {
-        // --aspect widescreen with no --window: give it a window it can
-        // actually be widescreen in (§3.25).  Only this case is touched —
-        // the integer-scaled default above is what every other aspect gets,
-        // desktop bounds included (clamping it to the desktop width here
-        // shrank the 1280 default to the headless driver's 1024 and failed
-        // first_run / reinit_smoke).
-        SDL_Rect usable{0, 0, 0, 0};
-        double ratio = 0.0;
-        if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && usable.h > 0)
-            ratio = static_cast<double>(usable.w) / usable.h;
-        const int wide = widescreen_default_w(aspect, win_px_w, win_px_h, ratio);
-        // Never wider than the desktop, but never narrower than the default.
-        win_px_w = (usable.w > 0 && wide > usable.w)
-                       ? (usable.w > win_px_w ? usable.w : win_px_w)
-                       : wide;
-    }
+    const int k = desktop_integer_scale(spec.logical_w, spec.logical_h);
+    const int win_px_h = spec.win_h > 0 ? spec.win_h : spec.logical_h * k;
+    const int win_px_w =
+        initial_window_width(spec, spec.logical_w * k, win_px_h);
     ScaledWindow sw;
-    // ALLOW_HIGHDPI so SDL_GetRendererOutputSize reports TRUE physical pixels
-    // on HiDPI/Retina displays (e.g. 2560x1600 backing a 1280x800-point
-    // window).  The scene texture still nearest-scales onto the logical canvas
-    // (SDL_RenderSetLogicalSize below), but the output-resolution vector-text
-    // overlay (presentation/text_overlay) draws at the physical pixel count, so
-    // HUD/label glyphs are crisp instead of being upscaled by the OS.
-    // Present as "Olduvai" everywhere the platform names the app rather than
-    // the window: X11 WM_CLASS / Wayland app_id (read at window creation) and
-    // the PulseAudio stream name.  macOS naming comes from the Info.plist
-    // (bundle) / embedded __info_plist section (bare CLI binary) instead.
+    // ALLOW_HIGHDPI so SDL_GetRendererOutputSize reports physical pixels on
+    // Retina, and the text overlay draws at that resolution.
+    // App name "Olduvai" for X11 WM_CLASS / Wayland app_id (read at window
+    // creation) and the PulseAudio stream; macOS takes it from the Info.plist.
 #ifdef SDL_HINT_APP_NAME
     SDL_SetHint(SDL_HINT_APP_NAME, "Olduvai");
 #endif
-    sw.win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED,
+    sw.win = SDL_CreateWindow(spec.title, SDL_WINDOWPOS_CENTERED,
                               SDL_WINDOWPOS_CENTERED, win_px_w, win_px_h,
                               SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI |
                                   SDL_WINDOW_RESIZABLE);
     if (sw.win == nullptr) return sw;
     set_window_icon(sw.win);
-    // --display-mode: gpu = SDL_RENDERER_ACCELERATED (GPU scaling),
-    // cpu = SDL_RENDERER_SOFTWARE (CPU window scaling).  --vsync adds
-    // PRESENTVSYNC on top (off by default; ignored by drivers that refuse).
-    Uint32 ren_flags =
-        software ? SDL_RENDERER_SOFTWARE : SDL_RENDERER_ACCELERATED;
-    if (vsync) ren_flags |= SDL_RENDERER_PRESENTVSYNC;
-    sw.ren = SDL_CreateRenderer(sw.win, -1, ren_flags);
-    if (sw.ren == nullptr) {
-        // Drop vsync first (a refused PRESENTVSYNC can fail the whole
-        // create), then fall back to any driver.
-        sw.ren = SDL_CreateRenderer(
-            sw.win, -1, software ? SDL_RENDERER_SOFTWARE : 0);
-    }
-    if (sw.ren == nullptr) sw.ren = SDL_CreateRenderer(sw.win, -1, 0);
-    // OLDUVAI_FRAME_STATS: name the backend and say whether our upload format
-    // is one it takes natively.
-    //
-    // WHY THIS IS WORTH THREE LINES.  Every frame uploads one full-screen
-    // buffer through SDL_UpdateTexture, and if RGBA32 is NOT in the renderer's
-    // format list SDL converts the whole thing on the CPU on the way in —
-    // megabytes per frame of pure waste, with nothing visibly wrong to notice
-    // it by.  It was about to be argued from memory of what SDL's GLES2
-    // backend maps ABGR8888 to.  Printing it costs one line at startup and
-    // settles it on whatever device is in front of us, which is the only place
-    // the answer actually matters.
-    if (sw.ren != nullptr && std::getenv("OLDUVAI_FRAME_STATS") != nullptr) {
-        SDL_RendererInfo ri;
-        if (SDL_GetRendererInfo(sw.ren, &ri) == 0) {
-            bool native = false;
-            for (Uint32 i = 0; i < ri.num_texture_formats; ++i)
-                if (ri.texture_formats[i] == SDL_PIXELFORMAT_RGBA32)
-                    native = true;
-            std::fprintf(stderr,
-                         "renderer: %s accel=%d vsync=%d max_tex=%dx%d "
-                         "rgba32_native=%s\n",
-                         ri.name != nullptr ? ri.name : "?",
-                         (ri.flags & SDL_RENDERER_ACCELERATED) ? 1 : 0,
-                         (ri.flags & SDL_RENDERER_PRESENTVSYNC) ? 1 : 0,
-                         ri.max_texture_width, ri.max_texture_height,
-                         native ? "yes" : "NO (SDL converts every upload)");
-        }
-    }
-    if (sw.ren != nullptr) {
-        const LogicalDims ld = aspect_logical(logical_w / 320, aspect);
-        SDL_RenderSetLogicalSize(sw.ren, ld.w, ld.h);
-        // Classic pixel integrity (roadmap OL-A1): whole-number scaling only
-        // — fullscreen at a non-multiple resolution otherwise nearest-samples
-        // at e.g. 1.5x and produces uneven pixel columns.  Letterboxes a bit
-        // more instead.  No-op for "stretch" (logical size disabled).
-        if (integer_scale && ld.w > 0)
-            SDL_RenderSetIntegerScale(sw.ren, SDL_TRUE);
-    }
+    sw.ren = create_renderer(sw.win, spec);
+    if (sw.ren == nullptr) return sw;
+    if (std::getenv("OLDUVAI_FRAME_STATS") != nullptr) log_renderer_info(sw.ren);
+    set_aspect_logical(sw.ren, spec.logical_w / 320, spec.aspect);
     return sw;
 }
 
@@ -259,8 +249,7 @@ bool enter_skip_allowed() {
     return (SDL_GetModState() & KMOD_ALT) == 0;
 }
 
-DosTicker::DosTicker() {
-    freq_ = SDL_GetPerformanceFrequency();
+DosTicker::DosTicker() : freq_(SDL_GetPerformanceFrequency()) {
     period_counts_ = static_cast<double>(freq_) * 65536.0 / 1193182.0;
     arm();
 }
@@ -278,7 +267,7 @@ void DosTicker::wait_next() {
     // Coarse sleep to ~1.5 ms before the deadline (SDL_Delay oversleeps),
     // then spin the rest for sub-ms landing.
     const double margin = static_cast<double>(freq_) * 0.0015;
-    double now = now0;
+    const double now = now0;
     if (now < next_ - margin) {
         const double remain_ms = (next_ - margin - now) * 1000.0 /
                                  static_cast<double>(freq_);
@@ -298,6 +287,11 @@ void DosTicker::advance() {
     const double now = static_cast<double>(SDL_GetPerformanceCounter());
     if (now > next_ + 2.0 * period_counts_) next_ = now + period_counts_;
     else next_ += period_counts_;
+}
+
+void maybe_auto_fullscreen(SDL_Window* win, int frame) {
+    if (win != nullptr && frame == env_int("OLDUVAI_AUTO_FULLSCREEN", -1))
+        SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP);
 }
 
 void cursor_autohide_frame() {
@@ -323,11 +317,8 @@ void cursor_autohide_frame() {
 }
 
 void set_window_icon(SDL_Window* win) {
-    // Decode the embedded logo and hand it to SDL.  Launchers get the icon
-    // from .desktop/.ico/.icns files, but Linux window managers take the
-    // RUNNING window's icon (alt-tab, taskbar) from the window itself.
-    // On macOS SDL applies it to the Dock icon of the running process
-    // (observed 2026-07-11 on SDL 2.30); Finder still uses the bundle .icns.
+    // Decode the embedded logo for the running window's icon (Linux WMs read it
+    // from the window; on macOS SDL sets the Dock icon; Finder uses the .icns).
     int w = 0, h = 0, comp = 0;
     unsigned char* px = stbi_load_from_memory(
         embedded_icon_png, static_cast<int>(embedded_icon_png_len),

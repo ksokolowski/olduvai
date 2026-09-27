@@ -1,25 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// CheatPicker — the --cheats power-up overlay (F7 opens; UP/DOWN select;
+// CheatPicker: the --cheats power-up overlay (F7 opens; UP/DOWN select;
 // ENTER/SPACE or 1-6 grant; ESC or F7 closes).  Pauses the world while open.
-//
-// BACKLOG §3.7 cluster 2.  The pause cluster turned out to be almost entirely
-// owned already — `PauseService` and `ReportFormService` are real types, and
-// `god_active` is a session flag rather than menu state.  What had no owner was
-// this: two locals, a names table, a shared row-label lambda, and a seven-branch
-// key block, all loose in `run_platform_level`.
-//
-// The row label is here rather than at the draw sites because BOTH of them —
-// the HD vector overlay and the classic bitmap path — must render the same
-// string, or the two look different for the same selection.
+// Both draw paths render row_label(), so HD and classic read the same.
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include <SDL.h>
 
+#include "enhance/canvas.hpp"
+#include "formats/mat.hpp"   // Sprite
+
+namespace olduvai::enhance { class HdText; }
+
 namespace olduvai::presentation {
+
+struct FrameBuffer;
 
 class CheatPicker {
 public:
@@ -45,6 +45,13 @@ public:
 
     // The bonus type behind row `i` (the picker's rows are bonus types 0-5).
     static const char* name(int i);
+
+    // The panel: HD in the vector font on the output-res overlay, classic in
+    // the game charset on the 320x200 frame.  Same layout.
+    void draw_hd(const enhance::Canvas& cv,
+                 const enhance::HdText& font) const;
+    void draw_native(FrameBuffer& f,
+                     const std::vector<formats::Sprite>& charset) const;
 
 private:
     bool open_ = false;

@@ -1,32 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// F5 in-game bug capture — non-interactive port of the Python reference's
-// bug-report pipeline.
-//
-// Writes a self-contained report directory under the bug-report root
-// (see bug_report_root() for how that root is resolved):
+// F5 in-game bug capture (non-interactive).  Writes a report directory under
+// bug_report_root():
 //   <root>/<YYYY-MM-DD_HHMMSS>_L<display>_S<screen>/
-//     state.json               — machine-readable snapshot (mirrors the
-//                                 Python schema so `op studio` can browse it)
-//     report.md                — prefilled human skeleton
-//     screenshot.png           — the current rendered frame
-//     screenshot_collision.png — frame + collision debug overlay
-//     screenshot_entities.png  — frame + entity debug overlay
-//
-// Unlike the Python path there is NO Tk dialog: olduvai writes every file
-// non-interactively and prints the created path to stdout.  The Python
-// dialog/subprocess machinery is deliberately
-// skipped.
+//     state.json               machine-readable snapshot (reference schema)
+//     report.md                prefilled skeleton
+//     screenshot.png           the rendered frame
+//     screenshot_collision.png frame + collision overlay
+//     screenshot_entities.png  frame + entity overlay
+// and prints the created path.
 
 #pragma once
 
-// Forward declarations, NOT <SDL.h>: src/app/main.cpp includes this header,
-// and on Windows SDL.h renames main() to SDL_main, which then needs SDL2main
-// at link time.  Including it here broke the MSVC link of olduvai.exe
-// (4d6a98f, red for two days); SDL.h belongs in the .cpp.
+// Forward declarations, not <SDL.h>: main.cpp includes this header, and on
+// Windows SDL.h renames main() to SDL_main (then needing SDL2main to link).
 struct SDL_Renderer;
 struct SDL_Window;
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -37,22 +28,8 @@ struct SDL_Window;
 
 namespace olduvai::presentation {
 
-// Write a complete bug-report directory for the current frame.
-//
-//   state            — the live systems state (player, entities, level flags)
-//   base_frame       — the composed gameplay FrameBuffer for this frame
-//                      (the clean screenshot.png source)
-//   entity_sprites   — LxSPR.MAT sprites (for the entity-overlay shot)
-//   display_level    — in-game level number (1..7)
-//   internal_level   — internal level id (assets/function-name space)
-//   overlay_scale    — HD render scale (1 classic, hd_scale otherwise)
-//
-// Returns the path of the written directory (relative to cwd), or an empty
-// string on failure.  On success the path is also printed to stdout as
-// "bug report: <path>".
-// Optional user annotations from the F5 form (tag / reproducibility /
-// free-text description).  Default-constructed = the pre-form behaviour
-// (tag "f5", reproducibility "unknown", empty description prompt).
+// Optional F5-form annotations (tag, reproducibility, description).  Default:
+// tag "f5", reproducibility "unknown", empty description.
 struct BugAnnotations {
     std::string tag;
     std::string reproducibility;
@@ -62,16 +39,9 @@ struct BugAnnotations {
     }
 };
 
-// Live PRESENT-PATH state, written into the report's Display section.
-//
-// WHY IT EXISTS.  A 2026-09-07 report read "widescreen mode gone after
-// alt+enter" and the report could not say whether widescreen was ACTIVE, what
-// margin was derived, or what logical size was set — none of it was recorded,
-// so the only evidence was a screenshot, and the screenshot was itself taken
-// through a viewport bug.  A display defect whose report carries no display
-// state costs a reproduction round every time.
-//
-// Default-constructed = "not supplied"; the section is then omitted.
+// Live present-path state for the report's Display section, so a display
+// defect's report carries the display state.  Default = not supplied (the
+// section is omitted).
 struct DisplayInfo {
     bool supplied = false;
     int out_w = 0, out_h = 0;        // SDL_GetRendererOutputSize
@@ -79,13 +49,9 @@ struct DisplayInfo {
     bool fullscreen = false;
     bool hd = false;
     int hd_scale = 1;
-    // The Aspect SETTING, verbatim (keep / widescreen / 4:3 / stretch).
-    // Carried separately from ws_active because the two answer different
-    // questions and only the pair is diagnostic: margin is computed ONLY when
-    // aspect == "widescreen", so a report of "widescreen gone" with margin 0
-    // is ambiguous without it — the peeks are off because the display is not
-    // wide enough, or because widescreen was never selected.  The report this
-    // field was added for was the second, and cost a day to reach without it.
+    // The Aspect setting verbatim (keep / widescreen / 4:3 / stretch).  The
+    // margin is computed only for "widescreen", so margin 0 alone cannot tell
+    // "display too narrow" from "widescreen not selected".
     std::string aspect;
     bool ws_active = false;          // widescreen actually composing
     int ws_margin = 0;               // derived peek margin, 0 = inactive
@@ -93,15 +59,14 @@ struct DisplayInfo {
     int upscale_threads = 1;
 };
 
-// The generic half of DisplayInfo, read live from the renderer and window
-// (output and logical size, fullscreen, upscale threads; `supplied` set).
-// Each driver adds its own HD and widescreen fields.
+// The generic part of DisplayInfo, read from the renderer and window (output
+// and logical size, fullscreen, upscale threads).  Drivers add HD and
+// widescreen fields.
 DisplayInfo read_display_info(SDL_Renderer* ren, SDL_Window* win);
 
-// A boss fight's own state, for a report written from the boss arena.  The
-// SystemsState passed alongside is then a synthesised snapshot (position,
-// lives, score, level), so the platform-only rows are written as n/a.
-// Default-constructed = a platform report; the section is omitted.
+// A boss fight's state for a report from the arena.  The SystemsState passed
+// with it is then synthesised (position, lives, score, level) and
+// platform-only rows read n/a.  Default = a platform report.
 struct BossInfo {
     bool supplied = false;
     int health = 0;        // counts down; the fight is won at 272
@@ -109,22 +74,36 @@ struct BossInfo {
     int frame = 0;         // fight frame
 };
 
-std::string write_bug_report(const systems::SystemsState& state,
-                             const FrameBuffer& base_frame,
-                             const std::vector<formats::Sprite>& entity_sprites,
-                             int display_level, int internal_level,
-                             int overlay_scale,
-                             const BugAnnotations& ann = {},
-                             bool has_presented = false,
-                             const DisplayInfo& display = {},
-                             const BossInfo& boss = {});
+// What a bug report records: the moment's state and its clean frame, the
+// level, the player's notes, and how the frame was shown.
+struct BugReport {
+    const systems::SystemsState& state;
+    const FrameBuffer& frame;   // the clean scene (screenshot.png)
+    const std::vector<formats::Sprite>& entity_sprites;
+    int display_level = 0;
+    int internal_level = 0;
+    BugAnnotations ann;
+    // A screenshot_presented.png joins it (HD or widescreen): the frame as
+    // the player saw it.
+    bool has_presented = false;
+    DisplayInfo display;
+    BossInfo boss;   // default: a platform report
+};
 
-// User-chosen bug-report root (play.json `bug_report_dir`, set by the app
-// after config merge).  "~"-prefixed values expand to the home directory.
+// The report's directory, or "" when none could be created.
+std::string write_bug_report(const BugReport& r);
+
+// write_bug_report, then — when the report has a presented frame — `redraw`
+// draws the frame as shown without presenting, and the renderer's output is
+// saved beside it (a post-present readback is black on Metal).
+void write_bug_report_as_shown(const BugReport& r, SDL_Renderer* ren,
+                               const std::function<void()>& redraw);
+
+// Bug-report root from play.json `bug_report_dir`; "~" expands to home.
 void set_bug_report_dir(const std::string& dir);
 
-// Resolve the directory new reports are written under:
-//   $OLDUVAI_BUG_DIR  >  set_bug_report_dir() value  >  <home>/olduvai/bug_reports
+// Where new reports go:
+//   $OLDUVAI_BUG_DIR > set_bug_report_dir() > <home>/olduvai/bug_reports
 // (home = $HOME, or %USERPROFILE% on Windows).
 std::string bug_report_root();
 

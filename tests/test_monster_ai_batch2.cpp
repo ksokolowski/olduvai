@@ -105,7 +105,11 @@ TEST_CASE("batch-2 handlers: 40-frame combined scenario, LCG seed 1") {
         update_snake(snake, f);
         update_animated_food_l3(afood, f);
         update_projectile_l3(proj, px);
-        update_monster_l7_a(l7a, px, py, f, nullptr, 0, false);
+        EntityTick t;
+        t.player_x = px;
+        t.player_y = py;
+        t.frame = f;
+        update_monster_l7_a(l7a, t);
         if (ghost.counter == 20) {   // pin the random bonus type
             ghost.mask = 3;
             ghost.counter = 22;

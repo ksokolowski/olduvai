@@ -25,7 +25,7 @@ void check_screen_transition(SystemsState& state);
 // Pre-roll the L3 trunk-descent smoke Y jitter from the GLOBAL LCG into
 // state.l3_descent_smoke_jitter.  Must be called logic-side (before any
 // blocking animation) so the 40 LCG draws are consumed in the correct order
-// regardless of replay/headless/enhanced mode — mirrors reference 789541c.
+// regardless of replay/headless/enhanced mode, as the reference does.
 // FUN_2276_03d9:0x0554 (smoke A) + 0x0586 (smoke B), iters 0..19.
 void roll_l3_descent_smoke_jitter(SystemsState& state);
 // L3/L7 cave-warp >>2 animation + the freeze==1000 teleports.

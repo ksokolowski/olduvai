@@ -67,7 +67,7 @@ int main(int /*argc*/, char** argv) {
         switch (idx) { case 29: return 30; case 28: return -1;
                        case 19: return 31; case 4: return 28; default: return idx; }
     };
-    for (int s = s0; s <= s1 && s < (int)tiles.screens.size(); ++s) {
+    for (int s = s0; s <= s1 && s < static_cast<int>(tiles.screens.size()); ++s) {
         systems::SystemsState st;
         st.current_level = level;
         ra.tiles.clear();
@@ -86,12 +86,12 @@ int main(int /*argc*/, char** argv) {
                 }
             }
         }
-        for (const auto& tp : tiles.screens[(std::size_t)s].tiles) {
+        for (const auto& tp : tiles.screens[static_cast<std::size_t>(s)].tiles) {
             const int idx = alias(tp.sprite_idx);
             if (idx >= 0) ra.tiles.push_back({idx, tp.x, tp.y});
         }
-        if (s < (int)objs.size())
-            st.entities = systems::spawn_screen_entities(objs[(std::size_t)s], mt);
+        if (s < static_cast<int>(objs.size()))
+            st.entities = systems::spawn_screen_entities(objs[static_cast<std::size_t>(s)], mt);
         for (auto& e : st.entities) if (e.sprite < 0) e.sprite = 0;
         st.player.sprite = -1;
         presentation::compose_frame(fb, st, ra);
@@ -100,8 +100,8 @@ int main(int /*argc*/, char** argv) {
         std::ofstream out(name, std::ios::binary);
         out << "P6\n320 200\n255\n";
         for (std::size_t i = 0; i < 320 * 200; ++i) {
-            out.put((char)fb.px[i*4]); out.put((char)fb.px[i*4+1]);
-            out.put((char)fb.px[i*4+2]);
+            out.put(static_cast<char>(fb.px[i*4])); out.put(static_cast<char>(fb.px[i*4+1]));
+            out.put(static_cast<char>(fb.px[i*4+2]));
         }
     }
     return 0;

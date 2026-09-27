@@ -90,13 +90,9 @@ void update_death(SystemsState& state) {
 
 namespace {
 
-// ── update_player's phases ───────────────────────────────────────────────────
-// Sequential phases, not alternatives: they run in this order every frame and
-// share one mutable local, `falling`, which phase 1 sets and phases 3 and 5
-// read (phase 4 can set it too, when the jump arc ends).  Passing it by
-// reference keeps that coupling VISIBLE in the signatures instead of hiding it
-// in a 149-line body.  Each prologue binds state members back to the names the
-// body already used, so every body below is a verbatim move.
+// ---- update_player's phases, in order every frame ----
+// `falling` is shared: phase 1 sets it, phase 4 can set it (the jump arc
+// ends), phases 3 and 5 read it.
 
 void probe_ground_and_fall(SystemsState& state, bool& falling) {
     PlayerState& p = state.player;
@@ -193,9 +189,9 @@ if (p.gravity_flag != 0) {
         if (p.gravity_flag == 2 && vel > 0x14 && (p.y_vel & 0x80) == 0)
             state.jump_apex_sfx_pending = true;
 
-        // Two INDEPENDENT checks (both can fire in the overlap range →
-        // y -= 3 total).  The vel guards mirror the original's unsigned
-        // wrap (vel < 8 made the comparison always false).
+        // Two independent checks (both can fire: y -= 3).  The vel guards
+        // reproduce the original's unsigned wrap (vel < 8 made the comparison
+        // always false).
         if (vel >= 8 && (vel - 8) < p.gravity_flag && p.gravity_flag < vel)
             p.y -= 1;
         if (vel >= 6 && p.gravity_flag < (vel - 6))
@@ -237,9 +233,8 @@ void update_player(SystemsState& state) {
     PlayerState& p = state.player;
     const InputState& inp = state.input;
 
-    // cave_warp_freeze tick.  On L3/L7 the cave-warp animation owns the
-    // counter via a per-frame >>2 (freeze & 3 != 0 pattern); suppress the
-    // -1 there so the bit pattern survives.
+    // cave_warp_freeze tick.  On L3/L7 the cave-warp animation owns the counter
+    // (a per-frame >>2, freeze & 3 != 0); skip the -1 so its bits survive.
     const bool warp_active = (state.current_level == 3 ||
                               state.current_level == 7) &&
                              (p.cave_warp_freeze & 3) != 0;
@@ -288,12 +283,10 @@ void clamp_player_position(SystemsState& state) {
 
 void check_death_by_fall(SystemsState& state) {
     if (state.player.y > 0xB4) {  // 180, all levels
-        // --god + in-flight: the preserved EXE balloon/glider death-respawn
-        // quirk respawns the player into an unescapable fall.  Faithful play
-        // ends it via game-over (finite lives); god's infinite lives loops
-        // forever.  Keep the flying caveman at the waterline (he can fly back
-        // up) instead of drowning.  god-only divergence; non-flight god falls
-        // still respawn normally.
+        // --god in flight: the EXE's balloon/glider death respawn drops the
+        // player into an unescapable fall, which infinite lives turn into a
+        // loop.  Keep them at the waterline instead (god only; grounded god
+        // falls respawn normally).
         if (state.god_mode && state.glider_active) {
             state.player.y = 0xB4;
             return;
@@ -309,11 +302,9 @@ void trigger_death(SystemsState& state) {
         p.ghost_rise = 1;
         p.death_counter = 1;
         p.energy = 0;
-        // Capture the death-display ("halo") here, at the death moment, while
-        // glider_active is still set — the post-frame death_counter==1 gate in
-        // the main loop is unreliable because update_death increments the
-        // counter past 1 before that gate runs (it never matched → the L5
-        // glider / L1 balloon death-halo never appeared, only the ghost).
+        // Capture the death halo now, while glider_active is still set:
+        // update_death moves death_counter past 1 before the post-frame == 1
+        // gate could see it.
         init_death_halo(state);
     }
 }
@@ -321,11 +312,9 @@ void trigger_death(SystemsState& state) {
 void hit_player(SystemsState& state, int damage) {
     PlayerState& p = state.player;
     if (p.hit_counter != 0 || p.death_counter != 0) return;  // entry guard
-    // Enhanced #18 v2 — a REAL hit landing during the frozen cave-emerge
-    // reveal cancels it cleanly (the freeze must never wedge the player).
-    // Placed AFTER the EXE entry guard: stale invulnerability from a hit
-    // taken before the cave exit does not cancel — only a new hit does.
-    // Enhanced-only; the classic emerge is draw-only and never freezes.
+    // Enhanced: a real new hit during the frozen cave-emerge cancels it.  After
+    // the EXE entry guard, so stale invulnerability from before the exit does
+    // not.
     if (state.enhanced_active) state.cave_emerge_frames = 0;
     if (p.energy > damage) {
         p.energy -= damage;
@@ -406,15 +395,10 @@ void respawn(SystemsState& state) {
     p.hit_blink = 0;
     state.cave_entrance_mask = 0;
     state.cave_descent_third_shown = false;   // pairs with the mask reset
-    // Restore the craft state of the restart point: a flight restart (L5
-    // glider / L1 balloon, saved at altitude) respawns the player back ON the
-    // glider/balloon so they can recover, instead of mid-air with no craft →
-    // unrecoverable fall.  Grounded restarts have restart_glider=false → normal.
-    // Intentional divergence from the Python oracle (which clears the
-    // flag unconditionally — its older soft-lock guard): both are engine-side
-    // guards with no EXE counterpart; this one is user-confirmed in playtest
-    // and the keeper (2026-07-03 review F3).  Oracle alignment tracked on the
-    // reference side.
+    // Restore the restart point's craft: a flight restart (saved at altitude)
+    // respawns on the glider/balloon.  An engine-side guard with no EXE
+    // counterpart; the reference clears the flag instead (divergence kept,
+    // confirmed in playtest).
     state.glider_active = p.restart_glider;
     state.flash_frames = 0;        // engine cosmetic guard
     if (state.timer == 0) state.timer = 50;   // timer recovery

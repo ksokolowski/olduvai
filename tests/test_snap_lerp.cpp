@@ -111,3 +111,40 @@ TEST_CASE("the pair matches the scalars when neither axis teleports") {
     CHECK(r.fx == doctest::Approx(snap_lerp_f(10, 14, 0.25f)));
     CHECK(r.fy == doctest::Approx(snap_lerp_f(20, 26, 0.25f)));
 }
+
+TEST_CASE("apply_interpolated: midpoints, snaps, and an exact restore") {
+    using namespace olduvai::presentation;
+    olduvai::systems::SystemsState s;
+    s.player.x = 100;
+    s.player.y = 50;
+    s.entities.resize(1);
+    s.entities[0].x = 10;
+    s.stone_state = 1;
+    s.stone_x = 0;
+    save_prev_positions(s);
+    // The tick moved things: player +8 (a walk), entity +40 (a respawn),
+    // stone +4.
+    s.player.x += 8;
+    s.entities[0].x += 40;
+    s.stone_x += 4;
+    const LogicPositions cur = save_logic_positions(s);
+
+    float pfx = 0, pfy = 0;
+    apply_interpolated(s, cur, 0.5f, /*force=*/false, pfx, pfy);
+    CHECK(s.player.x == 104);
+    CHECK(pfx == doctest::Approx(104.0f));
+    CHECK(s.entities[0].x == 50);   // over kSnapPx: snapped to cur
+    CHECK(s.stone_x == 2);
+
+    apply_interpolated(s, cur, 0.5f, /*force=*/true, pfx, pfy);
+    CHECK(s.player.x == 108);        // forced: every field snaps
+    CHECK(s.stone_x == 4);
+
+    s.player.x = -1;
+    s.entities[0].x = -1;
+    s.stone_x = -1;
+    restore_logic_positions(s, cur);
+    CHECK(s.player.x == 108);
+    CHECK(s.entities[0].x == 50);
+    CHECK(s.stone_x == 4);
+}

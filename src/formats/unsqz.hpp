@@ -1,26 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// SQZ decompressor — the LZW-compressed container some CD-era
-// distributions (notably the GOG release) ship the game executable in,
-// loaded there by a small self-extracting runner instead of a plain file.
-//
-// LZW is the classic generic dictionary coder (GIF, compress, and many
-// DOS-era packers).  Parameters of this variant:
-//   - 4-byte header: byte 1 high nibble = 0x1 (format tag);
-//     uncompressed size = 20 bits, (header[0] & 0x0F) << 16 | LE16(header+2)
-//   - codes packed MSB-first, width 9 growing to 12 as the dictionary
-//     fills (width grows when the next-free index reaches the current
-//     code ceiling — "early change")
-//   - code 0x100 = dictionary clear, 0x101 = dictionary reset
-//   - 0x101 does NOT terminate the stream: executables are packed as one
-//     continuous stream with periodic full resets (unlike the data-file
-//     flavour of the same coder, where 0x101 is the end marker).  The
-//     declared output size is the sole terminator.
-//
-// Behaviour validated against the reference implementation: the decoded
-// image byte-compares as a well-formed MZ executable of exactly the
-// declared size, and every table the prepare pipeline reads from it
-// matches the plain-file executable (see prepare/exe_tables.cpp).
+// SQZ decompressor: the LZW container some CD-era releases (GOG) ship the game
+// executable in.  This variant:
+//   - 4-byte header: byte 1 high nibble = 0x1 (format tag); uncompressed size
+//     20 bits = (header[0] & 0x0F) << 16 | LE16(header+2)
+//   - codes MSB-first, width 9 growing to 12 ("early change": when the next
+//     free index reaches the current ceiling)
+//   - 0x100 = dictionary clear, 0x101 = reset, not end of stream (executables
+//     are one stream with periodic resets); the declared size terminates.
+// Validated against the reference: a well-formed MZ image of exactly the
+// declared size, and every table prepare reads matches the plain executable.
 
 #pragma once
 

@@ -53,4 +53,11 @@ private:
     std::vector<Sprite> sprites_;
 };
 
+// Load a MAT archive's sprite list from an archive entry, or {} for a null
+// entry.  The art loaders (level art, boss arenas, menus, the end sequence)
+// all repeat `MatFile(*data, name).sprites()`, differing only in whether a
+// missing entry is fatal — which is the caller's guard, not ours.
+std::vector<Sprite> load_mat_sprites(const std::vector<std::uint8_t>* data,
+                                     const std::string& name);
+
 }  // namespace olduvai::formats

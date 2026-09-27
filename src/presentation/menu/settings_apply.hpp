@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Pure (no-SDL) classification of an Options change into how it must be
-// applied at runtime — Live (in-place), Reinit (window/audio rebuild via the
-// save→reinit→restore path), or PersistOnly (write config, applies next
-// launch).
+// Pure (no-SDL) classification of an Options change: Live (in place), Reinit
+// (window/audio rebuild through save -> reinit -> restore) or PersistOnly
+// (saved, applies next launch).
 #pragma once
 
 #include "presentation/menu/menu.hpp"
@@ -16,12 +15,8 @@
 
 namespace olduvai::presentation {
 
-// Mirrors the engine's HD sizing rule (game_app.cpp): HD is active only when
-// enhanced AND the profile is not "native"; scale caps at 4, else 2, else 1.
-// Is the HD substrate active?  `enhanced` alone is not enough — hd_profile
-// "native" means enhanced mode without upscaling, and every site that gates
-// on HD has to test both.  Both drivers open by re-deriving this expression
-// by hand; hd_scale_for already computed it internally and discarded it.
+// HD is active when enhanced and the profile is not "native" (enhanced
+// without upscaling); every HD gate must test both.
 bool hd_active(bool enhanced, const std::string& hd_profile);
 
 int hd_scale_for(bool enhanced, const std::string& hd_profile, int render_scale);
@@ -36,22 +31,30 @@ struct DisplaySettings {
     std::string sfx_backend = "auto";
 };
 
-// Decide how a single Options change (one key) must be applied, given the
-// current live settings.  `key` is a menu/config key; `new_value` is the
-// stringified target.  Only the audio/video keys are classified here; enhance.*
-// and cheat.* are handled by their own code paths.
+// The pipeline keys of the runtime options, verbatim ("" hd_profile stays
+// "").  A template so the menu layer needs no GameOptions include.
+template <class Opts>
+DisplaySettings display_settings_of(const Opts& o) {
+    return {o.enhanced, o.hd_profile, o.render_scale, o.music_device,
+            o.sfx_backend};
+}
+
+// Write one pipeline key (enhanced, render_scale, hd_profile, music_device,
+// sfx_backend) into `d`.  A malformed render_scale keeps the current value.
+// False for any other key.
+bool set_display_key(DisplaySettings& d, const std::string& key,
+                     const std::string& value);
+
+// How one Options change must be applied, given the live settings.  Audio and
+// video keys only; enhance.* and cheat.* have their own paths.
 ApplyTier classify_change(const std::string& key, const std::string& new_value,
                           const DisplaySettings& cur);
 
-// Set-aware classification: the staged display keys act TOGETHER.  A preset
-// that flips `enhanced` AND `hd_profile` crosses the classic<->HD scale
-// boundary even though neither key does alone against the same baseline —
-// per-key classification would call the whole set PersistOnly and the Apply
-// would visibly do nothing (the first-run Style->Enhanced report).  `staged`
-// is every (key, new_value) pair currently staged in the session; when the
-// jointly-overlaid target changes hd_scale_for, every display key in the set
-// classifies Reinit.  Non-display keys and non-boundary sets fall back to
-// classify_change.
+// Set-aware: staged display keys act together.  A preset flipping `enhanced`
+// and `hd_profile` crosses the classic <-> HD scale boundary though neither key
+// does alone; per-key classification would call it PersistOnly and Apply would
+// do nothing.  If the combined target changes hd_scale_for, every display key
+// in `staged` is Reinit; otherwise classify_change.
 ApplyTier classify_change_in_set(
     const std::string& key, const std::string& new_value,
     const DisplaySettings& cur,
@@ -59,13 +62,10 @@ ApplyTier classify_change_in_set(
 
 
 
-// One-click presentation preset (the GUI equivalent of --profile): fans the
-// session family's member for `preset` ("dos" = classic role, "hd" =
-// enhanced role; presentation/menu/profile_table.hpp) out through
-// MenuBindings::set so every key rides the normal staging/preview/confirm/
-// apply machinery.  Classic stages only `enhanced` and `aspect`.  "enhanced"
-// is set FIRST: sessions drain in stage order and the rebuild triggered by
-// the display keys must read the new master flag.
+// Style preset (the GUI --profile): fan the family member for `preset` ("dos"
+// / "hd", profile_table.hpp) through MenuBindings::set, so every key stages,
+// previews and applies normally.  Classic stages only `enhanced` and
+// `aspect`.  `enhanced` first: the rebuild must read the new master flag.
 void apply_preset(MenuBindings& bind, const std::string& preset);
 
 

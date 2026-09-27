@@ -57,7 +57,7 @@ void note_to_fnum_block(int adj_note, int& fnum, int& block) {
 // One operator's (R20, R40, R60, R80, RE0) bit-packs.  FUN_1fe0_0635..08b5.
 struct OpRegs { int r20, r40, r60, r80, re0; };
 OpRegs operator_registers(const OplSfxVoice& v, int waveform, int chan_vol) {
-    OpRegs r;
+    OpRegs r{};
     // R20+op: AM | Vib | EG | KSR | Multiplier
     r.r20 = (v.b[9]  ? 0x80 : 0) | (v.b[10] ? 0x40 : 0) |
             (v.b[5]  ? 0x20 : 0) | (v.b[11] ? 0x10 : 0) | (v.b[1] & 0x0f);

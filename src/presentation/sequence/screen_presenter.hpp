@@ -1,28 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// ScreenPresenter — the PresentFn both drivers hand to the non-gameplay
-// screens: the loading card, the score tally, the fades, the transitions and
-// the L3 descent.
-//
-// BACKLOG §3.7 cluster 3, first slice.  Both drivers had this as a lambda over
-// their prologue — `present` in game_app, `lpresent` in boss_app — and both are
-// the same five steps:
-//
-//     poll  ->  compose  ->  [gate dump]  ->  present  ->  pace
-//
-// Only `compose` genuinely differs, so only `compose` is a parameter.  §3.14b
-// refused to merge these while that compose difference was tangled up with
-// eight surface members each; with LevelSurface owning those, what is left is
-// one type with two compose steps, which is the honest version of that merge.
-//
-// PACING IS NOW THE SAME ON BOTH, AND THAT IS A FIX.  game_app absorbed the
-// compose cost into the frame budget; boss_app slept a flat 1000/18 on top of
-// it.  The absorbing form exists because an unconditional delay made the L3
-// descent ~91 ms a frame at omniscale x4 (~11 fps, the stutter that prompted
-// it).  boss_app's screens are the same whole-frame upscales — the loading
-// card, the post-win fade, the classic tally — so they carried the same
-// latency, unnoticed because they are short.  One screen, two stacks, two
-// behaviours: the §3.14 pattern once more, in the pacing this time.
+// The PresentFn both drivers hand to the non-gameplay screens (loading card,
+// tally, fades, transitions, L3 descent):
+//     poll -> compose -> [gate dump] -> present -> pace
+// Only `compose` differs per driver.  Pacing absorbs the compose cost into the
+// frame budget (a flat delay on top made the L3 descent ~11 fps at omniscale
+// x4).
 #pragma once
 
 #include <cstdint>
@@ -40,8 +23,7 @@ namespace olduvai::presentation {
 class ScreenPresenter {
 public:
     // `compose(frame, do_present)` draws one frame and presents it unless the
-    // gate dump is about to read the backbuffer — Metal reads black after a
-    // present, so in dump mode the presenter presents by hand instead.
+    // gate dump will read the backbuffer (black on Metal after a present).
     using ComposeFn = std::function<void(const FrameBuffer&, bool do_present)>;
 
     ScreenPresenter(LevelSurface& surface, ComposeFn compose, Uint32 frame_ms)
@@ -49,8 +31,8 @@ public:
           compose_(std::move(compose)),
           frame_ms_(frame_ms) {}
 
-    // Name the screen about to be presented, so the gate can attribute its
-    // frames and each screen counts its own.  Null env = not gating.
+    // Name the screen about to be presented, so each gates and counts its own
+    // frames.  Null env = not gating.
     void begin_screen(const char* dump_env, const char* dump_tag) {
         dump_env_ = dump_env;
         dump_tag_ = dump_tag;
@@ -58,18 +40,9 @@ public:
     }
     void end_screen() { dump_env_ = nullptr; }
 
-    // Run ONE text screen end to end: build its HD text handle when this
-    // session has vector text, name the screen so the gate can attribute its
-    // frames, run `body`, and drop the attribution again.  Returns what body
-    // returned — false = the player quit.
-    //
-    // WHY.  The SCREENS have been shared since §3.14 (one show_loading_screen,
-    // one show_score_tally, both drivers); the four lines of wiring around
-    // them were not, and were spelled out four times — loading card and tally,
-    // in each driver — with two TextScreenHd locals per driver carried down
-    // the function to reach them.  The clone detector cannot see it: the call
-    // in the middle differs, which is exactly the shape §4b warns about (one
-    // concept, two bodies).
+    // Run one text screen: build its HD text handle when vector text is on,
+    // name it for the gate, run `body`, clear the name.  Returns body's result
+    // (false = the player quit).
     bool text_screen(const TextScreenDeps& deps, bool hd_ok,
                      const char* dump_env, const char* dump_tag,
                      const std::function<bool(const TextScreenHd&)>& body) {
@@ -83,17 +56,17 @@ public:
 
     bool operator()(const FrameBuffer& f) {
         const Uint32 t0 = SDL_GetTicks();
-        // ESC is inert on every screen this drives — none has a menu wired, and
-        // aborting here used to drop a WON fight to game-over.  The poll still
-        // DRAINS, so keys mashed on the previous screen cannot leak in.
+        // ESC is inert on these screens (no menu; a won fight must not become a
+        // game over).  The poll still drains, so keys from the previous screen
+        // cannot leak in.
         if (!poll_screen_events(surface_->win())) return false;
         const bool gating =
             dump_env_ != nullptr && std::getenv(dump_env_) != nullptr;
         compose_(f, /*do_present=*/!gating);
         if (gating) {
             const bool more =
-                capture_gate_frame(surface_->ren(), surface_->lsz(), dump_env_,
-                                   dump_tag_, dump_seq_);
+                capture_gate_frame(surface_->ren(), dump_env_, dump_tag_,
+                                   dump_seq_);
             present_output(surface_->ren());
             if (!more) return false;
         }

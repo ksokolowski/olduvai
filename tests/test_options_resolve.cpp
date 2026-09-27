@@ -396,6 +396,37 @@ TEST_CASE("layers: --profile beats play.json and sets the family") {
     CHECK(lc.merged.at("hd_profile") == "omniscale");
 }
 
+TEST_CASE("layers: a handheld device defaults to the Nintendo button layout") {
+    // Both handhelds print Nintendo labels on SDL's positions, so the
+    // device default puts jump and confirm on the right button (printed A).
+    for (const char* dev : {"hd-handheld", "dos-handheld"}) {
+        const LayeredConfig lc = layer_config({}, "", dev);
+        CHECK(lc.merged.at("pad_jump") == "b");
+        CHECK(lc.merged.at("pad_attack") == "a");
+        CHECK(lc.merged.at("pad_confirm") == "b");
+        CHECK(lc.merged.at("pad_back") == "back");
+        CHECK(lc.merged.at("pad_pause") == "start");
+    }
+    // A desktop default sets no pad keys: the engine default (Xbox) stands.
+    CHECK(layer_config({}, "", "hd").merged.count("pad_jump") == 0);
+}
+
+TEST_CASE("layers: the player's own mapping beats the device layout") {
+    const LayeredConfig lc =
+        layer_config({{"pad_jump", "y"}, {"pad_attack", "x"}}, "", "hd-handheld");
+    CHECK(lc.merged.at("pad_jump") == "y");      // play.json wins
+    CHECK(lc.merged.at("pad_attack") == "x");
+    CHECK(lc.merged.at("pad_back") == "back");   // the default fills the rest
+}
+
+TEST_CASE("layers: --profile does not touch the button layout") {
+    // The Style switch and --profile move within a family; the layout is a
+    // DEVICE default, so choosing Enhanced never resets a player's mapping.
+    const LayeredConfig lc = layer_config({{"pad_jump", "a"}}, "hd-handheld", "");
+    CHECK(lc.merged.at("pad_jump") == "a");
+    CHECK(lc.merged.count("pad_attack") == 0);
+}
+
 TEST_CASE("layers: CLI flags still beat every layer") {
     PlaySettings s;
     s.render_scale = 2;
@@ -440,4 +471,59 @@ TEST_CASE("save-config: the file, --profile and CLI keys — never the default l
 
 TEST_CASE("profiles: dos-handheld pins exactly what dos pins") {
     CHECK(builtin_profile("dos-handheld") == builtin_profile("dos"));
+}
+
+TEST_CASE("save-config: every setting the command line stated, as --help says") {
+    // It wrote six of the fifteen once: `--music-device opl --save-config`
+    // saved nothing about the device.
+    PlaySettings s;
+    s.music_device = "opl";
+    s.cli.music_device = true;
+    s.autofire = "slow";
+    s.cli.autofire = true;
+    s.transitions = "classic";
+    s.cli.transitions = true;
+    s.vga_scan = false;
+    s.cli.vga_scan = true;
+    const Config out = config_to_save({}, "", s, "");
+    CHECK(out.at("music_device") == "opl");
+    CHECK(out.at("autofire") == "slow");
+    CHECK(out.at("transitions") == "classic");
+    CHECK(out.at("vga_scan") == "false");
+    CHECK(out.count("sfx_backend") == 0);   // not stated: not saved
+}
+
+TEST_CASE("save-config then merge: every CLI-stated setting round-trips") {
+    PlaySettings s;
+    s.enhanced = true;               s.cli.enhanced = true;
+    s.enhance_list = "smooth";
+    s.render_scale = 2;              s.cli.scale = true;
+    s.vga_scan = false;              s.cli.vga_scan = true;
+    s.autofire = "medium";           s.cli.autofire = true;
+    s.hd_profile = "xbr";            s.cli.hd = true;
+    s.music_device = "gm-builtin";   s.cli.music_device = true;
+    s.sfx_backend = "sb-dac";        s.cli.sfx_backend = true;
+    s.display_mode = "cpu";          s.cli.display_mode = true;
+    s.transitions = "classic";       s.cli.transitions = true;
+    s.hd_font = "noto";              s.cli.hd_font = true;
+    s.banner_fx = "gold";            s.cli.banner_fx = true;
+    s.aspect = "4:3";                s.cli.aspect = true;
+    s.cli.game_dir = true;
+    PlaySettings back;
+    merge_config(back, config_to_save({}, "", s, "/games"));
+    CHECK(back.enhanced == s.enhanced);
+    CHECK(back.enhance_list == s.enhance_list);
+    CHECK(back.render_scale == s.render_scale);
+    CHECK(back.vga_scan == s.vga_scan);
+    CHECK(back.autofire == s.autofire);
+    CHECK(back.hd_profile == s.hd_profile);
+    CHECK(back.music_device == s.music_device);
+    CHECK(back.sfx_backend == s.sfx_backend);
+    CHECK(back.display_mode == s.display_mode);
+    CHECK(back.transitions == s.transitions);
+    CHECK(back.hd_font == s.hd_font);
+    CHECK(back.banner_fx == s.banner_fx);
+    CHECK(back.aspect == s.aspect);
+    CHECK(back.game_dir == "/games");
+    CHECK(back.config_game_dir);
 }

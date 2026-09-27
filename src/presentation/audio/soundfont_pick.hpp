@@ -1,17 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Pure SoundFont-selection precedence — SDL-free and filesystem-free so it can
-// be unit-tested by injecting the `exists` predicate.  find_soundfont() in
-// audio.cpp supplies the real directories, name list, and a real fs predicate.
-//
-// Precedence:
-//   1. The user's config dir (~/.config/olduvai/soundfonts) is an absolute
-//      override location: if it holds ANY recognised font, the highest-
-//      preference name there wins.
-//   2. System-wide, the most-preferred *font identity* wins regardless of which
-//      system directory holds it — so a preferred face in one dir beats a
-//      less-preferred face in another (Roland SC-55 in /usr/share/scummvm beats
-//      FluidR3_GM in /usr/share/sounds/sf2).
+// SoundFont selection precedence, pure (the `exists` predicate is injected for
+// tests; find_soundfont() in audio.cpp supplies the real ones):
+//   1. ~/.config/olduvai/soundfonts overrides: if it holds any recognised
+//      font, the most-preferred name there wins.
+//   2. Otherwise the most-preferred font wins whichever system dir holds it
+//      (SC-55 in /usr/share/scummvm beats FluidR3_GM in /usr/share/sounds/sf2).
 #pragma once
 
 #include <cstdlib>
@@ -21,15 +15,9 @@
 
 namespace olduvai::presentation {
 
-// The system directories to search, per platform.  This lives beside the
-// selection rule — and is a FUNCTION rather than a literal at the call site —
-// because the rule was unit-tested while its INPUTS were not, and the bug was
-// entirely in the inputs: the list held the three Linux paths only, so on
-// macOS a user who followed our own advice (`brew install scummvm`) had
-// Roland_SC-55.sf2 at /opt/homebrew/share/scummvm and the engine looked in
-// /usr/share/scummvm, which does not exist there.  GM stayed silent with no
-// explanation.  A pure function can be pinned per platform by a test; a
-// literal buried in audio.cpp could not be.
+// The system directories to search, per platform; a function so a test pins
+// each platform's list (Homebrew installs to /opt/homebrew/share, not
+// /usr/share).
 inline std::vector<std::string> default_soundfont_dirs() {
     std::vector<std::string> dirs;
 #ifdef __APPLE__

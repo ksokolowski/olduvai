@@ -51,12 +51,7 @@ void set_away_sprite(Entity& e, int l3a_phase_counter) {
     e.sprite = use_alt ? e.alt_away_spr : e.away_spr;
 }
 
-// What every state handler reads about the world this tick.  A struct rather
-// than eight parameters threaded through six functions (§3.9's parameter
-// bar), and each handler's prologue binds the members straight back to the
-// names its body already used — so the bodies below are VERBATIM moves out of
-// the old single-function state machine, which is what keeps this refactor
-// out of the oracle's way.
+// What every state handler reads about the world this tick.
 struct MonsterCtx {
     int px;
     int py;
@@ -125,9 +120,7 @@ void tick_spawn(Entity& e) {
 }
 
 // Edge or obstacle ahead: clamp into the walkable band, reverse, then step
-// back until both probes are clear again.  Split out of tick_heading_player,
-// which sat at exactly 50 — clang-tidy's threshold — so neither half is on the
-// line.  Verbatim move; the 320-step cap is the original's.
+// back until both probes are clear (capped at 320 steps, as the original).
 void recover_from_edge(Entity& e, const MonsterCtx& c) {
     const CollisionBitmap* collision = c.collision;
     const int di = c.di, si = c.si;
@@ -147,9 +140,8 @@ void recover_from_edge(Entity& e, const MonsterCtx& c) {
 }
 
 // Fire-monster fireball spawn + attack sprite.  // +0x0d95..0x0e1c
-// LOS direction uses the ACTUAL player position (intentional divergence from
-// the stored-direction X-check; owner gameplay memory — no visible backward
-// fire in the original).
+// Line of sight uses the actual player position (intentional divergence from
+// the stored-direction X check; the original never fires backwards).
 void request_fireball_if_in_line(Entity& e, const MonsterCtx& c) {
     const int px = c.px, py = c.py;
     if (e.obj_type == ObjType::YellowFuzz && !c.fireball_active) {
@@ -217,15 +209,10 @@ void tick_running_away(Entity& e, const MonsterCtx& c) {
     const int l3a_phase_counter = c.l3a_phase_counter;
     const bool axe_powered = c.axe_powered;
     const int di = c.di, si = c.si;
-    // Tick-parity gate (+0x0f5e): the MOVEMENT is even-frame only.  The
-    // sprite/facing/counter tail below runs on every frame either way.
-    //
-    // The EXE writes that tail out twice — once per branch, at +0x10c9 and
-    // +0x10A0 — and so did this, verbatim, for fourteen lines.  Hoisting it
-    // is the same execution in both parities: on an odd frame the movement
-    // is skipped and the tail runs; on an even frame the movement runs and
-    // then the tail.  A structural divergence from the EXE, not a
-    // behavioural one, which is the ordinary trade this port makes.
+    // Tick parity (+0x0f5e): movement on even frames only; the sprite / facing
+    // / counter tail below runs every frame.  The EXE writes that tail in both
+    // branches (+0x10c9, +0x10A0); running it once after the movement is the
+    // same execution.
     if (!(frame & 1)) {
         // Direction sense reversed from HEADING.
         if (e.direction != 0) e.x += 8;
@@ -271,16 +258,39 @@ void tick_running_away(Entity& e, const MonsterCtx& c) {
     }
 }
 
+// Shared TYPE 0x09 / 0x24 jump arc: ascend with dy decelerating to 0, descend
+// to +20, reset to y 220.  The two differ only in visibility while surfacing
+// and the reset hook.  Evidence: fish dispatcher +0x075c, chimp L7
+// +0x1b3b..0x1be0.  Returns true at the bottom (the caller's reset hook).
+bool tick_fish_arc(Entity& e, bool mark_visible) {
+    if (e.state == 0) {  // ascending
+        e.sprite = kSprFishUp;
+        e.y -= e.dy;
+        --e.dy;
+        if (mark_visible && e.y < core::CollisionBitmap::kHeight)
+            e.visible = true;
+        if (e.dy == 0) e.state = 1;
+    } else {             // descending
+        e.sprite = kSprFishDown;
+        e.y += e.dy;
+        ++e.dy;
+        if (e.dy == 20) {
+            e.state = 0;
+            e.y = 220;
+            return true;   // arc bottom: caller's reset hook
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
-void update_monster(Entity& e, int px, int py, int frame,
-                    const CollisionBitmap* collision,
-                    int l3a_phase_counter, bool axe_powered,
-                    bool fireball_active) {
+void update_monster(Entity& e, const EntityTick& t) {
     // One handler per state; every branch of the old chain already ended in
     // `return`, so this dispatch is the same control flow it replaced.
-    const MonsterCtx c{px, py, frame, collision, l3a_phase_counter,
-                       axe_powered, fireball_active, e.probe_di, e.probe_si};
+    const MonsterCtx c{t.player_x, t.player_y, t.frame, t.collision,
+                       t.l3a_phase_counter, t.axe_powered, t.fireball_active,
+                       e.probe_di, e.probe_si};
 
     const int st = state_of(e);
     if (st >= static_cast<int>(MonsterState::Dead))          tick_dead(e);
@@ -295,21 +305,8 @@ void update_monster(Entity& e, int px, int py, int frame,
 
 void update_fish(Entity& e) {
     // TYPE 0x09 jump arc; dy stores the velocity.  // dispatcher +0x075c
-    if (e.state == 0) {  // ascending
-        e.sprite = kSprFishUp;
-        e.y -= e.dy;
-        --e.dy;
-        if (e.y < core::CollisionBitmap::kHeight) e.visible = true;
-        if (e.dy == 0) e.state = 1;
-    } else {             // descending
-        e.sprite = kSprFishDown;
-        e.y += e.dy;
-        ++e.dy;
-        if (e.dy == 20) {   // +0x07cf..0x07d7: reset; x and dy untouched
-            e.state = 0;
-            e.y = 220;
-            e.visible = false;
-        }
+    if (tick_fish_arc(e, /*mark_visible=*/true)) {
+        e.visible = false;   // +0x07cf..0x07d7: reset; x and dy untouched
     }
 }
 
@@ -348,15 +345,14 @@ void update_rock(Entity& e) {
     e.visible = true;
 }
 
-void update_monster_l7_a(Entity& e, int px, int py, int frame,
-                         const CollisionBitmap* collision,
-                         int l3a_phase_counter, bool axe_powered) {
+void update_monster_l7_a(Entity& e, const EntityTick& t) {
     // TYPE 0x26: dormant until the player comes within 70 px of init_x;
     // afterwards the shared state machine runs.  // dispatcher +0x1ca5
-    const bool out_of_range = std::abs(px - e.init_x) > 0x46;
+    const bool out_of_range = std::abs(t.player_x - e.init_x) > 0x46;
     if (e.state != 0 || !out_of_range) {
-        update_monster(e, px, py, frame, collision, l3a_phase_counter,
-                       axe_powered, /*fireball_active=*/false);
+        EntityTick no_fireball = t;
+        no_fireball.fireball_active = false;
+        update_monster(e, no_fireball);
     }
     if (e.state == 0) {  // dormant: static lava-bubble at the init position
         e.x = e.init_x;
@@ -461,29 +457,17 @@ void update_chimp(Entity& e) {
 void update_chimp_l7(Entity& e) {
     // TYPE 0x24: structurally a fish arc; x scatters into the anchor range
     // on reset via the shared LCG.  // dispatcher +0x1b3b..0x1be0
-    if (e.state == 0) {
-        e.sprite = kSprFishUp;
-        e.y -= e.dy;
-        --e.dy;
-        if (e.dy == 0) e.state = 1;
-    } else {
-        e.sprite = kSprFishDown;
-        e.y += e.dy;
-        ++e.dy;
-        if (e.dy == 20) {
-            e.state = 0;
-            e.y = 220;
-            const int rng = core::global_rng().next();
-            const int width = e.anchor_a - e.anchor_b;
-            e.x = (width > 0) ? rng % width + e.anchor_b : rng % 0xD2;
-        }
+    if (tick_fish_arc(e, /*mark_visible=*/false)) {
+        const int rng = core::global_rng().next();
+        const int width = e.anchor_a - e.anchor_b;
+        e.x = (width > 0) ? rng % width + e.anchor_b : rng % 0xD2;
     }
 }
 
 void update_pterodactyl_l7(Entity& e, int frame) {
     // TYPE 0x23: cosmetic dual-sprite lava bubbles.  Sub-counters advance on
-    // even frames; phase wrap scatters x via the shared LCG.  Logical phase
-    // ranges map onto the 3-frame physical sprite groups.
+    // even frames; the phase wrap scatters x via the shared LCG.  Phase ranges
+    // map to 3-frame sprite groups.
     const bool even_frame = (frame & 1) != 0;
 
     e.sprite = (e.body_phase - 0x38) % 3 + 55;
@@ -578,11 +562,9 @@ void update_cave_spider(Entity& e) {
 
 void update_cave_bat(Entity& e, int frame) {
     // TYPE 0x17: random flutter inside the cave bounds on even frames; wing
-    // toggle via mask bit 0; mask bit 1 = dead.  Flutter randomness routes
-    // through the shared LCG with the SAME draws in the SAME order as the
-    // reference engine (rand_lcg16()%7-3, %11-5, even-
-    // frame gated).  This IS part of the shared-sequence parity contract:
-    // changing the draw pattern here forks every later RNG event.
+    // toggle = mask bit 0, dead = bit 1.  The flutter draws (rand_lcg16()%7-3,
+    // %11-5, even frames) are part of the shared RNG sequence: changing them
+    // forks every later random event.
     if (e.mask & 2) return;
     const int cave_left = e.y_top;
     const int cave_right = e.y_bottom;
@@ -628,8 +610,8 @@ void update_animated_food_l3(Entity& e, int frame) {
 void update_bonus(Entity& e, int px, int frame) {
     (void)frame;
     // TYPE 0x05 ancestor ghost.  Rising-bonus mode (mask bit 7) follows the
-    // player's x while the icon arcs (-20 → +20, step +4); on completion
-    // bonus_pending signals Bonus_Activate to the game loop.
+    // player's x while the icon arcs (-20 -> +20, step 4); on completion
+    // bonus_pending triggers Bonus_Activate.
     if (e.mask & 0x80) {
         const int bonus_type = e.mask & 0x7F;
         if (bonus_type >= 0 && bonus_type < 6) {
@@ -732,19 +714,13 @@ void update_projectile_l3(Entity& e, int px) {
 
 void refresh_entity_sprites_on_screen_bind(std::vector<Entity>& entities,
                                            int l3a_phase_counter) {
-    // The EXE dispatcher (FUN_2A04_0003 + FUN_27f7_093d) re-COMPUTES the
-    // sprite from state every frame; the engine STORES it in the entity.
-    // The first frame after a screen bind composes BEFORE any entity
-    // update, so without this the stored value leaks into that frame:
-    // init_spr placeholders on first entry, last-visit stale frames on
-    // re-entry — and the slide transition displays that frame for its
-    // whole duration.  Mirrors the reference fix (commit d4c8f39,
-    // finding wrong_sprite_one_frame_on_screen_entry.md).
+    // The EXE recomputes sprites from state every frame (FUN_2A04_0003 +
+    // FUN_27f7_093d); we store them.  The first frame after a bind composes
+    // before any update, so recompute here or an init placeholder / stale
+    // sprite shows for the whole slide transition.
     for (Entity& e : entities) {
         if (!e.active || !e.visible) continue;
-        // Only the shared state machine drives sprite from state in a
-        // way that disagrees with the stored value.  MonsterL7A runs
-        // its own gated handler — excluded in the reference too.
+        // Only the shared state machine; MonsterL7A has its own handler.
         if (!is_monster(e.obj_type) ||
             e.obj_type == ObjType::MonsterL7A) {
             continue;
@@ -769,20 +745,20 @@ void refresh_entity_sprites_on_screen_bind(std::vector<Entity>& entities,
 }
 
 UpdateEntitiesResult update_entities(std::vector<Entity>& entities,
-                                     int player_x, int player_y, int frame,
-                                     const CollisionBitmap* collision,
-                                     int l3a_phase_counter, bool kill_all,
-                                     bool axe_powered, bool fireball_active) {
+                                     const EntityTick& tick) {
     UpdateEntitiesResult out;
+    EntityTick t = tick;
     // L3A global phase: increments on even frames, wraps at 32.  // +0x1291
-    if ((frame & 1) == 0) l3a_phase_counter = (l3a_phase_counter + 1) & 0x1F;
-    out.l3a_phase_counter = l3a_phase_counter;
+    if ((t.frame & 1) == 0)
+        t.l3a_phase_counter = (t.l3a_phase_counter + 1) & 0x1F;
+    out.l3a_phase_counter = t.l3a_phase_counter;
+    const int player_x = t.player_x;
+    const int frame = t.frame;
 
-    // Bomb power-up pre-dispatch: every live monster → permanent KO (state 5,
-    // ko_counter 8000 unless a shorter KO is already running); respawn count
-    // cleared unconditionally.  KO (not DEAD) so body-collect still yields
-    // food/score.  // FUN_27f7_093d +0x0a0f..0x0a33
-    if (kill_all) {
+    // Bomb power-up: every live monster -> permanent KO (state 5, ko_counter
+    // 8000 unless a shorter KO runs), respawn count cleared.  KO, not dead, so
+    // the body still yields food/score.  // FUN_27f7_093d +0x0a0f..0x0a33
+    if (t.kill_all) {
         for (Entity& e : entities) {
             if (!e.active || !is_monster(e.obj_type)) continue;
             e.respawns = 0;
@@ -812,17 +788,14 @@ UpdateEntitiesResult update_entities(std::vector<Entity>& entities,
                     e.respawns > 0) {
                     out.screen_clear_of_monsters = false;
                 }
-                update_monster(e, player_x, player_y, frame, collision,
-                               l3a_phase_counter, axe_powered,
-                               fireball_active);
+                update_monster(e, t);
                 break;
             case ObjType::MonsterL7A:
                 if (e.state < static_cast<int>(MonsterState::Dead) ||
                     e.respawns > 0) {
                     out.screen_clear_of_monsters = false;
                 }
-                update_monster_l7_a(e, player_x, player_y, frame, collision,
-                                    l3a_phase_counter, axe_powered);
+                update_monster_l7_a(e, t);
                 break;
             case ObjType::Fish:
                 update_fish(e);

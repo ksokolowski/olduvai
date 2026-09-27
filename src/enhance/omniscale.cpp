@@ -66,7 +66,7 @@ std::vector<std::uint8_t> omniscale(const std::vector<std::uint8_t>& rgba,
                                   4);
     const int W = w * s;
 
-    // §3.22: the y-loop splits across a persistent pool.  Bit-identical, not
+    // The y-loop splits across a persistent pool.  Bit-identical, not
     // merely equivalent — input row y writes output rows [y*s, y*s+s) via the
     // `o` index below, so bands never share an output byte, and `src`/`hq` are
     // finished before this loop and only read inside it.  The body is
@@ -135,8 +135,24 @@ std::vector<std::uint8_t> omniscale(const std::vector<std::uint8_t>& rgba,
                         return mix(inner, w1, px * 2.0f);
                     };
 
-                    V4 res;
-                    // Rule chain (shader order; first match returns).
+                    // The two opposite-corner rules shared the same
+                    // clamped-distance blend — the px+2py and py+2px arms were
+                    // byte-identical once `dist` was known.
+                    auto blend_opposite_corner = [&](float dist) -> V4 {
+                        if (dist > 1.0f + pixel_size5 / 2.0f) return w4;
+                        const V4 r = diag_r();
+                        return dist < 1.0f - pixel_size5 / 2.0f
+                                   ? r
+                                   : mix(r, w4,
+                                         (dist + pixel_size5 / 2.0f - 1.0f) /
+                                             pixel_size5);
+                    };
+
+                    V4 res{};
+                    // Rule chain (shader order; first match returns).  Two
+                    // rules share a body; they stay apart because the order
+                    // is the algorithm's.
+                    // NOLINTBEGIN(bugprone-branch-clone)
                     if ((P(0xBF, 0x37) || P(0xDB, 0x13)) && d15) {
                         res = mix(w4, w3, 0.5f - px);
                     } else if ((P(0xDB, 0x49) || P(0xEF, 0x6D)) && d73) {
@@ -202,29 +218,9 @@ std::vector<std::uint8_t> omniscale(const std::vector<std::uint8_t>& rgba,
                                                 pixel_size5);
                         }
                     } else if (P(0xBF, 0x8F) || P(0x7E, 0x0E)) {
-                        const float dist = px + 2.0f * py;
-                        if (dist > 1.0f + pixel_size5 / 2.0f) {
-                            res = w4;
-                        } else {
-                            const V4 r = diag_r();
-                            res = dist < 1.0f - pixel_size5 / 2.0f
-                                      ? r
-                                      : mix(r, w4,
-                                            (dist + pixel_size5 / 2.0f -
-                                             1.0f) / pixel_size5);
-                        }
+                        res = blend_opposite_corner(px + 2.0f * py);
                     } else if (P(0x7E, 0x2A) || P(0xEF, 0xAB)) {
-                        const float dist = py + 2.0f * px;
-                        if (dist > 1.0f + pixel_size5 / 2.0f) {
-                            res = w4;
-                        } else {
-                            const V4 r = diag_r();
-                            res = dist < 1.0f - pixel_size5 / 2.0f
-                                      ? r
-                                      : mix(r, w4,
-                                            (dist + pixel_size5 / 2.0f -
-                                             1.0f) / pixel_size5);
-                        }
+                        res = blend_opposite_corner(py + 2.0f * px);
                     } else if (P(0x1B, 0x03) || P(0x4F, 0x43) ||
                                P(0x8B, 0x83) || P(0x6B, 0x43)) {
                         res = mix(w4, w3, 0.5f - px);
@@ -295,6 +291,7 @@ std::vector<std::uint8_t> omniscale(const std::vector<std::uint8_t>& rgba,
                             }
                         }
                     }
+                    // NOLINTEND(bugprone-branch-clone)
 
                     const std::size_t o =
                         (static_cast<std::size_t>(y * s + sy) * W +

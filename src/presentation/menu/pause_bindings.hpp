@@ -24,27 +24,16 @@
 namespace olduvai::presentation {
 
 // In-game Pause: adds the live cheat.god / autofire keys (read + applied
-// straight through to game state, never staged) and the Tier-1 live path for
-// same-scale hd_profile + aspect.  Everything else is the shared skeleton.
+// straight through to game state, never staged).  Everything else is the
+// shared skeleton.
 struct PauseBindings : StagingBindings {
     // LIVE target: run_platform_level's per-LEVEL `god_active` local, so a
     // toggle takes effect immediately in the running level.
     bool* god = nullptr;
-    // SESSION target: GameOptions::god, the flag every level entry re-derives
-    // `god_active` from.  Without it a god toggle made in the pause menu died
-    // at the next level boundary — the next level recomputed god_active from
-    // GameOptions::god and silently reverted to whatever --god said.  Writing
-    // both makes the cheat live AND sticky across L1→L7 (and into the boss
-    // arenas, whose lives seed reads GameOptions::god).
+    // SESSION target: GameOptions::god, which every level (and the boss lives
+    // seed) re-derives god_active from; without it the cheat ends at the level.
     bool* god_session = nullptr;
     std::string* autofire = nullptr;   // → GameOptions::autofire token
-    // Tier-classifier wiring: signal reinit back to run_game.
-    bool* want_reinit = nullptr;
-    PendingReinit* reinit_req = nullptr;
-    std::string* rt_hd_profile = nullptr;
-    // Tier-1 live Aspect: applies SDL_RenderSetLogicalSize + updates the
-    // run-loop's logical_w/h + rt.aspect.  Set from the menu loop.
-    std::function<void(const std::string&)> apply_aspect;
 
   protected:
     bool get_special(const std::string& k, std::string& out) override {
@@ -65,16 +54,6 @@ struct PauseBindings : StagingBindings {
             return true;
         }
         return false;
-    }
-    void apply_live_preview(const std::string& k,
-                            const std::string& v) override {
-        if (k == "hd_profile") {
-            const ApplyTier tier = classify_change(k, v, cur);
-            if (tier == ApplyTier::Live && rt_hd_profile)
-                *rt_hd_profile = v;   // same-scale: live swap
-        } else if (k == "aspect" && apply_aspect) {
-            apply_aspect(v);          // Tier-1 live: logical-size only
-        }
     }
 };
 

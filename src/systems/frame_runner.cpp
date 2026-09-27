@@ -13,9 +13,9 @@
 namespace olduvai::systems {
 
 bool update_falling_stone(SystemsState& state) {
-    // FUN_27f7_089f: inactive → retf; move ±8 with edge deactivation at
-    // [0, 320]; hitbox px+25 > sx > px-10, py+16 > sy > py-13; cave-warp
-    // freeze suppresses; hit deactivates + Game_HitPlayer(1).
+    // FUN_27f7_089f: inactive -> return; move +-8, deactivate at the [0, 320]
+    // edges; hitbox px+25 > sx > px-10, py+16 > sy > py-13; suppressed during
+    // cave-warp freeze; a hit deactivates it and calls Game_HitPlayer(1).
     if (state.stone_state == 0) return false;
     if (state.stone_state == 1) {
         state.stone_x += 8;
@@ -38,24 +38,32 @@ bool update_falling_stone(SystemsState& state) {
     return true;
 }
 
-void run_frame(SystemsState& state, const FrameInputs& inputs) {
-    // 1. Inputs.
+void apply_inputs(SystemsState& state, const FrameInputs& inputs) {
     state.input.left = inputs.left;
     state.input.right = inputs.right;
     state.input.jump = inputs.jump || inputs.up;
     state.input.down = inputs.down;
     state.input.attack = inputs.attack;
+}
+
+void run_frame(SystemsState& state, const FrameInputs& inputs) {
+    // 1. Inputs.
+    apply_inputs(state, inputs);
 
     // 2. Score popup decrement (pre-render).
     update_score_bonuses(state);
 
     // 3. Entity update.
-    const auto res = update_entities(
-        state.entities, state.player.x, state.player.y, state.frame_counter,
-        &state.collision, state.l3a_phase_counter,
-        /*kill_all=*/state.bonus_trigger != 0,
-        /*axe_powered=*/state.halo_flight_flag != 0,
-        /*fireball_active=*/state.fireball_flag != 0);
+    EntityTick tick;
+    tick.player_x = state.player.x;
+    tick.player_y = state.player.y;
+    tick.frame = state.frame_counter;
+    tick.collision = &state.collision;
+    tick.l3a_phase_counter = state.l3a_phase_counter;
+    tick.kill_all = state.bonus_trigger != 0;
+    tick.axe_powered = state.halo_flight_flag != 0;
+    tick.fireball_active = state.fireball_flag != 0;
+    const auto res = update_entities(state.entities, tick);
     state.l3a_phase_counter = res.l3a_phase_counter;
     state.screen_clear_of_monsters = res.screen_clear_of_monsters;
 
@@ -102,23 +110,17 @@ void run_frame(SystemsState& state, const FrameInputs& inputs) {
         }
     }
 
-    // 6. Player physics + animation (skipped while a descent or teleport
-    // owns the player this frame).  The post-hit/spawn invulnerability
-    // ticks unconditionally before the player branch, where the
-    // reference loop keeps it — the expiry frame shifts otherwise.
+    // 6. Player physics + animation, skipped while a descent or teleport owns
+    // the player.  The invulnerability tick runs first, unconditionally, where
+    // the reference has it (the expiry frame shifts otherwise).
     tick_post_hit_invuln(state.player);
     // Enhanced #20 — the teleport cloud phases own the player (hidden +
     // frozen; the ghost-paced anim must not be walked out of invisibly).
     if (state.teleport_out_ticks > 0 || state.teleport_in_ticks > 0)
         state.skip_player_update = true;
-    // Enhanced #18 v2 — the cave-EMERGE ghost-paced reveal freezes the
-    // player too (owner-approved "stop game time"; same idiom as the
-    // teleport gate above).  ENHANCED-ONLY: the classic 2-tick emerge
-    // stays draw-only so classic gameplay timing is EXE-identical.
-    // Rule: a hit or death during the frozen ticks CANCELS the emerge
-    // cleanly so the freeze can never wedge the player — hit_player
-    // clears the counter on any real hit (lethal or not); any other
-    // death path is caught by the death_counter check here.
+    // Enhanced cave emerge also freezes the player (classic's 2-tick emerge
+    // stays draw-only).  A hit or death cancels it so the freeze cannot wedge:
+    // hit_player clears the counter on any hit; other deaths are caught here.
     if (state.cave_emerge_frames > 0 && state.enhanced_active) {
         if (state.player.death_counter > 0)
             state.cave_emerge_frames = 0;
@@ -128,9 +130,8 @@ void run_frame(SystemsState& state, const FrameInputs& inputs) {
     if (state.skip_player_update || state.transition_skip) {
         state.skip_player_update = false;
         state.transition_skip = false;
-        // The skipped frame still services the attack latch — a press
-        // on a transition frame starts the swing, exactly as the
-        // original's branch does.
+        // The skipped frame still services the attack latch (a press on a
+        // transition frame starts the swing, as in the original).
         if (!state.input.attack) {
             state.player.attack_latch = 0;
         } else if (state.player.attack_latch == 0 &&
@@ -142,9 +143,8 @@ void run_frame(SystemsState& state, const FrameInputs& inputs) {
         // The cave-entrance descent owns the player this frame (the
         // same slot in the reference's branch chain).
     } else {
-        // Flight physics shares the player slot (after collisions, like
-        // the original's per-frame order); a no-op unless riding on the
-        // flight screens.
+        // Flight physics shares the player slot (after collisions, as in the
+        // original); a no-op unless riding.
         update_flight_physics(state);
         update_player(state);
     }
@@ -154,6 +154,61 @@ void run_frame(SystemsState& state, const FrameInputs& inputs) {
 
     // 8. Frame counter.
     ++state.frame_counter;
+}
+
+void wrap_frame_counter(SystemsState& state, bool god) {
+    if (state.frame_counter <= 0x3D) return;
+    state.frame_counter = 0;
+    if (state.timer > 0)
+        --state.timer;
+    else if (state.player.death_counter == 0 && god)
+        state.timer = 99;
+    else if (state.player.death_counter == 0)
+        trigger_death(state);
+}
+
+void set_bird_bounds(SystemsState& state, int margin) {
+    for (auto& e : state.entities)
+        if (e.obj_type == core::ObjType::Bird) {
+            e.off_screen_left = -(margin + 50);
+            e.bird_spawn_x = 355 + margin;
+        }
+}
+
+void run_tick(SystemsState& state, const FrameInputs& inputs, bool paused) {
+    apply_inputs(state, inputs);
+    if (!paused) try_complete_sign_teleport(state);
+    state.skip_player_update = tick_cave_descent(state);
+    if (!paused) run_frame(state, inputs);
+}
+
+void end_tick(SystemsState& state, bool god) {
+    if (god) god_refill(state);
+    run_post_frame_steps(state);
+}
+
+void tick_teleport_fx(SystemsState& state) {
+    if (state.teleport_out_ticks > 0)
+        --state.teleport_out_ticks;
+    else if (state.teleport_in_ticks > 0)
+        --state.teleport_in_ticks;
+}
+
+void tick_get_ready(SystemsState& state) {
+    if (state.get_ready_counter >= 2 && state.get_ready_counter <= 17 &&
+        (state.frame_counter & 1) == 0)
+        --state.get_ready_counter;
+}
+
+void tick_cave_emerge(SystemsState& state) {
+    if (state.cave_emerge_frames > 0) --state.cave_emerge_frames;
+}
+
+void god_refill(SystemsState& state) {
+    state.player.energy = 999;
+    state.player.lives = 99;
+    if (state.food_count < kFoodGate) state.food_count = kFoodGate;
+    state.game_over = false;
 }
 
 void run_post_frame_steps(SystemsState& state) {
@@ -170,9 +225,8 @@ void run_post_frame_steps(SystemsState& state) {
     check_l5_glider_entry(state);
     handle_l5_screen12_glider(state);
 
-    // 6e. Clamp + death-by-fall BEFORE exits and transitions (they
-    // fire even in glider mode, where the player update returns
-    // early).
+    // 6e. Clamp + death-by-fall before exits and transitions (they fire in
+    // glider mode too, where the player update returns early).
     if (!state.screen_change) {
         clamp_player_position(state);
     }
@@ -189,18 +243,13 @@ void run_post_frame_steps(SystemsState& state) {
         check_secret_exit(state);
     }
 
-    // 8. Surface transitions — secret entry takes priority.
-    // OLDUVAI_FORCE_L3_DESCENT (debug/gate): the L3 (internal 3 / display 5)
-    // 17->18 trunk-descent is otherwise reachable only by eating >=kFoodGate
-    // food + KO'ing the big bird, so no headless run reaches it.  Seed the
-    // three natural-gate INPUTS check_l3_transition reads (food, player.y,
-    // the bird-cleared latch) so the UNMODIFIED transition crosses 17->18
-    // and plays the cinematic — the run-to-run-deterministic path the
-    // l3_end_level extraction's before/after byte-diff exercises.  Placed
-    // AFTER run_frame (physics moved player.y; monster AI overwrote
-    // screen_clear_of_monsters this frame) and BEFORE check_screen_transition
-    // so the seeded values are exactly what the gate reads.  Cheap state
-    // guards precede getenv, so it fires at most a few frames at screen 17.
+    // 8. Surface transitions; secret entry has priority.
+    // OLDUVAI_FORCE_L3_DESCENT (debug): the 17->18 trunk descent needs full
+    // food and the big bird KO'd, so no headless run reaches it.  Seed the
+    // three inputs check_l3_transition reads (food, player.y, the bird-cleared
+    // latch) after run_frame and before check_screen_transition, so the
+    // unmodified transition fires (the descent byte-diff recipe).  Cheap state
+    // guards precede getenv.
     if (state.current_level == 3 && state.current_screen == 17 &&
         !state.screen_change && std::getenv("OLDUVAI_FORCE_L3_DESCENT")) {
         state.food_count = kFoodGate;

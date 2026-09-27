@@ -19,6 +19,7 @@
 
 #include "systems/frame_runner.hpp"
 #include "systems/player.hpp"
+#include "systems/transitions.hpp"   // kFoodGate
 
 using olduvai::systems::SystemsState;
 using olduvai::systems::run_post_frame_steps;
@@ -120,4 +121,102 @@ TEST_CASE("post-frame: the whole block is a no-op on a quiet mid-screen state") 
     CHECK(s.death_halo_active == false);
     CHECK(s.cave_flag == 0);
     CHECK(s.secret_flag == 0);
+}
+
+// ── The shell's tick around run_frame (systems::wrap_frame_counter,
+// run_tick, end_tick), moved out of run_platform_level. ──────────────────────
+
+TEST_CASE("wrap_frame_counter: past 0x3D it resets and takes a timer tick") {
+    SystemsState s = quiet_state();
+    s.timer = 10;
+    s.frame_counter = 0x3D;
+    olduvai::systems::wrap_frame_counter(s, /*god=*/false);
+    CHECK(s.frame_counter == 0x3D);   // not past it yet
+    CHECK(s.timer == 10);
+    s.frame_counter = 0x3E;
+    olduvai::systems::wrap_frame_counter(s, false);
+    CHECK(s.frame_counter == 0);
+    CHECK(s.timer == 9);
+}
+
+TEST_CASE("wrap_frame_counter: an empty timer kills, or refills under --god") {
+    SystemsState s = quiet_state();
+    s.timer = 0;
+    s.frame_counter = 0x3E;
+    olduvai::systems::wrap_frame_counter(s, /*god=*/true);
+    CHECK(s.timer == 99);
+    CHECK(s.player.death_counter == 0);
+
+    SystemsState d = quiet_state();
+    d.timer = 0;
+    d.frame_counter = 0x3E;
+    olduvai::systems::wrap_frame_counter(d, /*god=*/false);
+    CHECK(d.player.death_counter != 0);
+}
+
+TEST_CASE("run_tick paused: no run_frame (the frame counter holds)") {
+    SystemsState s = quiet_state();
+    s.frame_counter = 5;
+    olduvai::systems::FrameInputs in;
+    in.right = true;
+    olduvai::systems::run_tick(s, in, /*paused=*/true);
+    CHECK(s.frame_counter == 5);
+    CHECK(s.input.right);   // the inputs still land
+    olduvai::systems::run_tick(s, in, /*paused=*/false);
+    CHECK(s.frame_counter == 6);
+}
+
+TEST_CASE("end_tick: --god tops up and masks game over before the steps") {
+    SystemsState s = quiet_state();
+    s.player.energy = 1;
+    s.player.lives = 0;
+    s.food_count = 3;
+    s.game_over = true;
+    olduvai::systems::end_tick(s, /*god=*/true);
+    CHECK(s.player.energy == 999);
+    CHECK(s.player.lives == 99);
+    CHECK(s.food_count == olduvai::systems::kFoodGate);
+    CHECK_FALSE(s.game_over);
+
+    SystemsState n = quiet_state();
+    n.player.energy = 1;
+    olduvai::systems::end_tick(n, /*god=*/false);
+    CHECK(n.player.energy == 1);
+}
+
+TEST_CASE("tick_teleport_fx: the departure drains before the arrival") {
+    SystemsState s = quiet_state();
+    s.teleport_out_ticks = 1;
+    s.teleport_in_ticks = 2;
+    olduvai::systems::tick_teleport_fx(s);
+    CHECK(s.teleport_out_ticks == 0);
+    CHECK(s.teleport_in_ticks == 2);
+    olduvai::systems::tick_teleport_fx(s);
+    CHECK(s.teleport_in_ticks == 1);
+}
+
+TEST_CASE("tick_get_ready: even frames inside [2,17] only") {
+    SystemsState s = quiet_state();
+    s.get_ready_counter = 17;
+    s.frame_counter = 3;
+    olduvai::systems::tick_get_ready(s);
+    CHECK(s.get_ready_counter == 17);
+    s.frame_counter = 4;
+    olduvai::systems::tick_get_ready(s);
+    CHECK(s.get_ready_counter == 16);
+    s.get_ready_counter = 0x11 + 1;   // above the window: held
+    olduvai::systems::tick_get_ready(s);
+    CHECK(s.get_ready_counter == 0x12);
+    s.get_ready_counter = 1;          // below it: held
+    olduvai::systems::tick_get_ready(s);
+    CHECK(s.get_ready_counter == 1);
+}
+
+TEST_CASE("tick_cave_emerge: counts down to zero and stops") {
+    SystemsState s = quiet_state();
+    s.cave_emerge_frames = 1;
+    olduvai::systems::tick_cave_emerge(s);
+    CHECK(s.cave_emerge_frames == 0);
+    olduvai::systems::tick_cave_emerge(s);
+    CHECK(s.cave_emerge_frames == 0);
 }

@@ -16,6 +16,8 @@
 #   check_tidy.sh --diff       lint only the changed LINES (the CI gate)
 #   check_tidy.sh --all        whole tree (the periodic health read)
 #   check_tidy.sh --metrics    just the size / cognitive-complexity KPIs
+#   check_tidy.sh --ratchet    those KPIs against scripts/complexity_baseline.txt
+#                              (the gate); --ratchet-update rewrites the numbers
 #
 # --diff vs the default: the default lints whole FILES that changed, so touching
 # one line of game_app.cpp reports run_platform_level's cognitive complexity and
@@ -194,6 +196,42 @@ case "${1:-}" in
 --all)
     FILES=$(git ls-files 'src/*.cpp' 'src/**/*.cpp')
     LABEL="whole tree"
+    ;;
+--ratchet|--ratchet-update)
+    # The complexity ratchet (scripts/complexity_ratchet.py): the size and
+    # cognitive-complexity findings against scripts/complexity_baseline.txt.
+    # Same tool, pin and SDK as the lint, so the numbers are the recorded ones.
+    # One clang-tidy per CPU; OLDUVAI_TIDY_JOBS caps it (CI: its memory).
+    # One output file per clang-tidy process: parallel writers to one stream
+    # can interleave lines.
+    PARTS="$(mktemp -d)"
+    OUT="$(mktemp)"
+    # shellcheck disable=SC2016
+    git ls-files 'src/*.cpp' 'src/**/*.cpp' |
+        xargs -P "${OLDUVAI_TIDY_JOBS:-$(getconf _NPROCESSORS_ONLN)}" -n 8 sh -c \
+            'tidy="$0" db="$1" extra="$2" checks="$3" parts="$4"; shift 4
+             "${tidy}" -p "${db}" --quiet ${extra:+"${extra}"} \
+                 --checks="${checks}" "$@" \
+                 >"$(mktemp "${parts}/tidy.XXXXXX")" 2>&1' \
+            "${TIDY}" "${DB}" "${EXTRA}" \
+            '-*,readability-function-size,readability-function-cognitive-complexity' \
+            "${PARTS}"
+    cat "${PARTS}"/tidy.* >"${OUT}"
+    rm -rf "${PARTS}"
+    if grep -q "clang-diagnostic-error" "${OUT}"; then
+        # A broken parse under-reports (see EXTRA above): no numbers at all.
+        echo "check_tidy: FAIL — clang-tidy could not parse the sources."
+        grep "clang-diagnostic-error" "${OUT}" | head -3 | sed 's|.*/src/|  src/|'
+        rm -f "${OUT}"
+        exit 1
+    fi
+    UPDATE=""
+    [ "$1" = "--ratchet-update" ] && UPDATE="--update"
+    python3 "${ROOT}/scripts/complexity_ratchet.py" "${OUT}" \
+        "${ROOT}/scripts/complexity_baseline.txt" ${UPDATE}
+    RC=$?
+    rm -f "${OUT}"
+    exit ${RC}
     ;;
 --metrics)
     echo "check_tidy: size / cognitive-complexity KPIs (whole tree)"

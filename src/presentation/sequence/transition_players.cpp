@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Blocking transition/cinematic players — extracted verbatim from
-// run_platform_level (game_app.cpp) as OL-B3.  See transition_players.hpp
-// for the extraction contract.  The bodies are a MOVE, not a rewrite: every
-// loop, constant and comment matches the in-loop lambdas they replace.
+// Blocking transition players (pan, fade, secret slides, wide and panorama
+// variants).  Contract: transition_players.hpp.
 #include "presentation/sequence/transition_players.hpp"
 
+#include "presentation/sequence/secret_slide.hpp"
 #include "presentation/sequence/transition_geometry.hpp"
 
 #include <algorithm>
@@ -18,6 +17,7 @@
 #include "enhance/upscale.hpp"
 #include "presentation/image_out.hpp"
 #include "presentation/sequence/screens.hpp"
+#include "presentation/render/shift_blit.hpp"
 #include "presentation/render/tile_patterns.hpp"
 #include "presentation/render/widescreen.hpp"
 #include "presentation/window_util.hpp"
@@ -26,16 +26,10 @@ namespace olduvai::presentation {
 
 namespace {
 
-// Metronome for the screen-transition / fade step pacing.  Keeps each
-// step exactly step_ms apart by absorbing the time already spent on
-// compose + present (incl. the vsync block when smooth-motion vsync is
-// on) — so a transition's wall-clock duration stays constant whether or
-// not vsync is active (without it the vsync block would stack on the
-// fixed SDL_Delay and run transitions ~1.5x slow).  Only ever delays
-// LESS than the bare SDL_Delay(step_ms), so the no-vsync path is
-// unchanged; a large gap (between transitions) self-resets.
-// State lives on the ctx (pace_last), reset to 0 per ctx construction —
-// identical to the old per-frame `Uint32 pace_last = 0;` local.
+// Step pacing: keep steps step_ms apart, absorbing compose + present time
+// (including a vsync block), so a transition lasts the same with or without
+// vsync.  Never delays longer than SDL_Delay(step_ms); a long gap resets.
+// ctx.pace_last starts at 0 per ctx.
 void paced(TransitionShellCtx& ctx, Uint32 step_ms) {
     const Uint32 now = SDL_GetTicks();
     if (ctx.pace_last != 0 && now - ctx.pace_last < step_ms)
@@ -43,454 +37,216 @@ void paced(TransitionShellCtx& ctx, Uint32 step_ms) {
     ctx.pace_last = SDL_GetTicks();
 }
 
-// Wall-clock progress for SMOOTH transitions (reference a6e8a55, PARITY T8):
-// the fraction of `dur` elapsed since `t0`, exactly 1.0 once it has passed,
-// floored at `lo` so a pan's first frame always moves.  A present slower
-// than the step then DROPS frames instead of STRETCHING the transition —
-// frame-counted, the A12's ~25 ms present held the cave fade pair at ~2.6 s
-// against its ~1.2 s.  Classic never calls this: it keeps the exact integer
-// frame counts (EXE timing, oracle-replay determinism).
+// Wall-clock progress for smooth transitions (PARITY T8): the elapsed fraction
+// of `dur`, 1.0 once past, floored at `lo` so a pan's first frame moves.  A
+// slow present drops frames instead of stretching the transition (the A12's ~25
+// ms present held the cave fade at ~2.6 s instead of ~1.2 s).  Classic keeps
+// the exact integer frame counts.
 double wall_progress(Uint32 t0, Uint32 dur, double lo = 0.0) {
     const Uint32 elapsed = SDL_GetTicks() - t0;
     if (elapsed >= dur) return 1.0;
     return std::max(lo, static_cast<double>(elapsed) / dur);
 }
 
-}  // namespace
+Uint32 step_ms_of(const TransitionShellCtx& ctx) {
+    return ctx.smooth_motion ? (1000 / 60) : ctx.frame_ms;
+}
 
-void play_transition(TransitionShellCtx& ctx, const FrameBuffer& oldf,
-                     FrameBuffer& newf, int kind, char dir) {
-    const bool smooth_t = ctx.smooth_motion;
-    const Uint32 step_ms =
-        smooth_t ? (1000 / 60) : ctx.frame_ms;
-    auto pump = [&]() -> bool {
-        if (!poll_screen_events(ctx.win)) {
-            *ctx.running = false;
-            return false;
-        }
-        return true;
-    };
-    // Debug aid: OLDUVAI_DUMP_TRANSITION=<dir> saves every
-    // transition frame as a BMP (pre-upscale; dimensions match fb).
-    const char* dump_dir = std::getenv("OLDUVAI_DUMP_TRANSITION");
-    auto dump = [&](FrameBuffer& fr) {
-        if (dump_dir == nullptr) return;
-        static int seq = 0;
-        char path[512];
-        std::snprintf(path, sizeof path, "%s/trans_k%d_%04d.bmp",
-                      dump_dir, kind, seq++);
-        save_rgba_image(fr.px.data(), fr.w, fr.h, path);
-    };
-    // Work buffer: must match the source buffer dimensions (HD or native).
-    FrameBuffer work{oldf.w, oldf.h};
-    if (kind == 2) {   // fade out the old, fade in the new
-        const int n = smooth_t ? 36 : kFadeFrames;
-        if (smooth_t) {
-            // Wall-clock fade: each half spans the (n+1) steps the
-            // frame-counted form presents, on the clock (wall_progress).
-            const Uint32 dur = static_cast<Uint32>(n + 1) * step_ms;
-            const Uint32 t0 = SDL_GetTicks();
-            for (;;) {
-                const double p = wall_progress(t0, dur);
-                apply_fade(work, oldf, p);
-                ctx.upload_and_show(work);
-                dump(work);
-                paced(ctx, step_ms);
-                if (!pump()) return;
-                if (p >= 1.0) break;
-            }
-            const Uint32 t1 = SDL_GetTicks();
-            for (;;) {
-                const double p = wall_progress(t1, dur);
-                apply_fade(work, newf, 1.0 - p);
-                ctx.upload_and_show(work);
-                dump(work);
-                paced(ctx, step_ms);
-                if (!pump()) return;
-                if (p >= 1.0) break;
-            }
-            return;
-        }
-        for (int f2 = 0; f2 <= n; ++f2) {
-            apply_fade(work, oldf,
-                       static_cast<double>(f2) / n);
-            ctx.upload_and_show(work);
-            dump(work);
-            paced(ctx, step_ms);
-            if (!pump()) return;
-        }
-        for (int f2 = n; f2 >= 0; --f2) {
-            apply_fade(work, newf,
-                       static_cast<double>(f2) / n);
-            ctx.upload_and_show(work);
-            dump(work);
-            paced(ctx, step_ms);
-            if (!pump()) return;
-        }
-        return;
-    }
-    // kind 3: enhanced secret-entry slide (12 frames, downward pan).
-    // kind 4: enhanced secret-exit slide (30 frames, upward pan + arc).
-    // Both use the same blit_shifted pan-scroll core as kind 1 but with
-    // a fixed frame count and an optional player overlay for kind 4.
-    // Geometry (matches the reference slide transition exactly):
-    //   'D' (down, entry): old UP off top, new FROM bottom.
-    //   'U' (up, exit):   old DOWN off bottom, new FROM top.
-    // blit_shifted is dimension-aware: uses dst.w/dst.h (== oldf.w/h in
-    // HD), so pan distances scale with the buffer size.
-    const bool is_slide = (kind == 3 || kind == 4);
-    const int buf_w_t = oldf.w;   // transition buffer width  (HD or 320)
-    const int buf_h_t = oldf.h;   // transition buffer height (HD or 200)
-    auto blit_shifted = [buf_w_t, buf_h_t](FrameBuffer& dst,
-                                            const FrameBuffer& src,
-                                            int sdx, int sdy) {
-        for (int y2 = 0; y2 < buf_h_t; ++y2) {
-            const int sy = y2 - sdy;
-            if (sy < 0 || sy >= buf_h_t) continue;
-            const int x0 = sdx > 0 ? sdx : 0;
-            const int x1 = buf_w_t + (sdx < 0 ? sdx : 0);
-            if (x0 >= x1) continue;
-            std::copy_n(
-                src.px.begin() +
-                    (static_cast<std::size_t>(sy) * buf_w_t +
-                     static_cast<std::size_t>(x0 - sdx)) * 4,
-                static_cast<std::size_t>(x1 - x0) * 4,
-                dst.px.begin() +
-                    (static_cast<std::size_t>(y2) * buf_w_t +
-                     static_cast<std::size_t>(x0)) * 4);
-        }
-    };
-    const int n = is_slide ? (kind == 3 ? 12 : 30)
-                           : (smooth_t ? 36 : 12);   // SCROLL_FRAMES
-    // Arc parameters for kind 4 (exit slide + player overlay).
-    // Matches the reference: LINEAR X lerp + parabolic Y (both
-    // engines are linear-X; the "velocity-aware quadratic" both this
-    // file and the Python catalog once described was never shipped).
-    const int arc_sx = ctx.slide_secret_exit_x;   // for facing only
-    const int arc_ex = ctx.slide_end_x;
-    const int arc_ey = ctx.slide_end_y;
-    // Jump sprite facing from net travel; on exact tie (ex == sx)
-    // preserve the player's existing facing (matches the reference).
-    const bool arc_flip = (arc_ex < arc_sx)
-                          || (arc_ex == arc_sx && ctx.state->player.facing_left);
-    const auto& arc_spr_mat = ctx.render->entity_sprites;
-    const auto& arc_pal = ctx.render->palette;
-    // Enhanced secret-exit overlay (kind 4), two phases:
-    //  • PAN (f2<=n): the player is "baked into" the incoming surface at
-    //    its bottom (bake_y), so it rides IN with the surface roll rather
-    //    than floating free — screen y = bake_y + ndy (the 'U' pan's
-    //    native ndy = (t-1)*200).  No desync, no fixed-screen pop: the
-    //    sprite is part of the surface that's scrolling in.
-    //  • ARC (f2>n): pan done, surface static — the player arcs from the
-    //    bake point up to the surface resume (arc_ex, arc_ey), landing
-    //    exactly where gameplay continues.
-    // Jump pose throughout.  Pure render overlay in the no-gameplay
-    // window; --enhanced only.
-    const int n_arc = (kind == 4) ? 26 : 0;   // arc-landing frames
-    const int bake_y = 185;                   // bottom of the surface —
-                                              // where the player is baked
-                                              // in and rides the roll-in
-    constexpr double kArcPeak = 30.0;         // arc-landing apex height
-    // `pos` is the frame position on the classic [1, total] scale.  Classic
-    // uses the integer f2 itself, so t / arc / ta are the frame-counted
-    // expressions bit for bit — NOT progress*total, which rounds (measured:
-    // it moves t and the arc's ta by an ulp).  Smooth reads pos off the wall
-    // clock (wall_progress): the pan ends at pos == n, kind 4's arc after it.
-    const int total = n + n_arc;
+// Pace the step, then poll: false (and *running cleared) on a window close.
+bool step_done(TransitionShellCtx& ctx, Uint32 step_ms) {
+    paced(ctx, step_ms);
+    if (poll_screen_events(ctx.win)) return true;
+    *ctx.running = false;
+    return false;
+}
+
+// A pan's position: classic steps pos = f2 = 1..total and p = f2 / total;
+// smooth reads p off the wall clock, floored at one frame, and pos = p * total.
+struct PanStep {
+    double pos;
+    double p;
+    int f2;
+};
+
+// Run `frame` over a `total`-frame pan, pacing and polling after each.  False
+// = the window closed.
+template <class Frame>
+bool run_pan(TransitionShellCtx& ctx, int total, Frame&& frame) {
+    const Uint32 step_ms = step_ms_of(ctx);
     const Uint32 t0 = SDL_GetTicks();
     const Uint32 dur = static_cast<Uint32>(total) * step_ms;
     for (int f2 = 1;; ++f2) {
-        const double p = smooth_t ? wall_progress(t0, dur, 1.0 / total) : 0.0;
-        const double pos = smooth_t ? p * total : static_cast<double>(f2);
-        const double t = std::min(1.0, pos / n);
-        // Secret slides (3 entry / 4 exit) pan by the buffer height; every
-        // other kind is a surface pan in `dir`.  Distances are this buffer's
-        // own size, HD or native (transition_geometry.hpp).
-        const TransitionShift sh =
-            transition_shift(kind, dir, t, buf_w_t, buf_h_t);
-        const int odx = sh.odx, ody = sh.ody, ndx = sh.ndx, ndy = sh.ndy;
-        std::fill(work.px.begin(), work.px.end(), 0);
-        for (std::size_t i = 3; i < work.px.size(); i += 4) {
-            work.px[i] = 255;
-        }
-        blit_shifted(work, oldf, odx, ody);
-        blit_shifted(work, newf, ndx, ndy);
-        // kind 4: draw the player jump-arc overlay.
-        // x(t) = sx + (ex-sx)*t                       (linear X lerp)
-        // y(t) = lerp(sy,ey,t) - peak * 4*t*(1-t)    (parabolic arc, peak at t=0.5)
-        // Matches the reference and spec §F7 exit formula.
-        // blit_sprite(FrameBuffer&,...) now uses work.w/work.h so the
-        // sprite blits at the right position in an HD work buffer.  At
-        // scale 1 it writes at native coords (unchanged classic behaviour).
-        if (kind == 4) {
-            constexpr int spr2 = systems::kSprPlayerJump;
-            // Both phases' positions: transition_geometry.hpp, which the
-            // wide player calls with the same arguments.
-            const ArcOverlay ao =
-                arc_overlay_pos(pos, t, n, n_arc, arc_sx, arc_ex, arc_ey,
-                                bake_y, kArcPeak);
-            const int px2 = ao.x, py2 = ao.y;
-            // Harness: trace the OVERLAY's drawn position vs the player's
-            // real resume position (arc_ex,arc_ey).  |overlay[f2=1] -
-            // resume| is the start-of-slide pop; overlay[last] must equal
-            // resume (no end snap).  Native coords (px2/py2 pre-scale).
-            if (ctx.draw_log != nullptr)
-                std::fprintf(ctx.draw_log,
-                             "{\"trans\":%d,\"f2\":%d,\"of\":%d,"
-                             "\"px\":%d,\"py\":%d,\"resx\":%d,\"resy\":%d,"
-                             "\"exitx\":%d}\n",
-                             kind, f2, n + n_arc, px2, py2, arc_ex, arc_ey,
-                             arc_sx);
-            if (spr2 < static_cast<int>(arc_spr_mat.size())) {
-                if (ctx.hd) {
-                    auto wrt = ctx.make_rt(work);
-                    blit_sprite(wrt, arc_spr_mat[spr2], arc_pal,
-                                px2, py2, arc_flip);
-                } else {
-                    blit_sprite(work, arc_spr_mat[spr2], arc_pal,
-                                px2, py2, arc_flip);
-                }
-            }
-        }
-        ctx.upload_and_show(work);
-        dump(work);
-        paced(ctx, step_ms);
-        if (!pump()) return;
-        if (smooth_t ? p >= 1.0 : f2 >= total) return;
+        const double p = ctx.smooth_motion
+                             ? wall_progress(t0, dur, 1.0 / total)
+                             : static_cast<double>(f2) / total;
+        const double pos = ctx.smooth_motion ? p * total : f2;
+        frame(PanStep{pos, p, f2});
+        if (!step_done(ctx, step_ms)) return false;
+        if (ctx.smooth_motion ? p >= 1.0 : f2 >= total) return true;
     }
 }
 
-// ── Widescreen transition playback (§8.7 wide transitions) ──────────
-// Mirror play_transition's kind-1 pan and kind-2 fade, but over WIDE
-// native buffers (wsp->native_w() x 200) presented through the wide texture
-// via wsp->present_transition — so width AND HUD position are continuous
-// with the steady widescreen frame (no 320 pillarbox pop, no HUD jump).
-// The pan slides the WHOLE wide view; the fade blends the wide buffers.
-// oldw / neww are pre-wrapped wide buffers (peek or bezel per side).
-void play_transition_wide(TransitionShellCtx& ctx,
-                          std::vector<std::uint8_t>& oldw,
-                          std::vector<std::uint8_t>& neww, int kind, char dir) {
-    const bool smooth_t = ctx.smooth_motion;
-    const Uint32 step_ms = smooth_t ? (1000 / 60) : ctx.frame_ms;
-    const int W = ctx.wsp->native_w(), H = 200;
-    const int Wh = W * ctx.hd_scale, Hh = H * ctx.hd_scale;
-    // Upscale the two STATIC wide buffers ONCE; every kind below shifts/
-    // fades the HD buffers and presents pre_upscaled — no per-frame
-    // upscale (was the choppy secret/cave transitions; mirrors the
-    // kind-1 panorama + steady-state static-bg cache, task #61).
-    std::vector<std::uint8_t> hd_old =
-        enhance::upscale_rgba(oldw, W, H, ctx.hd_scale, *ctx.hd_profile);
-    std::vector<std::uint8_t> hd_new =
-        enhance::upscale_rgba(neww, W, H, ctx.hd_scale, *ctx.hd_profile);
-    auto pump = [&]() -> bool {
-        if (!poll_screen_events(ctx.win)) { *ctx.running = false; return false; }
-        return true;
+// kind 2: fade the old frame out, then the new one in.  Classic: n + 1 frames
+// each way; smooth: the same span on the wall clock.  `show` presents `work`.
+template <class Show>
+bool play_fade(TransitionShellCtx& ctx, FrameBuffer& work,
+               const FrameBuffer& oldf, const FrameBuffer& newf, Show&& show) {
+    const Uint32 step_ms = step_ms_of(ctx);
+    const int n = ctx.smooth_motion ? 36 : kFadeFrames;
+    const auto step = [&](const FrameBuffer& src, double level) {
+        apply_fade(work, src, level);
+        show(work);
+        return step_done(ctx, step_ms);
     };
-    const char* dump_dir = std::getenv("OLDUVAI_DUMP_TRANSITION");
-    auto dump = [&](std::vector<std::uint8_t>& fr) {
-        if (dump_dir == nullptr) return;
-        static int wseq = 0;
-        char path[512];
-        std::snprintf(path, sizeof path, "%s/wtrans_k%d_%04d.bmp",
-                      dump_dir, kind, wseq++);
-        save_rgba_image(fr.data(), Wh, Hh, path);
-    };
-    std::vector<std::uint8_t> work(
-        static_cast<std::size_t>(Wh) * Hh * 4);   // HD work buffer
-    // HD shift: caller passes NATIVE sdx/sdy (the kind math stays in
-    // native units); scaled by hd_scale here so it operates on the
-    // pre-upscaled HD buffers.
-    auto blit_shifted_w = [&](std::vector<std::uint8_t>& dst,
-                              const std::vector<std::uint8_t>& src,
-                              int sdx, int sdy) {
-        const int sdxh = sdx * ctx.hd_scale, sdyh = sdy * ctx.hd_scale;
-        for (int y2 = 0; y2 < Hh; ++y2) {
-            const int sy = y2 - sdyh;
-            if (sy < 0 || sy >= Hh) continue;
-            const int x0 = sdxh > 0 ? sdxh : 0;
-            const int x1 = Wh + (sdxh < 0 ? sdxh : 0);
-            if (x0 >= x1) continue;
-            std::copy_n(
-                src.begin() +
-                    (static_cast<std::size_t>(sy) * Wh +
-                     static_cast<std::size_t>(x0 - sdxh)) * 4,
-                static_cast<std::size_t>(x1 - x0) * 4,
-                dst.begin() +
-                    (static_cast<std::size_t>(y2) * Wh +
-                     static_cast<std::size_t>(x0)) * 4);
-        }
-    };
-    if (kind == 2) {   // fade out old, fade in new (wide)
-        const int n = smooth_t ? 36 : kFadeFrames;
-        // apply_fade is dimension-agnostic; wrap the wide vectors as
-        // FrameBuffers so it operates on the wide pixels directly.
-        FrameBuffer wf{Wh, Hh}, of{Wh, Hh}, nf{Wh, Hh};
-        of.px = hd_old; nf.px = hd_new;
-        if (smooth_t) {
-            // Wall-clock fade — the non-wide kind-2's, over wide buffers.
-            const Uint32 dur = static_cast<Uint32>(n + 1) * step_ms;
+    if (ctx.smooth_motion) {
+        const Uint32 dur = static_cast<Uint32>(n + 1) * step_ms;
+        for (const bool out : {true, false}) {
             const Uint32 t0 = SDL_GetTicks();
             for (;;) {
                 const double p = wall_progress(t0, dur);
-                apply_fade(wf, of, p);
-                ctx.wsp->present_transition(wf.px, /*with_hud=*/true,
-                                            /*pre_upscaled=*/true);
-                dump(wf.px);
-                paced(ctx, step_ms);
-                if (!pump()) return;
+                if (!step(out ? oldf : newf, out ? p : 1.0 - p)) return false;
                 if (p >= 1.0) break;
             }
-            const Uint32 t1 = SDL_GetTicks();
-            for (;;) {
-                const double p = wall_progress(t1, dur);
-                apply_fade(wf, nf, 1.0 - p);
-                ctx.wsp->present_transition(wf.px, /*with_hud=*/true,
-                                            /*pre_upscaled=*/true);
-                dump(wf.px);
-                paced(ctx, step_ms);
-                if (!pump()) return;
-                if (p >= 1.0) break;
-            }
-            return;
         }
-        for (int f2 = 0; f2 <= n; ++f2) {
-            apply_fade(wf, of, static_cast<double>(f2) / n);
-            ctx.wsp->present_transition(wf.px, /*with_hud=*/true,
-                                        /*pre_upscaled=*/true);
-            dump(wf.px);
-            paced(ctx, step_ms);
-            if (!pump()) return;
-        }
-        for (int f2 = n; f2 >= 0; --f2) {
-            apply_fade(wf, nf, static_cast<double>(f2) / n);
-            ctx.wsp->present_transition(wf.px, /*with_hud=*/true,
-                                        /*pre_upscaled=*/true);
-            dump(wf.px);
-            paced(ctx, step_ms);
-            if (!pump()) return;
-        }
-        return;
+        return true;
     }
-    if (kind == 3 || kind == 4) {
-        // Enhanced secret slides over the WIDE view — same geometry + arc
-        // as play_transition's kind 3/4 (vertical pan, fixed frame counts,
-        // kind-4 player jump arc), but the buffers are wsp->native_w() wide and
-        // presented via wsp->present_transition; the arc sprite blits at
-        // +wsp->margin() so it lands at the centre-320 position.  No 320 bars.
-        const int ns = (kind == 3) ? 12 : 30;
-        const int n_arc = (kind == 4) ? 26 : 0;
-        const int bake_y = 185;
-        constexpr double kArcPeak = 30.0;
-        const int arc_sx = ctx.slide_secret_exit_x;
-        const int arc_ex = ctx.slide_end_x;
-        const int arc_ey = ctx.slide_end_y;
-        const bool arc_flip =
-            (arc_ex < arc_sx) ||
-            (arc_ex == arc_sx && ctx.state->player.facing_left);
-        const auto& arc_spr_mat = ctx.render->entity_sprites;
-        const auto& arc_pal = ctx.render->palette;
-        // Frame position exactly as play_transition's slide: classic is
-        // the integer f2 (bit-identical), smooth is on the wall clock.
-        const int total = ns + n_arc;
-        const Uint32 t0 = SDL_GetTicks();
-        const Uint32 dur = static_cast<Uint32>(total) * step_ms;
-        for (int f2 = 1;; ++f2) {
-            const double p =
-                smooth_t ? wall_progress(t0, dur, 1.0 / total) : 0.0;
-            const double pos = smooth_t ? p * total : static_cast<double>(f2);
-            const double t = std::min(1.0, pos / ns);
-            // Native units: blit_shifted_w multiplies by hd_scale itself.
-            const TransitionShift sh = transition_shift(kind, dir, t, W, H);
-            const int ody = sh.ody, ndy = sh.ndy;
-            std::fill(work.begin(), work.end(), 0);
-            for (std::size_t i = 3; i < work.size(); i += 4) work[i] = 255;
-            blit_shifted_w(work, hd_old, 0, ody);
-            blit_shifted_w(work, hd_new, 0, ndy);
-            if (kind == 4) {
-                constexpr int spr2 = systems::kSprPlayerJump;
-                const ArcOverlay ao =
-                    arc_overlay_pos(pos, t, ns, n_arc, arc_sx, arc_ex,
-                                    arc_ey, bake_y, kArcPeak);
-                const int px2 = ao.x, py2 = ao.y;
-                if (spr2 < static_cast<int>(arc_spr_mat.size())) {
-                    RenderTarget wrt{work.data(), Wh, Hh, ctx.hd_scale,
-                                     ctx.hd_cache, ctx.hd_profile};
-                    wrt.origin_x = ctx.wsp->margin();
-                    blit_sprite(wrt, arc_spr_mat[spr2], arc_pal,
-                                px2, py2, arc_flip);
-                }
-            }
-            ctx.wsp->present_transition(work, /*with_hud=*/true,
-                                        /*pre_upscaled=*/true);
-            dump(work);
-            paced(ctx, step_ms);
-            if (!pump()) return;
-            if (smooth_t ? p >= 1.0 : f2 >= total) return;
-        }
-        return;
-    }
-    // kind 1: surface pan-scroll over the WHOLE wide view.
-    const int n = smooth_t ? 36 : 12;   // SCROLL_FRAMES
-    const Uint32 t0 = SDL_GetTicks();
-    const Uint32 dur = static_cast<Uint32>(n) * step_ms;
-    for (int f2 = 1;; ++f2) {
-        const double p = smooth_t ? wall_progress(t0, dur, 1.0 / n)
-                                  : static_cast<double>(f2) / n;
-        const double t = std::min(1.0, p);
-        const TransitionShift sh = transition_shift(kind, dir, t, W, H);
-        const int odx = sh.odx, ody = sh.ody, ndx = sh.ndx, ndy = sh.ndy;
-        std::fill(work.begin(), work.end(), 0);
-        for (std::size_t i = 3; i < work.size(); i += 4) work[i] = 255;
-        blit_shifted_w(work, hd_old, odx, ody);
-        blit_shifted_w(work, hd_new, ndx, ndy);
-        ctx.wsp->present_transition(work, /*with_hud=*/true,
-                                    /*pre_upscaled=*/true);
-        dump(work);
-        paced(ctx, step_ms);
-        if (!pump()) return;
-        if (smooth_t ? p >= 1.0 : f2 >= n) return;
-    }
+    for (int f = 0; f <= n; ++f)
+        if (!step(oldf, static_cast<double>(f) / n)) return false;
+    for (int f = n; f >= 0; --f)
+        if (!step(newf, static_cast<double>(f) / n)) return false;
+    return true;
 }
 
-// ── Widescreen PANORAMA pan (kind-1 surface scroll) ──────────────────
-// Slide a (320+2M) window across a CONTINUOUS native strip of the four
-// screens involved [min-1 | min | min+1 | min+2], advancing by exactly
-// 320 (one screen).  The old path slid two independently margin-composed
-// wide buffers ([peek|center|peek]) by the FULL wide width 320+2M, which
-// over-scrolled by 2M at the moving seam → the shared FOND backdrop +
-// terrain jumped ("tear", task: ws transition tearing).  Here the
-// margins ARE the real adjacent screens at every instant, so everything
-// flows continuously.  The incoming screen carries the player
-// (new_center); off-level edge slots (level first/last, folds in #60)
-// clamp the adjacent screen's near edge column — a tear-free
-// continuation of its sky+ground bands.
-// Strip geometry shared by play_panorama_wide and its seam-continuity helper:
-// four 320-wide screens stacked into one panning strip, native height 200.
+// OLDUVAI_DUMP_TRANSITION=<dir>: every frame of one player as
+// <stem>[_k<kind>]_NNNN.bmp (kind < 0: no kind); `seq` numbers them.
+void dump_frame(const char* stem, int kind, int& seq,
+                const std::uint8_t* px, int w, int h) {
+    const char* dir = std::getenv("OLDUVAI_DUMP_TRANSITION");
+    if (dir == nullptr) return;
+    char path[512];
+    if (kind < 0)
+        std::snprintf(path, sizeof path, "%s/%s_%04d.bmp", dir, stem, seq++);
+    else
+        std::snprintf(path, sizeof path, "%s/%s_k%d_%04d.bmp", dir, stem,
+                      kind, seq++);
+    save_rgba_image(px, w, h, path);
+}
+
+}  // namespace
+
+void play_transition(TransitionShellCtx& ctx, const FrameBuffer& oldf,
+                     FrameBuffer& newf, TransitionKind kind, char dir) {
+    static int seq = 0;
+    // Work buffer: the source buffers' size (HD or native).
+    FrameBuffer work{oldf.w, oldf.h};
+    const auto show = [&](FrameBuffer& f) {
+        ctx.upload_and_show(f);
+        dump_frame("trans", static_cast<int>(kind), seq, f.px.data(), f.w, f.h);
+    };
+    if (kind == TransitionKind::kFadePair) {
+        play_fade(ctx, work, oldf, newf, show);
+        return;
+    }
+    // The surface pan (in `dir`) and the secret slides share one shift core
+    // (transition_geometry.hpp); distances follow the buffer size.
+    const bool is_slide = is_secret_slide(kind);
+    const SecretSlide slide(kind, ctx.landing, ctx.state->player.facing_left);
+    const int n = is_slide ? slide.frames()
+                           : (ctx.smooth_motion ? 36 : 12);   // SCROLL_FRAMES
+    run_pan(ctx, is_slide ? slide.total() : n, [&](const PanStep& s) {
+        const double t = std::min(1.0, s.pos / n);
+        const TransitionShift sh = transition_shift(kind, dir, t, work.w, work.h);
+        clear_opaque(work.px);
+        blit_shifted(work.px, oldf.px, work.w, work.h, sh.odx, sh.ody);
+        blit_shifted(work.px, newf.px, work.w, work.h, sh.ndx, sh.ndy);
+        if (slide.has_arc()) {
+            auto rt = ctx.make_rt(work);
+            slide.draw_arc(rt, *ctx.render, s.pos, s.f2, ctx.draw_log);
+        }
+        show(work);
+    });
+}
+
+// Widescreen transitions: the kind 1 pan, kind 2 fade and the secret slides
+// over wide buffers, presented through wsp->present_transition, so width and
+// HUD position match the steady frame.  oldw / neww are pre-wrapped (peek or
+// bezel per side), upscaled once here; shifts are native, scaled per frame.
+void play_transition_wide(TransitionShellCtx& ctx,
+                          std::vector<std::uint8_t>& oldw,
+                          std::vector<std::uint8_t>& neww, TransitionKind kind,
+                          char dir) {
+    static int seq = 0;
+    const int s = ctx.hd_scale;
+    const int W = ctx.wsp->native_w(), H = 200;
+    const int Wh = W * s, Hh = H * s;
+    FrameBuffer work{Wh, Hh}, hd_old{Wh, Hh}, hd_new{Wh, Hh};
+    hd_old.px = enhance::upscale_rgba(oldw, W, H, s, *ctx.hd_profile);
+    hd_new.px = enhance::upscale_rgba(neww, W, H, s, *ctx.hd_profile);
+    const auto show = [&](FrameBuffer& f) {
+        ctx.wsp->present_transition(f.px, /*with_hud=*/true,
+                                    /*pre_upscaled=*/true);
+        dump_frame("wtrans", static_cast<int>(kind), seq, f.px.data(), Wh,
+                   Hh);
+    };
+    if (kind == TransitionKind::kFadePair) {
+        play_fade(ctx, work, hd_old, hd_new, show);
+        return;
+    }
+    const auto shifted = [&](const TransitionShift& sh) {
+        clear_opaque(work.px);
+        blit_shifted(work.px, hd_old.px, Wh, Hh, sh.odx * s, sh.ody * s);
+        blit_shifted(work.px, hd_new.px, Wh, Hh, sh.ndx * s, sh.ndy * s);
+    };
+    if (is_secret_slide(kind)) {
+        // Vertical only; the arc sprite sits at +wsp->margin().
+        const SecretSlide slide(kind, ctx.landing,
+                                ctx.state->player.facing_left);
+        run_pan(ctx, slide.total(), [&](const PanStep& st) {
+            const double t = std::min(1.0, st.pos / slide.frames());
+            TransitionShift sh = transition_shift(kind, dir, t, W, H);
+            sh.odx = sh.ndx = 0;
+            shifted(sh);
+            if (slide.has_arc()) {
+                RenderTarget rt{work.px.data(), Wh, Hh, s, ctx.hd_cache,
+                                ctx.hd_profile};
+                rt.origin_x = ctx.wsp->margin();
+                slide.draw_arc(rt, *ctx.render, st.pos, st.f2, nullptr);
+            }
+            show(work);
+        });
+        return;
+    }
+    // The pan over the WHOLE wide view.
+    const int n = ctx.smooth_motion ? 36 : 12;   // SCROLL_FRAMES
+    run_pan(ctx, n, [&](const PanStep& st) {
+        shifted(transition_shift(kind, dir, std::min(1.0, st.p), W, H));
+        show(work);
+    });
+}
+
+// Widescreen panorama pan (kind 1): slide a (320+2M) window across one strip
+// of four screens [min-1 | min | min+1 | min+2] by exactly 320.  The margins
+// are the real adjacent screens at every instant (sliding two separately
+// composed wide buffers over-scrolls by 2M and tears).  The incoming screen
+// carries the player; off-level slots get an edge fill.
 constexpr int kStripW = 4 * 320;
 constexpr int kStripH = 200;
 
 namespace {
 
-// Blit each REAL slot's straddling edge tiles across its boundary and record
-// the strip-x [lo, hi) bands an overhang actually landed on.  Split out of
-// pan_bridge_seams: it builds the real-slot asset set, spills each slot's
-// edge tiles into the adjacent slot, and hands back the bands the later
-// authored-redraw + player-box passes are restricted to.  `real_slots` is
-// derived from the slot0/slot3 real flags (slots 1 and 2 are always real);
-// the caller owns `srt` (a RenderTarget over the strip) and appends into
-// `slot_assets` / `bands`.
+// Blit each real slot's straddling edge tiles across its boundary, recording
+// the strip-x [lo, hi) bands they land on (the later passes are limited to
+// them).  Slots 1 and 2 are always real.
 void pan_bridge_collect_overhangs(
     TransitionShellCtx& ctx, int lo, bool slot0_real, bool slot3_real,
     presentation::RenderTarget& srt,
     std::vector<std::pair<int, presentation::LevelRenderAssets>>& slot_assets,
     std::vector<std::pair<int, int>>& bands) {
     std::vector<std::pair<int, int>> real_slots = {{1, lo + 1}, {2, lo + 2}};
-    if (slot0_real) real_slots.push_back({0, lo});
-    if (slot3_real) real_slots.push_back({3, lo + 3});
+    if (slot0_real) real_slots.emplace_back(0, lo);
+    if (slot3_real) real_slots.emplace_back(3, lo + 3);
     for (const auto& slot_scr : real_slots) {
-        // Named locals, not a structured binding, so the spill lambda below
-        // can capture `slot` under C++17 (capturing a structured binding is
-        // a C++20 extension).
+        // Named locals: capturing a structured binding needs C++20.
         const int slot = slot_scr.first;
         const int scr = slot_scr.second;
         presentation::LevelRenderAssets ra;
@@ -529,22 +285,12 @@ void pan_bridge_collect_overhangs(
 
 }  // namespace
 
-// Seam-column continuity across the panorama strip (tile_patterns).
-// Same laws as the steady wide compose: a trunk/pillar straddling a
-// screen edge must not cut at a slot boundary mid-pan (the
-// S12→S13→S14 transient vertical cut).  For every REAL slot, blit
-// its screen's straddling columns so the overhang crosses into the
-// adjacent slot — clipped away from its OWN slot (the in-slot part
-// is already drawn with the authored z-order).
-//
-// CAUTION — the strip slots are FULL composes with ENTITIES (and
-// the new slot carries the BAKED PLAYER), unlike the steady static
-// bg.  A whole-slot "authored tiles win" redraw buried the player
-// under the 144-wide bark tiles (user repro: S12→S13 walk, player
-// vanished for the whole pan).  So the level-tile redraw is
-// restricted to the exact BANDS an overhang actually landed on
-// (≤ ~32 px past a boundary), and the player's own box is restored
-// from new_center LAST so the player always wins in his region.
+// Seam continuity across the strip, same laws as the steady compose: a
+// straddling trunk/pillar must not cut at a slot boundary.  Each real slot's
+// straddlers spill into the adjacent slot, clipped from their own.  The slots
+// are full composes with entities and the baked player, so the authored-tile
+// redraw is limited to the overhang bands, and the player box is restored from
+// new_center last.
 void pan_bridge_seams(TransitionShellCtx& ctx,
                       std::vector<std::uint8_t>& strip, int lo, int new_s,
                       const FrameBuffer& new_center, bool slot0_real,
@@ -557,12 +303,8 @@ void pan_bridge_seams(TransitionShellCtx& ctx,
                                        nullptr, nullptr};
         pan_bridge_collect_overhangs(ctx, lo, slot0_real, slot3_real, srt,
                                      slot_assets, bands);
-        // Authored seam holes bridged across adjacent REAL slots —
-        // the same tile_patterns::seam_row_bridges the steady view
-        // uses (the L7 S1|S2 jumppad rail), so a hole doesn't
-        // reappear for the duration of the pan.  Bridge blits join
-        // the bands, so the authored-redraw + player-box passes
-        // below apply to them too.
+        // Seam-hole bridges between adjacent real slots (as the steady view:
+        // the L7 S1|S2 jumppad rail).  They join the bands.
         for (const auto& [sa, ra_a] : slot_assets)
             for (const auto& [sb, ra_b] : slot_assets) {
                 if (sb != sa + 1) continue;
@@ -615,9 +357,8 @@ void pan_bridge_seams(TransitionShellCtx& ctx,
                 }
             }
         }
-        // The player rides the incoming slot BAKED into new_center —
-        // restore his box from it last, so neither an overhang nor the
-        // band redraw can cover him (compose order: player above all).
+        // Restore the player's box from new_center last: the player draws above
+        // all.
         if (!bands.empty()) {
             const int pslot = new_s - lo;
             const int bx0 = std::max(0, ctx.state->player.x - 16);
@@ -636,113 +377,108 @@ void pan_bridge_seams(TransitionShellCtx& ctx,
     }
 }
 
-void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
-                        const FrameBuffer& new_center) {
-    const bool smooth_t = ctx.smooth_motion;
-    const Uint32 step_ms = smooth_t ? (1000 / 60) : ctx.frame_ms;
-    const int M = ctx.wsp->margin(), WN = ctx.wsp->native_w();
-    const int H = kStripH;
+namespace {
+
+// One 320-wide frame into strip slot `slot`.
+void put_slot(std::vector<std::uint8_t>& strip, int slot,
+              const FrameBuffer& src) {
+    for (int y = 0; y < kStripH; ++y)
+        std::copy_n(src.px.begin() + static_cast<std::size_t>(y) * 320 * 4,
+                    320 * 4,
+                    strip.begin() + (static_cast<std::size_t>(y) * kStripW +
+                                     static_cast<std::size_t>(slot) * 320) * 4);
+}
+
+// Off-level, FOND levels: the adjacent screen mirrored across its edge
+// (column x <- 319 - x); fond_sky_band then replaces the sky.
+void mirror_slot(TransitionShellCtx& ctx, std::vector<std::uint8_t>& strip,
+                 int slot, int adj_s) {
+    FrameBuffer t{};
+    ctx.compose_static(adj_s, t, /*frozen_full=*/false);
+    for (int y = 0; y < kStripH; ++y)
+        for (int x = 0; x < 320; ++x) {
+            const std::uint8_t* e =
+                &t.px[(static_cast<std::size_t>(y) * 320 + (319 - x)) * 4];
+            std::uint8_t* d = &strip[(static_cast<std::size_t>(y) * kStripW +
+                                      static_cast<std::size_t>(slot) * 320 +
+                                      x) * 4];
+            d[0] = e[0]; d[1] = e[1]; d[2] = e[2]; d[3] = 255;
+        }
+}
+
+// FOND levels (1/5): the sky band from the real FOND, as the steady margin
+// samples it; the ground band stays.
+void fond_sky_band(TransitionShellCtx& ctx, std::vector<std::uint8_t>& strip,
+                   int slot) {
+    if (!ctx.wsp->backdrop_ok()) return;
+    const int gb = kStripH - presentation::kWideGroundBandRows;
+    for (int y = 0; y < gb; ++y)
+        std::memcpy(&strip[(static_cast<std::size_t>(y) * kStripW +
+                            static_cast<std::size_t>(slot) * 320) * 4],
+                    &ctx.wsp->backdrop().px[static_cast<std::size_t>(y) * 320 * 4],
+                    320 * 4);
+}
+
+// Off-level, tile levels: exactly the steady margin.  The adjacent screen's
+// wide static bg, composed as the steady view does; its outer margin goes
+// into the slot's inner M columns (all the window shows).  side < 0: left
+// slot (right M columns <- the left margin); side > 0: the reverse.  No pop
+// at the pan -> steady hand-off.
+void steady_margin_slot(TransitionShellCtx& ctx,
+                        std::vector<std::uint8_t>& strip, int slot, int adj_s,
+                        int side) {
+    const int M = ctx.wsp->margin();
+    const FrameBuffer* bd =
+        (ctx.wsp->backdrop_ok() && ctx.render->visual_background)
+            ? &ctx.wsp->backdrop()
+            : nullptr;
+    std::vector<std::uint8_t> wide;
+    ctx.compose_wide_native(adj_s, M, bd, wide);
+    const int wide_w = 320 + 2 * M;
+    for (int y = 0; y < kStripH; ++y)
+        for (int x = 0; x < M; ++x) {
+            const int sc = (side < 0) ? x : (M + 320 + x);
+            const int dc = (side < 0) ? (320 - M + x) : x;
+            const std::uint8_t* e =
+                &wide[(static_cast<std::size_t>(y) * wide_w + sc) * 4];
+            std::uint8_t* d = &strip[(static_cast<std::size_t>(y) * kStripW +
+                                      static_cast<std::size_t>(slot) * 320 +
+                                      dc) * 4];
+            d[0] = e[0]; d[1] = e[1]; d[2] = e[2]; d[3] = 255;
+        }
+}
+
+}  // namespace
+
+// The native strip [lo | lo+1 | lo+2 | lo+3] a pan windows across, lo =
+// min(old, new) - 1.  Edge slots resolve like the steady frame
+// (widescreen_neighbors): real screens, or an off-level fill.
+std::vector<std::uint8_t> build_pan_strip(TransitionShellCtx& ctx, int old_s,
+                                          int new_s,
+                                          const FrameBuffer& new_center) {
     const int count = ctx.screen_count;
     const int lo = std::min(old_s, new_s) - 1;   // strip slot0 = lo
     std::vector<std::uint8_t> strip(
-        static_cast<std::size_t>(kStripW) * H * 4, 0);
-    auto put_slot = [&](int i, const FrameBuffer& src) {
-        for (int y = 0; y < H; ++y)
-            std::copy_n(
-                src.px.begin() + static_cast<std::size_t>(y) * 320 * 4,
-                320 * 4,
-                strip.begin() + (static_cast<std::size_t>(y) * kStripW +
-                                 static_cast<std::size_t>(i) * 320) * 4);
-    };
-    auto fill_real = [&](int i, int s) {
-        if (s == new_s) { put_slot(i, new_center); return; }
+        static_cast<std::size_t>(kStripW) * kStripH * 4, 0);
+    // The outgoing screen pans frozen, as last seen (the EXE never touches
+    // the visible page during the scroll); other slots get the peek
+    // treatment.
+    const auto fill_real = [&](int slot, int s) {
+        if (s == new_s) {
+            put_slot(strip, slot, new_center);
+            return;
+        }
         FrameBuffer t{};
-        // The OUTGOING screen pans FROZEN, sprites as last seen —
-        // the EXE never touches the visible page during the scroll
-        // (transition_pan_content_frozen_sprites.md); the store
-        // holds its exact last live state post-rebind.  Other slots
-        // keep the peek treatment (spawn-post enemies + statics).
         ctx.compose_static(s, t, /*frozen_full=*/s == old_s);
-        put_slot(i, t);
+        put_slot(strip, slot, t);
     };
-    // Overwrite an off-level slot's SKY band (rows above the ground band)
-    // with the real FOND backdrop.  clamp_slot's single-column smear
-    // streaks the distant sky/mountains during the pan; the steady margin
-    // samples the backdrop there (compose_widescreen bg_extend), so
-    // copying the FOND reproduces it.  The floor in the ground band stays
-    // from clamp_slot.  For shared-FOND surface levels only (internal 1
-    // jungle / 5 icy); 3/7 are tile-based with no FOND (still smeared —
-    // separate follow-up).
     const bool fond_level =
         ctx.state->current_level == 1 || ctx.state->current_level == 5;
-    // Off-level slot fill that MIRRORS the adjacent screen's edge strip
-    // (slot col x ← adj-screen col 319-x) instead of clamp_slot's single-
-    // column smear — so a textured edge (icy water, dark-woods forest)
-    // reads as a real reflected strip, not a smudged column.  Mirrors the
-    // whole slot; FOND levels overwrite the sky band afterwards via
-    // fond_sky_band, non-FOND levels (dark woods) keep the mirror.
-    auto offlevel_slot = [&](int slot, int adj_s) {
-        FrameBuffer t{};
-        ctx.compose_static(adj_s, t, /*frozen_full=*/false);
-        for (int y = 0; y < H; ++y)
-            for (int x = 0; x < 320; ++x) {
-                const int sc = 319 - x;   // reflect across the screen edge
-                const std::uint8_t* e =
-                    &t.px[(static_cast<std::size_t>(y) * 320 + sc) * 4];
-                std::uint8_t* d =
-                    &strip[(static_cast<std::size_t>(y) * kStripW +
-                            static_cast<std::size_t>(slot) * 320 + x) * 4];
-                d[0] = e[0]; d[1] = e[1]; d[2] = e[2]; d[3] = 255;
-            }
-    };
-    auto fond_sky_band = [&](int slot) {
-        if (!ctx.wsp->backdrop_ok()) return;
-        const int gb = H - presentation::kWideGroundBandRows;
-        for (int y = 0; y < gb; ++y)
-            std::memcpy(&strip[(static_cast<std::size_t>(y) * kStripW +
-                                static_cast<std::size_t>(slot) * 320) * 4],
-                        &ctx.wsp->backdrop().px[static_cast<std::size_t>(y) * 320 * 4],
-                        320 * 4);
-    };
-    // Off-level edge fill that is PIXEL-IDENTICAL to the steady margin:
-    // compose the adjacent screen's FULL wide static bg exactly the way
-    // the static view does (compose_surface_screen_wide_native →
-    // compose_static_wide_bg_native: torus sky + mirror ground + the
-    // re-drawn bg-tile rows the mirror/clamp fills can't reproduce) and
-    // copy its OUTER margin into the slot's inner M columns — the only
-    // part the window ever shows.  `side` < 0 = left slot (its RIGHT M
-    // cols ← the screen's LEFT margin); > 0 = right slot (its LEFT M cols
-    // ← the RIGHT margin).  This is what kills the 1-frame pop at the
-    // pan↔steady hand-off (the earlier mirror differed in the sky band
-    // and lacked the forest-backdrop / floor row extension).
-    auto steady_margin_slot = [&](int slot, int adj_s, int side) {
-        const presentation::FrameBuffer* bd =
-            (ctx.wsp->backdrop_ok() && ctx.render->visual_background)
-                ? &ctx.wsp->backdrop()
-                : nullptr;
-        std::vector<std::uint8_t> wide;
-        ctx.compose_wide_native(adj_s, M, bd, wide);
-        const int wide_w = 320 + 2 * M;
-        for (int y = 0; y < H; ++y)
-            for (int x = 0; x < M; ++x) {
-                const int sc = (side < 0) ? x : (M + 320 + x);
-                const int dc = (side < 0) ? (320 - M + x) : x;
-                const std::uint8_t* e =
-                    &wide[(static_cast<std::size_t>(y) * wide_w + sc) * 4];
-                std::uint8_t* d =
-                    &strip[(static_cast<std::size_t>(y) * kStripW +
-                            static_cast<std::size_t>(slot) * 320 + dc) * 4];
-                d[0] = e[0]; d[1] = e[1]; d[2] = e[2]; d[3] = 255;
-            }
-    };
     fill_real(1, lo + 1);          // min   (always real)
     fill_real(2, lo + 2);          // min+1 (always real)
-    // Decide the EDGE slots (0 = left of the strip, 3 = right) the SAME
-    // way the steady frame does — via widescreen_neighbors — so a screen
-    // reached/left by warp (Dark Woods trunk: s9 right, s12 left) or a
-    // level edge resolves to OFF-LEVEL during the pan exactly as it does
-    // when static.  Without this the pan kept showing the trunk (real
-    // index neighbour) and smearing the no-neighbour edge mid-slide.
+    // Edge slots (0 and 3) resolved like the steady frame
+    // (widescreen_neighbors), so a warp seam or level edge is off-level during
+    // the pan too.
     const bool secret = ctx.state->secret_flag != 0;
     const auto nb_l = presentation::widescreen_neighbors(
         ctx.state->current_level, lo + 1, secret, count);
@@ -750,43 +486,33 @@ void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
         ctx.state->current_level, lo + 2, secret, count);
     const bool slot0_real = lo >= 0 && nb_l.left == lo;
     const bool slot3_real = lo + 3 < count && nb_r.right == lo + 3;
-    // LEFT edge.  FOND levels: mirror ground + real FOND sky.  Dark Woods
-    // (internal 3, no FOND): mirror the whole forest strip.  L7: smear.
+    // Left edge: FOND levels mirror ground + FOND sky; tile levels the steady
+    // margin.
     if (slot0_real) {
         fill_real(0, lo);
     } else if (fond_level) {
-        offlevel_slot(0, lo + 1);
-        fond_sky_band(0);
+        mirror_slot(ctx, strip, 0, lo + 1);
+        fond_sky_band(ctx, strip, 0);
     } else {
-        // Tile levels (3/7): the exact steady margin — the L7 warp
-        // seams (S13 left of a 13->14 pan) smeared cave-hall pixels
-        // with clamp_slot; the steady margin is the validated wall/
-        // row fill the pan hands off to.
-        steady_margin_slot(0, lo + 1, -1);
+        steady_margin_slot(ctx, strip, 0, lo + 1, -1);   // tile levels 3/7
     }
-    // RIGHT edge.  L1's open-water end screen fills the whole slot with
-    // the FOND + lake; else mirror (FOND/dark-woods) or smear (L7).
+    // Right edge: L1's open-water end screen fills the slot with FOND + lake;
+    // otherwise as the left edge.
     const bool l1_end_off_right = ctx.state->current_level == 1 &&
                                   lo + 2 == core::kLastScreen &&
                                   ctx.wsp->backdrop_ok();
     if (slot3_real) {
         fill_real(3, lo + 3);
     } else if (l1_end_off_right) {
-        put_slot(3, ctx.wsp->backdrop());             // full FOND; water added below
+        put_slot(strip, 3, ctx.wsp->backdrop());   // full FOND; water below
     } else if (fond_level) {
-        offlevel_slot(3, lo + 2);
-        fond_sky_band(3);
+        mirror_slot(ctx, strip, 3, lo + 2);
+        fond_sky_band(ctx, strip, 3);
     } else {
-        // Tile levels (3/7): exact steady margin (S9 right of an 8->9
-        // pan showed a clamp smear where steady has the gray wall).
-        steady_margin_slot(3, lo + 2, +1);
+        steady_margin_slot(ctx, strip, 3, lo + 2, +1);   // tile levels 3/7
     }
-    // L1 mid-air-island END screen (sprite 7 = water): the off-level slot
-    // to the right of the last screen was just edge-clamped (col 319
-    // smeared), losing the lake.  Continue the REAL water past the island
-    // into the strip so the 17→18 pan shows the same water as the steady
-    // frame instead of a smeared/borked edge.  Self-gating in the helper
-    // (no-op off L1's last screen); guard here that screen 18 is in-strip.
+    // L1 end screen: continue the real water into the off-level slot
+    // (self-gating helper; guard that the last screen is in the strip).
     if (ctx.state->current_level == 1 && lo <= core::kLastScreen &&
         core::kLastScreen <= lo + 3)
         presentation::continue_l1_end_water(
@@ -796,9 +522,17 @@ void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
     // ── Seam-column continuity across the strip (tile_patterns) ──────
     pan_bridge_seams(ctx, strip, lo, new_s, new_center, slot0_real,
                      slot3_real);
-    // Upscale the static strip ONCE (omniscale included) — the pan then
-    // windows the pre-upscaled HD strip per frame with NO per-frame
-    // upscale (was the choppiness; mirrors the steady-state cache #61).
+    return strip;
+}
+
+void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
+                        const FrameBuffer& new_center) {
+    const int M = ctx.wsp->margin(), WN = ctx.wsp->native_w();
+    const int H = kStripH;
+    const int lo = std::min(old_s, new_s) - 1;
+    const std::vector<std::uint8_t> strip =
+        build_pan_strip(ctx, old_s, new_s, new_center);
+    // Upscale the strip once; each frame windows the HD strip.
     std::vector<std::uint8_t> hd_strip =
         enhance::upscale_rgba(strip, kStripW, H, ctx.hd_scale,
                               *ctx.hd_profile);
@@ -808,42 +542,26 @@ void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
         static_cast<std::size_t>(wWh) * wHh * 4);   // HD window buffer
     const int x0_start = (old_s - lo) * 320 - M;   // window left edge, centred on OLD
     const int x0_end   = (new_s - lo) * 320 - M;   // …on NEW
-    const int n = smooth_t ? 36 : 12;              // SCROLL_FRAMES
-    // Debug aid: OLDUVAI_DUMP_TRANSITION covers this path too (the
-    // legacy slide + non-wide play_transition already dump) — the
-    // panorama saves the NATIVE strip window per frame as
-    // ptrans_NNNN.bmp so pan seams can be verified headlessly.
-    const char* pan_dump = std::getenv("OLDUVAI_DUMP_TRANSITION");
-    // Smooth pans on the wall clock (wall_progress); classic keeps its
-    // exact frame count.  A quit mid-pan clears *running and ends the pan
-    // on the next check, in both modes.
-    const Uint32 t0 = SDL_GetTicks();
-    const Uint32 dur = static_cast<Uint32>(n) * step_ms;
-    for (int f2 = 1; *ctx.running; ++f2) {
-        const double p = smooth_t ? wall_progress(t0, dur, 1.0 / n)
-                                  : static_cast<double>(f2) / n;
-        const double t = std::min(1.0, p);
-        int x0 = static_cast<int>(
-            std::lround(x0_start + (x0_end - x0_start) * t));
-        if (x0 < 0) x0 = 0;
-        if (x0 > kStripW - WN) x0 = kStripW - WN;
-        if (pan_dump != nullptr) {
-            static int pseq = 0;
-            std::vector<std::uint8_t> nat(
-                static_cast<std::size_t>(WN) * H * 4);
+    const int n = ctx.smooth_motion ? 36 : 12;     // SCROLL_FRAMES
+    static int seq = 0;
+    if (!*ctx.running) return;
+    run_pan(ctx, n, [&](const PanStep& st) {
+        const double t = std::min(1.0, st.p);
+        const int x0 = std::clamp(
+            static_cast<int>(std::lround(x0_start + (x0_end - x0_start) * t)),
+            0, kStripW - WN);
+        // OLDUVAI_DUMP_TRANSITION: the native strip window (ptrans_NNNN.bmp).
+        if (std::getenv("OLDUVAI_DUMP_TRANSITION") != nullptr) {
+            std::vector<std::uint8_t> nat(static_cast<std::size_t>(WN) * H * 4);
             for (int y = 0; y < H; ++y)
                 std::copy_n(strip.begin() +
                                 (static_cast<std::size_t>(y) * kStripW +
                                  static_cast<std::size_t>(x0)) * 4,
                             static_cast<std::size_t>(WN) * 4,
-                            nat.begin() +
-                                static_cast<std::size_t>(y) * WN * 4);
-            char path[512];
-            std::snprintf(path, sizeof path, "%s/ptrans_%04d.bmp",
-                          pan_dump, pseq++);
-            save_rgba_image(nat.data(), WN, H, path);
+                            nat.begin() + static_cast<std::size_t>(y) * WN * 4);
+            dump_frame("ptrans", -1, seq, nat.data(), WN, H);
         }
-        const int x0h = x0 * ctx.hd_scale;         // HD strip x-offset
+        const int x0h = x0 * ctx.hd_scale;   // HD strip x-offset
         for (int y = 0; y < wHh; ++y)
             std::copy_n(
                 hd_strip.begin() + (static_cast<std::size_t>(y) * sWh +
@@ -852,10 +570,7 @@ void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
                 work.begin() + static_cast<std::size_t>(y) * wWh * 4);
         ctx.wsp->present_transition(work, /*with_hud=*/true,
                                     /*pre_upscaled=*/true);
-        paced(ctx, step_ms);
-        if (!poll_screen_events(ctx.win)) *ctx.running = false;
-        if (smooth_t ? p >= 1.0 : f2 >= n) return;
-    }
+    });
 }
 
 }  // namespace olduvai::presentation

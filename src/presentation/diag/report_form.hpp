@@ -1,14 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// F5 in-game bug-report form — shared by the platform level and the boss
-// arena (BACKLOG §3.30).  Owns the form's state (fields menu, confirm dialog,
-// description editor, the stashed pre-form frame) and its input handling;
-// the freeze-frame servicing runs through service_freeze(), with the frozen
-// scene, the present and the report's contents supplied by the driver as
-// callbacks.  The controllers themselves (Menu, ConfirmDialog, EditOverlay,
-// report_templates, write_bug_report) live where they always did — this is
-// orchestration only.  Ordering is part of the frame-loop contract: the
-// report_form / menu_script golden gates pin the platform side byte-exact.
+// F5 bug-report form, shared by the platform level and the boss arena: form
+// state (fields menu, confirm dialog, description editor, the stashed
+// pre-form frame) and input handling.  The driver supplies the frozen scene,
+// the present and the report contents.  Ordering is part of the frame-loop
+// contract (the report_form / menu_script goldens pin it).
 
 #pragma once
 
@@ -37,30 +33,25 @@ public:
     bool open() const { return open_; }
     bool edit_open() const { return edit_open_; }
 
-    // F5: freeze the sim and open the form — seed fresh fields and let the
-    // form/editor/confirm own input until Save (writes) or Discard.  The
-    // screenshot is the pre-form frame stashed by service_freeze().
+    // F5: freeze and open the form with fresh fields; it owns input until Save
+    // or Discard.  The screenshot is the pre-form frame service_freeze()
+    // stashed.
     void open_form();
 
     // Form input while open (call only when open()); consumes every event.
     void handle_event(const SDL_Event& ev);
 
-    // OLDUVAI_MENU_SCRIPT "type:" tokens — dispatched STRAIGHT to the
-    // editor's event handler, NOT via SDL_PushEvent: sdl2-compat refuses
-    // app-pushed TEXTINPUT events (Event2to3 returns NULL and
-    // SDL3_PushEvent(NULL) segfaults).  A TEXTINPUT can only insert
-    // (kNone), so save/cancel handling is not needed here.
+    // OLDUVAI_MENU_SCRIPT "type:" tokens, sent straight to the editor, not
+    // through SDL_PushEvent: sdl2-compat rejects app-pushed TEXTINPUT (and
+    // SDL3_PushEvent then segfaults).  Text input only inserts.
     void inject_text(const std::string& txt);
 
-    // What a level driver supplies to the freeze-frame service.  The form
-    // itself is driver-agnostic; the frozen scene, the present and the
-    // report's CONTENTS are the driver's (a platform level and a boss arena
-    // differ in all three).
+    // What the driver supplies: the frozen scene, the present and the report
+    // contents.
     struct FreezeDeps {
-        // Draw the frozen scene into a native 320x200 frame WITHOUT advancing
-        // any per-frame state — the caller `continue`s before its tick, so an
-        // advancing draw here would be the only advance of a frozen frame
-        // (open F5 mid-swing and the club drained away).
+        // Draw the frozen scene into a native 320x200 frame without advancing
+        // any state (the caller skips its tick, so an advance here would drain
+        // the club swing).
         std::function<void(FrameBuffer&)> compose;
         // Present a native form frame.
         std::function<void(FrameBuffer&)> show;
@@ -74,10 +65,8 @@ public:
         std::uint32_t frame_ms;
     };
 
-    // Freeze + draw over the frozen scene; Save writes the report from the
-    // stashed frame.  Returns true when the form owned this frame (the
-    // caller must `continue` — full freeze); false when the form is closed
-    // and the frame proceeds.
+    // Freeze and draw the form; Save writes the report from the stashed frame.
+    // True when the form owned this frame (the caller skips the rest).
     bool service_freeze(const FreezeDeps& d);
 
 private:
@@ -95,6 +84,9 @@ private:
     void seed_();
     void retemplate_if_untouched_();
     void open_confirm_();
+    void on_edit_event_(const SDL_Event& ev);
+    void on_confirm_key_(SDL_Keycode sym);
+    void on_form_key_(SDL_Keycode sym);
 
     Bind bind_;
     Menu menu_;

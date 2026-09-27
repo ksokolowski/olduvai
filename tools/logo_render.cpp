@@ -21,8 +21,8 @@
 #include <string>
 #include <vector>
 
+#include "enhance/banner_shader.hpp"
 #include "enhance/hd_text.hpp"
-#include "presentation/render/banner_fx.hpp"
 
 #if defined(__GNUC__) || defined(__clang__)   // MSVC: C4068 unknown pragma
 #pragma GCC diagnostic push
@@ -124,12 +124,11 @@ void draw_title(Canvas& c, HdText& font, const std::string& text, int tx,
         for (int dy = -o; dy <= o; dy += o)
             for (int dx = -o; dx <= o; dx += o)
                 if (dx || dy)
-                    font.draw(*buf, c.w, c.h, tx + dx, baseline + dy, text,
-                              kOutR, kOutG, kOutB);
-        const auto shade =
-            olduvai::presentation::make_banner_shade("caveman", kShadePhase);
-        font.draw_styled(*buf, c.w, c.h, tx, baseline, text, shade);
-        font.draw_styled(*buf, c.w, c.h, tx + bold, baseline, text, shade);
+                    font.draw({*buf, c.w, c.h}, tx + dx, baseline + dy, text,
+                              {kOutR, kOutG, kOutB});
+        const olduvai::enhance::BannerShader shade("caveman", kShadePhase);
+        font.draw_banner({*buf, c.w, c.h}, tx, baseline, text, shade);
+        font.draw_banner({*buf, c.w, c.h}, tx + bold, baseline, text, shade);
     }
 }
 

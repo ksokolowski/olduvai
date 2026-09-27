@@ -16,7 +16,9 @@
 
 #include <SDL.h>
 
+#include "prepare/exe_tables.hpp"
 #include "presentation/audio/audio.hpp"
+#include "presentation/audio/opl_sfx.hpp"
 
 namespace {
 
@@ -32,6 +34,17 @@ namespace {
 // still initialises the SDL audio subsystem, and that is what was failing.
 // Same idiom as test_window_util.cpp's SDL_VIDEODRIVER pin.
 void force_dummy_audio() { SDL_setenv("SDL_AUDIODRIVER", "dummy", 1); }
+
+// These devices at 48 kHz.
+olduvai::presentation::AudioSetup at_48k(const char* music, const char* sfx,
+                                         bool offline) {
+    olduvai::presentation::AudioSetup s;
+    s.music_device = music;
+    s.sfx_backend = sfx;
+    s.rate = 48000;
+    s.offline = offline;
+    return s;
+}
 
 void push_u32(std::vector<std::uint8_t>& v, std::uint32_t x) {
     v.push_back(static_cast<std::uint8_t>(x >> 24));
@@ -74,8 +87,7 @@ std::vector<std::uint8_t> synthetic_mdi() {
 
 TEST_CASE("SdlAudio: dummy-driver callback thread vs main-thread API") {
     force_dummy_audio();
-    olduvai::presentation::SdlAudio audio("opl", "", "", "opl", 48000, 0, "",
-                                          /*offline=*/false);
+    olduvai::presentation::SdlAudio audio(at_48k("opl", "opl", /*offline=*/false));
     // The dummy driver opens a real SDL device serviced by a real thread; if
     // a build ever routes this to a null driver with no callback, ok() still
     // holds and the test degenerates to API smoke — acceptable, not fatal.
@@ -117,8 +129,7 @@ TEST_CASE("SdlAudio: --render-audio's OPL arm renders non-silent, stable PCM") {
     // never been handed a track.  No pinned hash by policy (std::pow feeds an
     // integer quantisation; FMA contraction under LTO moves it) — run-to-run
     // equality plus a peak threshold instead.
-    olduvai::presentation::SdlAudio audio("opl", "", "", "opl", 48000, 0, "",
-                                          /*offline=*/true);
+    olduvai::presentation::SdlAudio audio(at_48k("opl", "opl", /*offline=*/true));
     REQUIRE(audio.music_available());
     const int frames = 24000;   // half a second at 48 kHz
     const auto a = audio.render_offline(synthetic_mdi(), frames);
@@ -140,8 +151,8 @@ TEST_CASE("SdlAudio: a music device that cannot start falls back to FM") {
     // game.  A misspelt device reaches the same branch on any machine (one
     // with ROMs installed would load them), so it stands in for the case.
     force_dummy_audio();
-    olduvai::presentation::SdlAudio audio("mt32-bultin", "", "", "auto", 48000,
-                                          0, "", /*offline=*/true);
+    olduvai::presentation::SdlAudio audio(
+        at_48k("mt32-bultin", "auto", /*offline=*/true));
     CHECK(audio.music_available());
     CHECK(audio.active_music_backend() == "opl");
     CHECK(audio.music_fell_back());   // --render-audio skips on this
@@ -150,12 +161,24 @@ TEST_CASE("SdlAudio: a music device that cannot start falls back to FM") {
 
 TEST_CASE("SdlAudio: sfx backend none is the Sound card's Off") {
     force_dummy_audio();
-    olduvai::presentation::SdlAudio off("none", "", "", "none", 48000, 0, "",
-                                        /*offline=*/true);
+    olduvai::presentation::SdlAudio off(at_48k("none", "none", /*offline=*/true));
     CHECK(!off.sfx_enabled());
     CHECK(off.active_music_backend() == "none");   // Off is off: no fallback
-    olduvai::presentation::SdlAudio sb("opl", "", "", "sb-dac", 48000, 0, "",
-                                       /*offline=*/true);
+    olduvai::presentation::SdlAudio sb(at_48k("opl", "sb-dac", /*offline=*/true));
     CHECK(sb.sfx_enabled());
     CHECK(!sb.music_fell_back());   // opl was asked for and is playing
+}
+
+TEST_CASE("SdlAudio: the AdLib card bakes its FM effects") {
+    // With the catalog installed, load_sfx() skips the VOC for these ids, so
+    // an unbaked OPL effect is a silent one.  Synthetic patch: any values
+    // render, and none of the game's patch bytes live in the tree.
+    olduvai::prepare::AdlibSfxVoice v;
+    for (int i = 0; i < 13; ++i) v.mod[i] = v.car[i] = 0x20 + i;
+    olduvai::presentation::install_adlib_sfx_voices({v, v, v});
+    force_dummy_audio();
+    olduvai::presentation::SdlAudio audio(at_48k("opl", "opl", /*offline=*/false));
+    REQUIRE(audio.ok());
+    for (const auto& id : olduvai::presentation::opl_sfx_ids())
+        CHECK_MESSAGE(audio.has_sfx(id), id);
 }

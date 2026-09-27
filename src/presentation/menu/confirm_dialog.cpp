@@ -28,7 +28,7 @@ void ConfirmDialog::ask(const std::string& title,
 bool ConfirmDialog::answer_yes() {
     if (!open_ || !question_) return false;
     const bool yes = !apply_sel_;
-    std::function<void()> cb = std::move(on_yes_);
+    const std::function<void()> cb = std::move(on_yes_);
     close();
     if (yes && cb) cb();
     return yes;

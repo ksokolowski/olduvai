@@ -1,30 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Fluid-bubble physics — persistent rising bubbles for the secret room.
-//
-// Enhanced-mode replacement for the EXE's 627-draw-per-frame LCG scatter.
-// The scatter STILL RUNS (refresh_secret_tiles in game_app.cpp keeps rolling
-// the global LCG) — this system only provides the persistent state for an
-// alternative VISUAL.  The LCG stream is never touched here.
-//
-// Design matches the reference implementation.
-//
-// PRNG: a dedicated core::RandLcg16 instance (the EXE LCG, seeded once) —
-// NEVER the game global_rng().  Using the same LCG algorithm as Python's
-// _cosmetic_rng (mult 0x015A4E35) makes the bubble stream byte-identical to
-// the reference from the shared seed; std::minstd_rand was a different LCG so
-// every bubble diverged.  The global game LCG must advance identically in
-// classic and enhanced modes for replay/trace parity, hence a SEPARATE
-// instance here, not global_rng().
-//
-// Physics per tick:
-//   prev_x/prev_y = x/y (snapshot for smooth-motion lerp)
-//   y -= vy                          (rise)
+// Fluid-bubble physics: persistent rising bubbles for the enhanced secret room,
+// a visual replacing the EXE's per-frame LCG scatter (the scatter still rolls
+// the global LCG; this never touches it).  Uses its own core::RandLcg16 (the
+// reference's cosmetic LCG, mult 0x015A4E35), so the stream matches the
+// reference from the shared seed and the game LCG stays identical across
+// modes.
+// Per tick:
+//   prev_x/prev_y = x/y            (smooth-motion snapshot)
+//   y -= vy                        (rise)
 //   wobble_t += wobble_freq
 //   x = center_x + sin(wobble_t) * wobble_amp
-//   if y < kDespawnY → respawn at bottom with fresh random params
-//
-// Constants are public so tests can reference them.
+//   y < kDespawnY -> respawn at the bottom with fresh parameters
 
 #pragma once
 
@@ -70,9 +57,8 @@ public:
     // [0, kPlayfieldH)) so the scene is full from frame 1.
     void init();
 
-    // Advance physics one logic tick (18 Hz).
-    // Snapshots prev_x/prev_y, then advances y, wobble, x.
-    // Despawned bubbles are replaced in-place with fresh respawn params.
+    // One logic tick: snapshot prev, advance y / wobble / x, respawn despawned
+    // bubbles in place.
     void tick();
 
     const std::vector<FluidBubble>& bubbles() const { return bubbles_; }

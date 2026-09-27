@@ -14,20 +14,10 @@ bool hd_active(bool enhanced, const std::string& hd_profile) {
 }
 
 int hd_scale_for(bool enhanced, const std::string& hd_profile, int render_scale) {
-    // Scale 3 is reachable as of the handheld spike.  It was clamped away by a
-    // `>= 4 ? 4 : 2`, which silently turned a request for 3 into 2.
-    //
-    // WHY IT MATTERS, measured on a TrimUI Smart Pro (1280x720 panel, 356x200
-    // logical widescreen): x2 renders 712x400 and the display stretches it 1.8x
-    // — non-integer and soft.  x4 renders 1424x800 and then throws pixels away
-    // shrinking to fit.  x3 renders 1068x600, a 1.2x stretch: the closest fit
-    // and the least wasted work.  `smooth` implements a genuine scale3x; eagle
-    // and xbr fall back to it with a warning.
-    //
-    // The general rule this serves is "the largest scale that does not exceed
-    // the output", which is a display-fit question rather than a handheld one:
-    // the old fixed 4 overshoots any output below 1424x800, a small desktop
-    // window included.
+    // The largest scale that fits the output.  3 matters: on a 1280x720
+    // handheld (356x200 logical widescreen) x2 is a soft 1.8x stretch, x4
+    // renders 1424x800 and throws pixels away, x3 (1068x600) is a 1.2x stretch.
+    // smooth has a real scale3x; eagle and xbr fall back to it with a warning.
     if (!hd_active(enhanced, hd_profile)) return 1;
     if (render_scale < 2) return 2;
     if (render_scale > 4) return 4;
@@ -40,10 +30,11 @@ ApplyTier classify_change(const std::string& key, const std::string& new_value,
         key == "aspect")
         return ApplyTier::Live;
 
-    // Smooth-present keys: the persist hook folds them into the pacing config
-    // (smooth_config.hpp) that every frame loop reads at its start.  Only the
-    // handheld Enhanced preset stages them, beside the enhanced flip whose
-    // rebuild picks them up — live, not next-launch.
+    // The pad mapping: applied with the Apply (StagingBindings persist hook).
+    if (key.rfind("pad_", 0) == 0) return ApplyTier::Live;
+
+    // Smooth-present keys: the persist hook feeds them to the pacing config
+    // every frame loop reads at its start; live.
     if (key == "smooth_subframes" || key == "smooth_vsync")
         return ApplyTier::Live;
 
@@ -67,10 +58,7 @@ ApplyTier classify_change(const std::string& key, const std::string& new_value,
     }
 
     if (key == "render_scale") {
-        // Pre-seeded per parse_int's contract (it leaves `rs` untouched on
-        // failure).  The previous form initialised `rs` and then immediately
-        // overwrote it via stoi, or returned without reading it — a dead store
-        // either way — and used an exception for ordinary control flow.
+        // `rs` is left untouched when parse_int fails.
         int rs = cur.render_scale;
         if (!parse_int(new_value, rs)) return ApplyTier::PersistOnly;
         if (rs == cur.render_scale) return ApplyTier::PersistOnly;
@@ -89,6 +77,24 @@ ApplyTier classify_change(const std::string& key, const std::string& new_value,
 
 
 
+bool set_display_key(DisplaySettings& d, const std::string& key,
+                     const std::string& value) {
+    if (key == "enhanced") {
+        d.enhanced = value == "true" || value == "1";
+    } else if (key == "render_scale") {
+        parse_int(value, d.render_scale);   // untouched on a malformed value
+    } else if (key == "hd_profile") {
+        d.hd_profile = value;
+    } else if (key == "music_device") {
+        d.music_device = value;
+    } else if (key == "sfx_backend") {
+        d.sfx_backend = value;
+    } else {
+        return false;
+    }
+    return true;
+}
+
 ApplyTier classify_change_in_set(
     const std::string& key, const std::string& new_value,
     const DisplaySettings& cur,
@@ -99,18 +105,7 @@ ApplyTier classify_change_in_set(
     if (!is_display(key)) return classify_change(key, new_value, cur);
     DisplaySettings target = cur;
     const auto overlay = [&target](const std::string& k, const std::string& v) {
-        if (k == "enhanced") {
-            target.enhanced = v == "true" || v == "1";
-        } else if (k == "hd_profile") {
-            target.hd_profile = v;
-        } else if (k == "render_scale") {
-            // A malformed staged value simply keeps the current render_scale:
-            // the menu cannot produce one, and a stray play.json value should
-            // not spam.  That policy is now the callee's contract — parse_int
-            // leaves its target untouched on failure — rather than an empty
-            // catch block that had to be explained and silenced.
-            parse_int(v, target.render_scale);
-        }
+        set_display_key(target, k, v);
     };
     for (const auto& [k, v] : staged) overlay(k, v);
     overlay(key, new_value);   // this key last (it may or may not be staged yet)
@@ -122,31 +117,26 @@ ApplyTier classify_change_in_set(
 }
 
 void apply_preset(MenuBindings& bind, const std::string& preset) {
-    // The bundle comes from the profile table, resolved within the session's
-    // family — seeded into the bindings as "profile_family" (empty or
-    // unknown = desktop) — so a handheld's Enhanced is its own member, not
-    // omniscale x4.
+    // The bundle comes from the profile table within the session's family
+    // ("profile_family"; empty or unknown = desktop), so a handheld's Enhanced
+    // is its own member.
     const ProfileDef p = resolve_preset(bind.get("profile_family"), preset);
     const bool enhanced = p.role == ProfileRole::Enhanced;
     for (std::size_t i = 0; i < p.pin_count; ++i) {
         const std::string key = p.pins[i].key;
         const std::string value = p.pins[i].value;
         if (key == "aspect") {
-            // Style sets the MODE.  A deliberate 4:3 or stretch chosen in
-            // Video is a display setting and survives a switch to Enhanced
-            // (what the separate hd-43 preset used to express).  "" counts as
-            // not-deliberate alongside "keep": an unseeded binding has no
-            // aspect, and treating that as a choice would drop the headline
-            // feature.  Classic always returns to keep.
+            // Style sets the mode.  A deliberate 4:3 or stretch survives the
+            // switch to Enhanced; "keep" and "" (unseeded) do not count as
+            // deliberate.  Classic always returns to keep.
             const std::string cur = bind.get("aspect");
             if (!enhanced || cur.empty() || cur == "keep")
                 bind.set("aspect", value);
             continue;
         }
-        // Classic stages only the master flag (and aspect, above).  Its other
-        // pins — hd_profile, enhance — are inert while enhanced=false
-        // (hd_scale_for forces compose scale 1), and staging them would put
-        // spurious Reinit rows in the confirm dialog.
+        // Classic stages only `enhanced` (and aspect, above): its other pins
+        // are inert while enhanced=false, and staging them would add spurious
+        // Reinit rows.
         if (!enhanced && key != "enhanced") continue;
         bind.set(key, value);
     }

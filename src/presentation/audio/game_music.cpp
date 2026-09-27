@@ -27,6 +27,27 @@ void play_game_music(SdlAudio* audio, const std::filesystem::path& game_dir,
     play_mdi(audio, archives.entry(name), name);
 }
 
+namespace {
+
+const char* level_music_name(int internal) {
+    switch (internal) {
+        case 1: return "RIK1.MDI";
+        case 2: case 4: case 6: return "ROCKY.MDI";
+        case 3: return "BOY16.MDI";
+        case 5: return "RIK6.MDI";
+        case 7: return "RIK8.MDI";
+        default: return nullptr;
+    }
+}
+
+}  // namespace
+
+void play_level_music(SdlAudio* audio, const std::filesystem::path& game_dir,
+                      int internal) {
+    if (const char* name = level_music_name(internal))
+        play_game_music(audio, game_dir, name);
+}
+
 void play_tally_music(SdlAudio* audio, const std::filesystem::path& game_dir) {
     if (audio == nullptr || !audio->music_available()) return;
     // Fade, don't cut: the EXE fades the level track before BONUS.MDI.

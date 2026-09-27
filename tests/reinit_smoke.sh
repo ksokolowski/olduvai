@@ -49,7 +49,8 @@ export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}"
 export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}"   # mute test runs
 
 # Run the game with the reinit hook.  --play-frames 240 is a safety ceiling
-# (the hook fires on frame 5 and exits on re-entry frame 0, well under 240).
+# (the hook fires on frame 5 and exits after the in-place rebuild, well
+# under 240).
 OLDUVAI_REINIT_TEST="${RESULT_FILE}" \
     "${BINARY}" \
     --play --enhanced --hd-profile smooth --render-scale 2 \

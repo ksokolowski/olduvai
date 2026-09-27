@@ -3,6 +3,8 @@
 #include "enhance/parallel_rows.hpp"
 #include "presentation/sequence/screens.hpp"
 
+#include "presentation/render/shift_blit.hpp"   // clear_opaque
+
 #include <SDL.h>
 #include <algorithm>
 #include <cstdio>
@@ -30,32 +32,18 @@ void draw_centered(FrameBuffer& fb,
 // asks the same question, so it is asked in one place.
 enum class TallyKey { None, Skip, Quit };
 
-// Drain the event queue and classify.  Edge-triggered: only a fresh KEYDOWN
-// counts, so a key held from gameplay does not blow through the pause the
-// instant the tally opens.  Mirrors the reference's _wait_skippable
-// (FUN_1847_0670 fire-key polling) — the EXE's polled loop is calibrated-delay;
-// we translate to event edges.
-//
-// Quit is a window close and nothing else.  ESC SKIPS, like SPACE/RETURN: a
-// post-win tally must never abort, which the boss caller once turned into a
-// game-over.
-//
-// This was written out three times — `tally_pause`, the HD `pause` lambda and
-// `roll_keys` — identical but for how each encoded its answer (two bools and a
-// tri-state int).  The tri-state was the general one, so it is what survives;
-// the bools were readings of it (`k < 0`, `k > 0`).  Three copies of an input
-// policy is three places to fix when the policy changes, and the ESC rule here
-// is one the owner has already flagged for revisiting.
+// Drain the event queue and classify, edge-triggered (a fresh KEYDOWN only), so
+// a key held from gameplay does not skip the pause (the EXE polls the fire key,
+// FUN_1847_0670).  Quit is a window close only; ESC skips like SPACE/RETURN (a
+// post-win tally must never abort).
 TallyKey poll_tally_key() {
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         if (ev.type == SDL_QUIT) return TallyKey::Quit;
         if (ev.type == SDL_KEYDOWN) {
             if (ev.key.keysym.sym == SDLK_ESCAPE) return TallyKey::Skip;
-            // Alt+Enter belongs to the fullscreen chord, not the skip
-            // (enter_skip_allowed convention); requeue so the present path's
-            // poll sees and handles the toggle, and stop draining so it is
-            // still there when it looks.
+            // Alt+Enter is the fullscreen chord, not a skip: requeue it for the
+            // present path's poll and stop draining.
             if ((ev.key.keysym.sym == SDLK_RETURN ||
                  ev.key.keysym.sym == SDLK_KP_ENTER) &&
                 (ev.key.keysym.mod & KMOD_ALT) != 0) {
@@ -103,30 +91,11 @@ void step_tally_lives(int& lives_remaining, long& score) {
 
 // ── apply_fade ───────────────────────────────────────────────────────────────
 
-// Scale a buffer toward black.  Measured as the dominant per-frame cost of every
-// transition on a Cortex-A53 handheld, and it was slow for three separate
-// reasons at once — all three fixed here, none of them changing a single output
-// byte.
-//
-//   1. NO SIMD, and not because the loop resists it.  Indexing dst.px/src.px
-//      through references left the compiler unable to prove they do not alias,
-//      so it RELOADED both std::vector data pointers on every iteration and
-//      emitted ldrb/strb — one byte per instruction.  Hoisting the pointers with
-//      __restrict is enough on its own: aarch64 codegen goes from 0 NEON
-//      instructions to 45, i.e. 16 bytes per instruction instead of 1.
-//
-//   2. NO THREADING, on a machine with four cores that were idle.  §3.22
-//      threaded the upscalers in enhance/ and stopped at the layer boundary;
-//      that was right when omniscale cost 57 ms a frame, and wrong once the
-//      scaler became cheap and this became the bottleneck.
-//
-//   3. It runs on the HD buffer.  At widescreen scale 3 that is 1068x600x4 =
-//      2.4 MB read and 2.4 MB written PER TRANSITION FRAME.
-//
-// parallel_rows splits [0, n) into contiguous bands; each band owns a disjoint
-// byte range of dst, so the result is bit-identical however the split falls —
-// the same argument parallel_rows.hpp makes for the scalers, and it holds here
-// for the simpler reason that output index == input index.
+// Scale a buffer toward black: the main per-frame transition cost on a
+// Cortex-A53.  __restrict pointers let the compiler vectorise (0 -> 45 NEON
+// instructions); parallel_rows uses the idle cores; the buffer is the HD one
+// (2.4 MB each way per frame at widescreen scale 3).  Each band owns a
+// disjoint byte range, so the result is identical however rows split.
 void apply_fade(FrameBuffer& dst, const FrameBuffer& src, double t) {
     const int mul = static_cast<int>((1.0 - t) * 256.0);
     const std::size_t n = src.px.size();
@@ -135,11 +104,9 @@ void apply_fade(FrameBuffer& dst, const FrameBuffer& src, double t) {
     const std::uint8_t* const s0 = src.px.data();
     // Bands are counted in PIXELS so a band boundary can never fall inside one.
     const int pixels = static_cast<int>(n / 4);
-    // CAPTURE BY VALUE, then re-qualify inside.  Capturing by reference put the
-    // pointers in the closure, so the __restrict died at the std::function
-    // boundary and the body compiled back to ldrb/strb — verified in the
-    // aarch64 disassembly, which is the only way this is checkable.  Copies
-    // plus locally-restricted pointers give the loop what it needs.
+    // Capture by value and re-qualify inside: pointers captured by reference
+    // lose __restrict at the std::function boundary (verified in the aarch64
+    // disassembly).
     enhance::parallel_rows(pixels, [d0, s0, mul](int p0, int p1) {
         std::uint8_t* __restrict d = d0;
         const std::uint8_t* __restrict s = s0;
@@ -168,36 +135,29 @@ bool fade_to_black(const FrameBuffer& from, const PresentFn& present,
 // ── show_loading_screen ──────────────────────────────────────────────────────
 
 bool show_loading_screen(const FrameBuffer* from, int display_level,
-                         const std::vector<formats::Sprite>& charset,
-                         const std::vector<formats::Rgb>& pal,
-                         const PresentFn& present,
-                         const TextScreenHd& hd) {
+                         const TextPage& page) {
+    const TextScreenHd& hd = page.hd;
     char line2[40];
     std::snprintf(line2, sizeof line2, "while loading Level %d",
                   display_level);
 
-    // --enhance hd-text: render the two rows through the cartoon vector font on
-    // an HD-upscaled black buffer, presented via hd.present_hd — mirrors the
-    // TextScreenHd path in show_score_tally.  Null hd_text →
-    // classic bitmap path below (byte-identical).
+    // Enhanced: the two rows in the vector font over an upscaled black buffer,
+    // via hd.present_hd.  Null hd_text: the classic bitmap path.
     const bool hd_on = hd.hd_text != nullptr && hd.hd_text->ok() &&
                        hd.present_hd && hd.upscale;
 
     if (hd_on) {
         const int hw = 320 * hd.scale;
         const int hh = 200 * hd.scale;
-        // The two vector rows at the EXE baselines (0x60/0x70); drawn at
-        // OUTPUT resolution by present_hd as a crisp overlay.  The scene
-        // buffer carries no text (black, or the fading "from" frame).
+        // The two rows at the EXE baselines (0x60/0x70), drawn at output
+        // resolution; the scene buffer has no text.
         const std::vector<HdTextRow> rows = {{0x60, "Please Wait"},
                                              {0x70, line2}};
         const std::vector<HdTextRow> no_rows;
         FrameBuffer black;   // native black (alpha=255), no bitmap text
         for (std::size_t i = 3; i < black.px.size(); i += 4) black.px[i] = 255;
         const std::vector<std::uint8_t> loading_hd = hd.upscale(black.px);
-        // Pre-upscale the "from" frame once (HD pixels already at HD size when
-        // the caller's `from` is HD — but show_loading_screen takes a native
-        // FrameBuffer, so upscale it the same way the tally upscales its base).
+        // Upscale the native "from" frame once, as the tally does its base.
         std::vector<std::uint8_t> from_hd;
         if (from != nullptr) from_hd = hd.upscale(from->px);
 
@@ -242,19 +202,19 @@ bool show_loading_screen(const FrameBuffer* from, int display_level,
     // ── Classic bitmap path (byte-identical) ──
     FrameBuffer loading;
     for (std::size_t i = 3; i < loading.px.size(); i += 4) loading.px[i] = 255;
-    draw_centered(loading, charset, pal, 0x60, "Please Wait");
-    draw_centered(loading, charset, pal, 0x70, line2);
+    draw_centered(loading, page.charset, page.palette, 0x60, "Please Wait");
+    draw_centered(loading, page.charset, page.palette, 0x70, line2);
 
-    if (from != nullptr && !fade_to_black(*from, present)) return false;
+    if (from != nullptr && !fade_to_black(*from, page.present)) return false;
     FrameBuffer work;
     for (int f = kFadeFrames; f >= 0; --f) {   // fade in the loading text
         apply_fade(work, loading, static_cast<double>(f) / kFadeFrames);
-        if (!present(work)) return false;
+        if (!page.present(work)) return false;
     }
     for (int f = 0; f < 9; ++f) {              // hold ~0.5 s
-        if (!present(loading)) return false;
+        if (!page.present(loading)) return false;
     }
-    return fade_to_black(loading, present);
+    return fade_to_black(loading, page.present);
 }
 
 // ── show_pc1_screen ──────────────────────────────────────────────────────────
@@ -262,17 +222,7 @@ bool show_loading_screen(const FrameBuffer* from, int display_level,
 bool show_pc1_screen(const formats::Pc1Image& img, int hold_frames,
                      const PresentFn& present, const SkipFn& skip,
                      bool fade_in, bool fade_out) {
-    FrameBuffer fb;
-    const std::size_t n = std::min<std::size_t>(img.pixels.size(), 320 * 200);
-    for (std::size_t i = 0; i < n; ++i) {
-        const std::uint8_t idx = img.pixels[i];
-        const auto c = (idx < img.palette.size()) ? img.palette[idx]
-                                                  : formats::Rgb{};
-        fb.px[i * 4] = c.r;
-        fb.px[i * 4 + 1] = c.g;
-        fb.px[i * 4 + 2] = c.b;
-        fb.px[i * 4 + 3] = 255;
-    }
+    const FrameBuffer fb = pc1_frame(img);
     FrameBuffer work;
     if (fade_in) {
         for (int f = kFadeFrames; f >= 0; --f) {
@@ -287,196 +237,162 @@ bool show_pc1_screen(const formats::Pc1Image& img, int hold_frames,
     return !fade_out || fade_to_black(fb, present);
 }
 
-// ── show_score_tally ────────────────────────────────────────────────────────
-//
-// One tally for every level (see the header for the EXE call sites).
+// ---- show_score_tally ----
 
-bool show_score_tally(int& lives, long& score, int display_level,
-                      int bonus, const std::vector<formats::Sprite>& charset,
-                      const std::vector<formats::Rgb>& pal,
-                      const PresentFn& present,
-                      const TextScreenHd& hd, const TallyAudio& sfx) {
-    // Odd display levels award an extra life before the tally.
-    if (display_level & 1) ++lives;
+namespace {
 
-    int bonus_remaining = bonus;
-    int lives_remaining = lives;
+// The level-end tally: LEVEL n / COMPLETED! / BONUS SCORE, then the bonus
+// and lives rows counting into the score.  Classic draws bitmap rows into a
+// native frame; enhanced sends vector rows over a black upscaled base (the
+// reference's text layer).
+class ScoreTally {
+public:
+    ScoreTally(int& lives, long& score, int display_level, int bonus,
+               const TextPage& page)
+        : score_(score), level_(display_level), bonus_(bonus), lives_(lives),
+          charset_(page.charset), pal_(page.palette), present_(page.present),
+          hd_(page.hd),
+          hd_on_(hd_.hd_text != nullptr && hd_.hd_text->ok() &&
+                 hd_.present_hd && hd_.upscale),
+          // The value columns' widths: the starting counts with every digit
+          // '8' (the widest), since the counts only fall.
+          reserve_bonus_(widest(bonus, "  x  10")),
+          reserve_lives_(widest(lives, "  x  1000")) {}
 
-    // --enhance hd-text: route every text row through the cartoon vector font
-    // at HD resolution.  The bitmap base is left black (text suppressed) and
-    // the vector glyphs are drawn on the upscaled buffer, exactly like
-    // the reference text layer (which suppresses the bitmap draw and flushes vector
-    // text at display res over the upscaled scene).  Null hd_text → classic.
-    const bool hd_on = hd.hd_text != nullptr && hd.hd_text->ok() &&
-                       hd.present_hd && hd.upscale;
-
-    FrameBuffer fb;        // native 320x200 base (black bg + alpha)
-    auto fill_base = [&]() {
-        std::fill(fb.px.begin(), fb.px.end(), 0);
-        for (std::size_t i = 3; i < fb.px.size(); i += 4) fb.px[i] = 255;
-    };
-
-    // Build the classic (bitmap) counting-row strings.  Centred, EXE-faithful
-    // "%6d"-padded layout — used ONLY by render_bitmap() below.  The HD path
-    // uses build_rows() (fixed-anchor label/value rows) instead, so the cartoon
-    // font does not slide as the digit widths change.
-    auto rows = [&](char b1[40], char b2[40], char b3[40]) {
-        std::snprintf(b1, 40, "BONUS : %6d  x  10  ", bonus_remaining);
-        std::snprintf(b2, 40, "LIFE  : %6d  x  1000", lives_remaining);
-        std::snprintf(b3, 40, "SCORE : %06ld", std::min(score, 999999L));
-    };
-
-    auto render_bitmap = [&]() {
-        fill_base();
-        char buf[40], b2[40], b3[40];
-        std::snprintf(buf, sizeof buf, "LEVEL %d", display_level);
-        draw_centered(fb, charset, pal, 32, buf);
-        draw_centered(fb, charset, pal, 48, "COMPLETED!");
-        draw_centered(fb, charset, pal, 72, "BONUS SCORE");
-        rows(buf, b2, b3);
-        draw_centered(fb, charset, pal, 96, buf);
-        draw_centered(fb, charset, pal, 120, b2);
-        draw_centered(fb, charset, pal, 144, b3);
-    };
-
-    // Build the HD tally rows at their EXE baselines.  The three title rows are
-    // centred (align 0); the three counting rows are each split into a fixed
-    // right-aligned label (align 1) + a left-aligned value (align 2) so the
-    // proportional cartoon font does not re-centre — and slide — as the bonus
-    // counts down and the score counts up (the reference's _record_tally_rows layout).
-    // draw_tally_rows_overlay derives the colon/value columns from fixed
-    // reference strings, so the columns are stable every frame.  Values use RAW
-    // numbers (no %6d padding) like the reference: "<bonus>  x  10",
-    // "<lives>  x  1000", "<score:06>".  render_bitmap() keeps the EXE-centred
-    // "%6d" strings (classic path unchanged).
-    // The starting counts with every digit as '8' (the widest digit in any
-    // font the overlay loads) — the counts only fall from here.
-    const auto widest = [](int v, const char* suffix) {
-        std::string out = std::to_string(v);
-        for (char& c : out) if (c >= '0' && c <= '9') c = '8';
-        return out + suffix;
-    };
-    const std::string reserve_bonus = widest(bonus_remaining, "  x  10");
-    const std::string reserve_lives = widest(lives_remaining, "  x  1000");
-    auto build_rows = [&]() -> std::vector<HdTextRow> {
-        char buf[40];
-        std::vector<HdTextRow> r;
-        std::snprintf(buf, sizeof buf, "LEVEL %d", display_level);
-        r.push_back({32, buf, 0});
-        r.push_back({48, "COMPLETED!", 0});
-        r.push_back({72, "BONUS SCORE", 0});
-
-        r.push_back({96, "BONUS:", 1});
-        std::snprintf(buf, sizeof buf, "%d  x  10", bonus_remaining);
-        r.push_back({96, buf, 2});
-
-        r.push_back({120, "LIFE:", 1});
-        std::snprintf(buf, sizeof buf, "%d  x  1000", lives_remaining);
-        r.push_back({120, buf, 2});
-
-        r.push_back({144, "SCORE:", 1});
-        std::snprintf(buf, sizeof buf, "%06ld", std::min(score, 999999L));
-        r.push_back({144, buf, 2});
-        // Width reservations (align 3, measured, never drawn): the widest the
-        // two counting values will be during this tally.  Without them the
-        // value column followed the CURRENT bonus width — "390  x  10" is
-        // wider than the "888888" floor — so the whole block slid sideways
-        // as the bonus counted down.
-        r.push_back({0, reserve_bonus, 3});
-        r.push_back({0, reserve_lives, 3});
-        return r;
-    };
-
-    // Present one tally frame for the current state.  HD: upscale the black
-    // base (no text) and pass the rows for the output-res overlay.
-    // The HD tally scene is plain black: present_hd takes an empty buffer for
-    // that and clears, instead of this upscaling a black frame and uploading
-    // it on every counting step.
-    const std::vector<std::uint8_t> hd_black;
-    auto present_state = [&]() -> bool {
-        if (!hd_on) {
-            render_bitmap();
-            return present(fb);
+    // One frame of the current counts.
+    bool show() {
+        if (!hd_on_) {
+            draw_bitmap();
+            return present_(fb_);
         }
-        const int hw = 320 * hd.scale;
-        const int hh = 200 * hd.scale;
-        return hd.present_hd(hd_black, hw, hh, build_rows());
-    };
+        return hd_.present_hd(black_, 320 * hd_.scale, 200 * hd_.scale, rows());
+    }
 
-    // Wait up to `frames`, presenting the current (static) state each frame,
-    // edge-triggered SPACE/RETURN skip.  Classic uses tally_pause on the
-    // bitmap fb; HD re-presents the composed HD scene + overlay each frame.
-    auto pause = [&](int frames) -> bool {
-        if (!hd_on) return tally_pause(present, fb, frames);
-        const std::vector<std::uint8_t>& hd_px = hd_black;
-        const int hw = 320 * hd.scale;
-        const int hh = 200 * hd.scale;
-        const std::vector<HdTextRow> row_list = build_rows();
+    // Hold up to `frames`, re-presenting; a fresh SPACE/RETURN skips.
+    bool hold(int frames) {
+        if (!hd_on_) return tally_pause(present_, fb_, frames);
+        const std::vector<HdTextRow> r = rows();
         for (int f = 0; f < frames; ++f) {
             const TallyKey k = poll_tally_key();
             if (k == TallyKey::Quit) return false;
             if (k == TallyKey::Skip) return true;
-            if (!hd.present_hd(hd_px, hw, hh, row_list)) return false;
+            if (!hd_.present_hd(black_, 320 * hd_.scale, 200 * hd_.scale, r))
+                return false;
         }
         return true;
-    };
-
-    if (!present_state()) return false;
-    // First 4-second pause: edge-triggered SPACE/RETURN skip (not held state).
-    if (!pause(kTallyPauseFrames)) return false;
-
-    // Enhanced #06 — tally-roll skip (owner-ruled DEFAULT, all profiles,
-    // 2026-07-05): SPACE/RETURN during either roll fast-forwards the SAME
-    // per-step arithmetic (identical final score), then falls into the
-    // post-tally pause.  The EXE cannot skip the rolls (FUN_270a_01b4
-    // 0x0303-0x03bd are vsync-only loops, no input poll — catalog #06).
-    // QUIT (window close) aborts mid-roll; ESC skips like SPACE/RETURN — a
-    // post-win tally must never abort (poll_tally_key, one policy for the whole
-    // screen).
-    auto fast_forward = [&]() {
-        while (bonus_remaining > 0) step_tally_bonus(bonus_remaining, score);
-        while (lives_remaining > 0) step_tally_lives(lives_remaining, score);
-    };
-    // Bonus countdown: -2 per frame, +20 score.
-    while (bonus_remaining > 0) {
-        step_tally_bonus(bonus_remaining, score);
-        if (!present_state()) return false;
-        const TallyKey k = poll_tally_key();
-        if (k == TallyKey::Quit) return false;
-        if (k == TallyKey::Skip) { fast_forward(); break; }
     }
-    // Lives countdown: -1 per frame, +1000 score.
-    while (lives_remaining > 0) {
-        step_tally_lives(lives_remaining, score);
-        if (!present_state()) return false;
-        const TallyKey k = poll_tally_key();
-        if (k == TallyKey::Quit) return false;
-        if (k == TallyKey::Skip) { fast_forward(); break; }
+
+    // The bonus (-2, +20 a frame), then the lives (-1, +1000).  SPACE/RETURN
+    // fast-forwards the same per-step arithmetic (the same final score), an
+    // enhanced skip the EXE cannot do (FUN_270a_01b4 0x0303-0x03bd: vsync
+    // loops, no input poll).  False on a window close.
+    bool count() {
+        return count_down(bonus_, step_tally_bonus) &&
+               count_down(lives_, step_tally_lives);
     }
-    if (!present_state()) return false;
-    // Enhanced completion chime — engine extension, NOT EXE-derived.  Fires
-    // once at the final pause (after both countdowns), over the BONUS music,
-    // exactly where the reference plays it
-    // (`if state.cinematic_cue: audio.play_sfx_event("SFX_WAIT_AND_PLAY")`,
-    // gated by cinematic-cue which --enhanced enables).  SFX_WAIT_AND_PLAY is
-    // a synth note (catalog: ch 9 / note 49 crash-cymbal / 400 ms) routed
-    // through play_sfx; the default sb-dac path has no sample so it is silent
-    // there too.  The EXE plays NO SFX here (FUN_270a_01b4 → silent
-    // FUN_1847_065a wait), so the non-enhanced / null-audio path stays silent.
-    if (sfx.enhanced && sfx.audio != nullptr) {
+
+private:
+    static std::string widest(int v, const char* suffix) {
+        std::string out = std::to_string(v);
+        for (char& c : out)
+            if (c >= '0' && c <= '9') c = '8';
+        return out + suffix;
+    }
+
+    bool count_down(int& remaining, void (*step)(int&, long&)) {
+        while (remaining > 0) {
+            step(remaining, score_);
+            if (!show()) return false;
+            const TallyKey k = poll_tally_key();
+            if (k == TallyKey::Quit) return false;
+            if (k == TallyKey::Skip) {
+                while (bonus_ > 0) step_tally_bonus(bonus_, score_);
+                while (lives_ > 0) step_tally_lives(lives_, score_);
+                return true;
+            }
+        }
+        return true;
+    }
+
+    // Classic: centred rows, the EXE's "%6d" padding.
+    void draw_bitmap() {
+        clear_opaque(fb_.px);
+        char buf[40];
+        std::snprintf(buf, sizeof buf, "LEVEL %d", level_);
+        draw_centered(fb_, charset_, pal_, 32, buf);
+        draw_centered(fb_, charset_, pal_, 48, "COMPLETED!");
+        draw_centered(fb_, charset_, pal_, 72, "BONUS SCORE");
+        std::snprintf(buf, sizeof buf, "BONUS : %6d  x  10  ", bonus_);
+        draw_centered(fb_, charset_, pal_, 96, buf);
+        std::snprintf(buf, sizeof buf, "LIFE  : %6d  x  1000", lives_);
+        draw_centered(fb_, charset_, pal_, 120, buf);
+        std::snprintf(buf, sizeof buf, "SCORE : %06ld", std::min(score_, 999999L));
+        draw_centered(fb_, charset_, pal_, 144, buf);
+    }
+
+    // Enhanced rows at the EXE baselines.  Titles centred (align 0); the
+    // counting rows split into a right-aligned label (1) and a left-aligned
+    // value (2) so the proportional font does not slide as digits change.
+    // Raw numbers, no padding, as the reference.  Align 3 reserves a value
+    // column's width (measured, never drawn).
+    std::vector<HdTextRow> rows() const {
+        char buf[40];
+        std::vector<HdTextRow> r;
+        std::snprintf(buf, sizeof buf, "LEVEL %d", level_);
+        r.push_back({32, buf, 0});
+        r.push_back({48, "COMPLETED!", 0});
+        r.push_back({72, "BONUS SCORE", 0});
+        r.push_back({96, "BONUS:", 1});
+        std::snprintf(buf, sizeof buf, "%d  x  10", bonus_);
+        r.push_back({96, buf, 2});
+        r.push_back({120, "LIFE:", 1});
+        std::snprintf(buf, sizeof buf, "%d  x  1000", lives_);
+        r.push_back({120, buf, 2});
+        r.push_back({144, "SCORE:", 1});
+        std::snprintf(buf, sizeof buf, "%06ld", std::min(score_, 999999L));
+        r.push_back({144, buf, 2});
+        r.push_back({0, reserve_bonus_, 3});
+        r.push_back({0, reserve_lives_, 3});
+        return r;
+    }
+
+    long& score_;
+    const int level_;
+    int bonus_;   // counting down
+    int lives_;   // counting down (a copy: the caller's lives stay)
+    const std::vector<formats::Sprite>& charset_;
+    const std::vector<formats::Rgb>& pal_;
+    const PresentFn& present_;
+    const TextScreenHd& hd_;
+    const bool hd_on_;
+    const std::string reserve_bonus_;
+    const std::string reserve_lives_;
+    FrameBuffer fb_;                         // classic: native 320x200
+    const std::vector<std::uint8_t> black_;  // enhanced: present_hd clears
+};
+
+}  // namespace
+
+bool show_score_tally(int& lives, long& score, int display_level, int bonus,
+                      const TextPage& page, const TallyAudio& sfx) {
+    // Odd display levels award an extra life before the tally.
+    if (display_level & 1) ++lives;
+    ScoreTally tally(lives, score, display_level, bonus, page);
+    // A 4-second hold on each side of the count; SPACE/RETURN skips, edge-
+    // triggered.
+    if (!tally.show() || !tally.hold(kTallyPauseFrames) || !tally.count() ||
+        !tally.show())
+        return false;
+    // Enhanced completion chime (the reference's extension; the EXE plays
+    // nothing here, FUN_270a_01b4 -> silent FUN_1847_065a): once at the final
+    // pause, SFX_WAIT_AND_PLAY (ch 9 note 49 cymbal, 400 ms).
+    if (sfx.enhanced && sfx.audio != nullptr)
         sfx.audio->play_sfx("SFX_WAIT_AND_PLAY");
-    }
-    // Final 4-second pause: edge-triggered.
-    if (!pause(kTallyPauseFrames)) return false;
-    // Enhanced #13 — silent loading screen (owner-ruled DEFAULT, all
-    // profiles, 2026-07-05): fade BONUS.MDI out here so the "Please Wait"
-    // screen plays in silence.  EXE truth is the OPPOSITE — the tally tail
-    // (FUN_270a_01b4) issues no MDI_FadeStop, the loading screen
-    // (FUN_270a_0412) makes no music call, and the level main swaps tracks
-    // only after; BONUS audibly loops over the loading text (Finding
-    // loading_screen_not_silent_bonus_bleeds_through.md, conf A — the
-    // FIX-H revert preserved that until this ruling).  Documented QoL
-    // divergence, same ruling class as the tally fonts.  Audio-only.
+    if (!tally.hold(kTallyPauseFrames)) return false;
+    // Silent loading screen (all profiles): BONUS.MDI fades here.  A QoL
+    // divergence: the EXE issues no fade (FUN_270a_01b4) and the loading
+    // screen (FUN_270a_0412) makes no music call, so BONUS loops under
+    // "Please Wait".
     if (sfx.audio != nullptr) sfx.audio->fade_out_music();
     return true;
 }

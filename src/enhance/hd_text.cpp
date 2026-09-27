@@ -47,7 +47,7 @@ bool HdText::load(const std::string& exe_dir, int scale,
                   const std::string& font_file) {
     std::vector<std::string> candidates;
     if (const char* env = std::getenv("OLDUVAI_FONT")) {
-        candidates.push_back(env);
+        candidates.emplace_back(env);
     }
     candidates.push_back(exe_dir + "/fonts/" + font_file);
     candidates.push_back(exe_dir + "/../assets/fonts/" + font_file);
@@ -125,13 +125,12 @@ const HdText::Glyph& HdText::glyph(int codepoint) const {
     return glyphs_.emplace(key, std::move(g)).first->second;
 }
 
-// Rasterise `text` and blend it into `rgba`, asking `color(dx, dy, r, g, b)`
+// Rasterise `text` and blend it into `cv`, asking `color(dx, dy, ink)`
 // for the ink at each covered pixel.  See the declaration in hd_text.hpp for
 // why this is a template.
 template <typename ColorFn>
-void HdText::rasterise(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
-                       int x, int baseline_y, const std::string& text,
-                       ColorFn color) const {
+void HdText::rasterise(const Canvas& cv, int x, int baseline_y,
+                       const std::string& text, ColorFn color) const {
     const auto* info = reinterpret_cast<const stbtt_fontinfo*>(info_);
     float pen = static_cast<float>(x);
     for (std::size_t i = 0; i < text.size(); ++i) {
@@ -149,23 +148,15 @@ void HdText::rasterise(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
             const int gy = baseline_y + yoff;
             for (int yy = 0; yy < h; ++yy) {
                 const int dy = gy + yy;
-                if (dy < 0 || dy >= buf_h) continue;
+                if (dy < 0 || dy >= cv.h) continue;
                 for (int xx = 0; xx < w; ++xx) {
                     const int dx = gx + xx;
-                    if (dx < 0 || dx >= buf_w) continue;
+                    if (dx < 0 || dx >= cv.w) continue;
                     const int a = bitmap[yy * w + xx];
                     if (a == 0) continue;
-                    std::uint8_t cr = 235, cg = 235, cb = 235;
-                    color(dx, dy, cr, cg, cb);
-                    const std::size_t o =
-                        (static_cast<std::size_t>(dy) * buf_w + dx) * 4;
-                    rgba[o] = static_cast<std::uint8_t>(
-                        (cr * a + rgba[o] * (255 - a)) / 255);
-                    rgba[o + 1] = static_cast<std::uint8_t>(
-                        (cg * a + rgba[o + 1] * (255 - a)) / 255);
-                    rgba[o + 2] = static_cast<std::uint8_t>(
-                        (cb * a + rgba[o + 2] * (255 - a)) / 255);
-                    rgba[o + 3] = 255;
+                    formats::Rgb ink{235, 235, 235};
+                    color(dx, dy, ink);
+                    blend_pixel(cv, dx, dy, ink, a);
                 }
             }
         }
@@ -180,29 +171,25 @@ void HdText::rasterise(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
     }
 }
 
-void HdText::draw(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
-                  int x, int baseline_y, const std::string& text,
-                  std::uint8_t cr, std::uint8_t cg, std::uint8_t cb) const {
+void HdText::draw(const Canvas& cv, int x, int baseline_y,
+                  const std::string& text, formats::Rgb ink) const {
     if (info_ == nullptr) return;
-    rasterise(rgba, buf_w, buf_h, x, baseline_y, text,
-              [cr, cg, cb](int, int, std::uint8_t& r, std::uint8_t& g,
-                           std::uint8_t& b) { r = cr; g = cg; b = cb; });
+    rasterise(cv, x, baseline_y, text,
+              [ink](int, int, formats::Rgb& out) { out = ink; });
 }
 
-void HdText::draw_banner(std::vector<std::uint8_t>& rgba, int buf_w,
-                         int buf_h, int x, int baseline_y,
+void HdText::draw_banner(const Canvas& cv, int x, int baseline_y,
                          const std::string& text,
                          const BannerShader& shader) const {
-    if (info_ == nullptr || buf_w <= 0) return;
+    if (info_ == nullptr || cv.w <= 0) return;
     const float x0 = static_cast<float>(x);
     const float wspan = std::max(1.0f, static_cast<float>(measure(text)));
     const float ytop = static_cast<float>(baseline_y - cap_px_);
     const float hspan = std::max(1.0f, static_cast<float>(cap_px_));
-    col_term_.resize(static_cast<std::size_t>(buf_w));
-    col_done_.assign(static_cast<std::size_t>(buf_w), 0);
-    rasterise(rgba, buf_w, buf_h, x, baseline_y, text,
-              [&](int dx, int dy, std::uint8_t& r, std::uint8_t& g,
-                  std::uint8_t& b) {
+    col_term_.resize(static_cast<std::size_t>(cv.w));
+    col_done_.assign(static_cast<std::size_t>(cv.w), 0);
+    rasterise(cv, x, baseline_y, text,
+              [&](int dx, int dy, formats::Rgb& ink) {
                   float u = (static_cast<float>(dx) - x0) / wspan;
                   float v = (static_cast<float>(dy) - ytop) / hspan;
                   u = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
@@ -213,7 +200,7 @@ void HdText::draw_banner(std::vector<std::uint8_t>& rgba, int buf_w,
                       col_term_[c] = shader.column_term(u);
                       col_done_[c] = 1;
                   }
-                  shader.shade(u, v, col_term_[c], r, g, b);
+                  shader.shade(u, v, col_term_[c], ink.r, ink.g, ink.b);
               });
 }
 

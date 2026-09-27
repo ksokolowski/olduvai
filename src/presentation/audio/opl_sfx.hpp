@@ -1,18 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// AdLib/OPL sound-effect renderer.  The original Prehistorik SFX are FM
-// synthesis driven by raw OPL register writes (channel 3), NOT digital
-// samples.  This renders them through the vendored Nuked-OPL3 core, byte-
-// faithful to the walked HISTORIK.EXE pipeline:
-//
+// AdLib/OPL sound effects: the original SFX are FM synthesis (raw OPL register
+// writes on channel 3), not samples.  Rendered through the vendored
+// Nuked-OPL3 core, following the executable's pipeline:
 //   AdLib_KeyOff(ch=3)                              FUN_1fe0_038c
 //   AdLib_LoadVoice(mod+car patch, ch=3)            FUN_1fe0_018b
-//      → AdLib_CommitVoice → 7 register-group writers   FUN_1fe0_05ed/0635..08b5
+//      -> AdLib_CommitVoice -> 7 register writers   FUN_1fe0_05ed/0635..08b5
 //   MDI_ChannelNoteSet(ch=3, note, vel=0x7f)        FUN_1ecd_045a
-//      → AdLib_NoteOn → A0+ch / B0+ch (key-on)       FUN_1fe0_02ea / 2c80_0006
-//
-// The Python reference renders the SAME register stream
-// through the SAME Nuked-OPL3 core, so the two PCM outputs match.
+//      -> AdLib_NoteOn -> A0+ch / B0+ch (key-on)    FUN_1fe0_02ea / 2c80_0006
+// The reference feeds the same register stream to the same core, so the PCM
+// matches.
 
 #pragma once
 
@@ -26,8 +23,7 @@ struct AdlibSfxVoices;
 
 namespace olduvai::presentation {
 
-// A 13-byte AdLib instrument-patch slot (read from the user's executable's
-// 26-byte record at stride 2).  Index meaning (per the walked Finding):
+// A 13-byte patch slot (from the executable's 26-byte record, stride 2):
 //   0 KSL  1 Mult  2 (unused)  3 AttackRate  4 SustainLevel  5 EG-type
 //   6 DecayRate  7 ReleaseRate  8 TL-base  9 AM  10 Vib  11 KSR  12 FB/conn
 struct OplSfxVoice {
@@ -50,21 +46,13 @@ struct OplSfxDef {
     int tail_ms;              // post-key-off release ring
 };
 
-// Render an AdLib SFX record to interleaved-stereo int16 PCM at `sample_rate`.
-// Returns gate+tail frames; empty on invalid input.
-//
-// §3.9: this took ELEVEN parameters which were, field for field, the contents
-// of OplSfxDef minus its id — the struct already existed and the signature
-// spelled it out by hand, so render_adlib_sfx_by_id looked a record up and
-// then unpacked it member by member to make the call.  `id` is unused here and
-// harmless to carry.
+// Render an SFX record to interleaved-stereo int16 at `sample_rate`: gate +
+// tail frames; empty on invalid input.
 std::vector<std::int16_t> render_adlib_sfx(const OplSfxDef& def,
                                            int sample_rate);
 
-// Install the AdLib voice patches read from the user's executable
-// (prepare::read_adlib_sfx_voices).  Until this runs, the catalog is empty:
-// lookups return nullptr, ids() is empty, renders return no PCM — the
-// audio layer then falls back to the VOC sample path.
+// Install the patches read from the user's executable.  Until then the catalog
+// is empty (lookups null, no PCM) and the audio layer uses the VOC samples.
 void install_adlib_sfx_voices(const prepare::AdlibSfxVoices& voices);
 
 // Look up an SFX def by id (e.g. "SFX_HIT"); nullptr if unknown or the

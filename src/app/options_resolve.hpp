@@ -1,12 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Pure resolution of the config-influenced play settings across the
-// documented precedence: defaults < --default-profile < play.json <
-// --profile < CLI flags (CC3 phase 3 — extracted from main.cpp, where every one of the five
-// 0.9.2 field bugs lived untested: the aspect-guard, the dropped
-// first-run choice, the ask-once gating, style_answered, the config-path
-// fallout).  No I/O here: the caller loads/saves play.json and applies
-// the profile overlay; these functions only decide who wins.
+// Pure resolution of the config-influenced play settings: defaults <
+// --default-profile < play.json < --profile < CLI flags.  No I/O; the caller
+// loads/saves play.json and applies the profile overlay.
 
 #pragma once
 
@@ -17,19 +13,16 @@
 
 namespace olduvai::app {
 
-// The subset of the play settings the saved config can influence, plus
-// which of them the command line explicitly stated (`cli`).  Defaults
-// here ARE the engine defaults — the parse loop writes CLI values over
-// them, then merge_config() lets the config fill what the CLI left.
+// The settings the saved config can influence, plus which the command line
+// stated (`cli`).  Defaults are the engine defaults: the parser writes CLI
+// values over them, then merge_config() fills what the CLI left.
 struct PlaySettings {
     bool vga_scan = true;
     std::string autofire = "off";
     bool enhanced = false;
     std::string enhance_list;            // --enhance a,b,c (granular subset)
-    // True when enhance_list came from play.json rather than the command line.
-    // The two must fail differently: a typo the user just typed is worth
-    // rejecting outright, but a stale token in a config file the Options menu
-    // itself wrote must never be able to stop the game from starting.
+    // enhance_list came from play.json: a stale token there must never stop the
+    // game (a typo on the command line is rejected).
     bool enhance_list_from_config = false;
     std::string hd_profile;
     int render_scale = 4;                // default 4 → omniscale 1280x800
@@ -64,13 +57,9 @@ struct PlaySettings {
         bool scale = false;
         bool aspect = false;
         bool game_dir = false;
-        // These six used to be inferred by comparing the field against its own
-        // default — the reference's argparse `default=None` idiom, which only
-        // works because an unset argparse value is None rather than the
-        // default.  Here the parse loop writes real defaults, so an explicit
-        // `--music-device auto` was indistinguishable from saying nothing, and
-        // a saved play.json silently won.  Same defect the aspect guard below
-        // was added for after the 0.9.2 regression; these are the rest of it.
+        // These cannot be inferred by comparing to the default (the parser
+        // writes real defaults), so an explicit `--music-device auto` must be
+        // recorded or a saved play.json would win.
         bool music_device = false;
         bool sfx_backend = false;
         bool display_mode = false;
@@ -87,31 +76,25 @@ struct PlaySettings {
                                     // effect (set_bug_report_dir is SDL-side)
 };
 
-// Fold the merged config (play.json with the --profile overlay already
-// applied via apply_profile) into the settings.  Per-key guards match the
-// long-standing rules: cli.* flags for the flagged keys, sentinel values
-// for the audio/tuning keys, unconditional for the pad mapping.
+// Fold the merged config (play.json + --profile overlay) into the settings:
+// cli.* guards for flagged keys, sentinels for audio/tuning keys,
+// unconditional for the pad mapping.
 void merge_config(PlaySettings& s, const Config& merged);
 
-// Fold ONE profile pin into the settings through its CLI guard (the same
-// guard merge_config applies).  Returns false for a key it does not know —
-// the test "every pin of every profile is adoptable" turns that into a
-// failure, so a profile can never pin a key the first-run path drops.
+// Fold one profile pin through its CLI guard.  False for an unknown key (a
+// test checks every pin of every profile is adoptable).
 bool adopt_profile_key(PlaySettings& s, const std::string& key,
                        const std::string& value);
 
-// Fold a first-run presentation choice ("hd"/"dos") into THIS session's
-// settings — the saved config only helps the NEXT launch.  cli_profile /
-// cli.* keep the documented precedence: an explicit flag or --profile
-// always wins; an empty preset (box unavailable) is a no-op.
+// Fold a first-run choice ("hd"/"dos") into this session (the saved config
+// only affects the next launch).  An explicit flag or --profile still wins;
+// an empty preset is a no-op.
 void adopt_preset(PlaySettings& s, const std::string& cli_profile,
                   const std::string& preset);
 
-// The config layers below the CLI, in precedence order:
-//   engine defaults < --default-profile < play.json < --profile
-// (explicit CLI flags then win through merge_config's guards).  `family` is
-// the family of --profile if given, else of --default-profile, else desktop.
-// An unknown default-profile name is a warning, never fatal.
+// Config layers below the CLI: engine defaults < --default-profile <
+// play.json < --profile.  `family`: of --profile if given, else of
+// --default-profile, else desktop.  An unknown default-profile warns.
 struct LayeredConfig {
     Config merged;
     std::string family;
@@ -121,10 +104,9 @@ LayeredConfig layer_config(const Config& file_cfg,
                            const std::string& cli_profile,
                            const std::string& default_profile);
 
-// What --save-config writes: the saved file, the explicit --profile, and the
-// CLI-stated keys — never the --default-profile layer, or device defaults
-// would freeze into play.json and a later release's values would never reach
-// that player.
+// What --save-config writes: the saved file, the explicit --profile and the
+// CLI-stated keys, never the --default-profile layer (device defaults must not
+// freeze into play.json).
 Config config_to_save(const Config& file_cfg, const std::string& cli_profile,
                       const PlaySettings& ps, const std::string& game_dir);
 

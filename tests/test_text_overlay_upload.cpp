@@ -69,7 +69,7 @@ void pass(SoftTarget& t, TextOverlay& ov, HdText& f, int y,
     SDL_RenderClear(t.ren);
     int ow = 0, oh = 0;
     if (ov.begin(t.ren, f, ow, oh) && !text.empty())
-        draw_centered_overlay_row(ov.buffer(), ow, oh, f, y, text);
+        draw_centered_overlay_row({ov.buffer(), ow, oh}, f, y, text);
     ov.flush(t.ren, 0, 0);
 }
 
@@ -121,12 +121,14 @@ TEST_CASE("cached glyphs draw the same bytes as the first rasterisation") {
     REQUIRE(load_font(f));
     f.set_cap_px(24);
     std::vector<std::uint8_t> a(320 * 200 * 4, 0), b(320 * 200 * 4, 0);
-    f.draw(a, 320, 200, 10, 100, "NOT ENOUGH FOOD!", 235, 235, 235);  // cold
-    f.draw(b, 320, 200, 10, 100, "NOT ENOUGH FOOD!", 235, 235, 235);  // warm
+    f.draw({a, 320, 200}, 10, 100, "NOT ENOUGH FOOD!",
+           {235, 235, 235});  // cold
+    f.draw({b, 320, 200}, 10, 100, "NOT ENOUGH FOOD!",
+           {235, 235, 235});  // warm
     CHECK(a == b);
     // A second size is a separate cache entry, not a stale reuse.
     std::vector<std::uint8_t> c(320 * 200 * 4, 0);
     f.set_cap_px(12);
-    f.draw(c, 320, 200, 10, 100, "NOT ENOUGH FOOD!", 235, 235, 235);
+    f.draw({c, 320, 200}, 10, 100, "NOT ENOUGH FOOD!", {235, 235, 235});
     CHECK(c != a);
 }

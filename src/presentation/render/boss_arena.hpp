@@ -1,18 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// The boss arena as a presentation surface: its widescreen geometry, and the
-// presenter that turns one fight frame into pixels on the renderer.
-//
-// BACKLOG §3.18, the arena group.  run_boss_level's present family was six
-// mutually-calling lambdas over eighteen shared locals, which is why §3.18
-// concluded it needed an owner rather than extractions: any one of them lifted
-// to a free function just relocates the tangle behind a parameter list.
-//
-// WHY NOT boss_widescreen.hpp, which is the name you would look under:
-// that header is deliberately SDL-free and `test_boss_widescreen` links
-// without SDL to keep it honest.  BossWidescreen holds an SDL_Texture, so it
-// would drag SDL into the one place that is provably free of it.  This header
-// is the SDL side of the same subject.
+// The boss arena as a presentation surface: its widescreen geometry and the
+// presenter that turns a fight frame into pixels.  The SDL side of
+// boss_widescreen.hpp, which stays SDL-free (test_boss_widescreen links
+// without SDL).
 #pragma once
 
 #include <cstdint>
@@ -31,216 +22,169 @@ namespace olduvai::enhance { class HdAssetCache; }
 
 namespace olduvai::presentation {
 
+class ConfirmDialog;
+class Menu;
+
 class BossHud;
 struct FrameStats;
 
-// ── Boss-arena widescreen owner (§3.5a) ─────────────────────────────────────
-// One type for what were eight locals used 178 times across run_boss_level —
-// the fight loop, both victory sequences and the fade/tally all need every one
-// of them.  L2/L4/L6 share them by construction, since run_boss_level is one
-// function with three branches, and that ubiquity is exactly why §3.5 could
-// not decompose: every extraction candidate carried 14-37 free names, of which
-// about twelve were these.
-//
-// NOT WidescreenPresenter, and the difference is not stylistic.  That type's
-// context is built entirely around the surface-level model —
-// surface_screen_count, compose_surface_screen_static, collect_monsters,
-// neighbour peeking.  The boss arena has no screens and no neighbours: its
-// widescreen is a MIRRORED arena with an edge gradient.  The two are different
-// presentations, so the duplication §3.5a removes is within boss_app, not
-// between it and game_app.
-//
-// Owns wtex, which run_boss_level previously destroyed by hand on the way out.
+// Boss-arena widescreen state, shared by the fight loop, the victory sequences
+// and the fade/tally.  Not WidescreenPresenter: the arena has no screens or
+// neighbours; its margins are a mirrored arena with an edge gradient.  The
+// wide texture is the surface's.
 struct BossWidescreen {
-    BossWidescreen(SDL_Renderer* ren, bool enabled, int hd_scale,
-                   LogicalDims fallback, LogicalSize* lsz);
-    ~BossWidescreen();
+    BossWidescreen(LevelSurface& surface, bool enabled, LogicalDims fallback);
+    ~BossWidescreen() = default;
     BossWidescreen(const BossWidescreen&) = delete;
     BossWidescreen& operator=(const BossWidescreen&) = delete;
 
-    // Recompute when the renderer output size changes (Alt+Enter / resize).
-    // Cheap no-op when unchanged.  MUST update the caller's lsz.w()/h too:
-    // the text-overlay flush restores SDL's logical size from those, so
-    // updating only SDL's gets clobbered back to the stale dims on the next
-    // HUD draw — squashing the wide buffer into the old canvas (the fullscreen
-    // bug).  OLDUVAI_WS_FORCE_MARGIN pins the margin so this stays a no-op
-    // under the test harness.
+    // Recompute on an output size change (Alt+Enter, resize); no-op otherwise.
+    // Updates lsz too: the text-overlay flush restores SDL's logical size from
+    // it, and a stale value squashes the wide buffer.  OLDUVAI_WS_FORCE_MARGIN
+    // pins the margin (a no-op under tests).
     void rebuild_if_resized();
 
     int M = 0;                     // margin, native px each side
     bool active = false;           // widescreen on AND margin > 0
     int w = 320;                   // 320 + 2*M
-    SDL_Texture* wtex = nullptr;   // wide stream texture (null when inactive)
-    // Last native frame sent through the wide present — reused as the source
-    // for the post-victory wide fade (the HD `fb` holds the stale fight frame).
+    // The surface's wide texture at this width; null when inactive.
+    SDL_Texture* wtex() const { return active ? surface_.wide_tex(w) : nullptr; }
+    // Last native frame sent wide: the post-victory fade's source (the HD `fb`
+    // still holds the fight).
     FrameBuffer last_native;
 
 private:
-    SDL_Renderer* ren_;
+    LevelSurface& surface_;
     bool enabled_;                 // hd && aspect == "widescreen"
-    int hd_scale_;
     LogicalDims fallback_;
-    LogicalSize* lsz_;
     int ow0_ = 0, oh0_ = 0;        // last seen renderer output size
 };
 
-// Wrap a native 320x200 arena frame in the darkened mirror margins every wide
-// boss compose uses: pure reflection of the edge strips (so the black arena
-// walls stay black rather than being void-scanned into a smear) with the 0.10
-// edge-darkening gradient.  Three sites spelled this same six-argument
-// compose_widescreen call out by hand.
+// Wrap a native 320x200 arena frame in the boss margins: a pure reflection of
+// the edge strips (black walls stay black) with the 0.10 edge gradient.
 void compose_arena_wide(std::vector<std::uint8_t>& out, int M,
                         const FrameBuffer& src);
 
-// ── The purely-visual compose target (§3.4) ─────────────────────────────────
-// Every arena compose that is NOT the live fight frame goes through here,
-// because they all must do the one thing that is easy to forget:
-// `advance_state = false`.  A compose that advances sprite animation state is
-// how a boss "pause defect" is born — the paused frame quietly steps the
-// animation the fight is holding, and nothing fails until someone notices the
-// wings moved while the game was stopped.  §3.4 names that invariant for
-// exactly this reason, and six sites used to restate it by hand.
-//
-// origin_x is always the widescreen margin: sprites are drawn over the wide
-// buffer at x+M so edge-crossers overflow into the margins instead of clipping.
+// Target for every arena compose that is not the live fight frame.  It sets
+// advance_state = false: a paused or re-composed frame must not step the
+// animation the fight is holding.  origin_x is the margin, so edge sprites
+// overflow into it.
 RenderTarget boss_visual_target(std::uint8_t* px, int w, int h, int scale,
                                 enhance::HdAssetCache* cache,
                                 const std::string* profile, int origin_x);
 
-// The smooth-motion triple that the live fight feeds a wide compose.  Split
-// out so that a compose which does NOT want it is visibly declining it rather
-// than silently omitting three lines — see the asymmetry noted at the call
-// sites.  Inert when use_float is false (classic, or a landed hold).
+// The smooth-motion triple the live fight feeds a wide compose, so a compose
+// that skips it does so visibly.  Inert when use_float is false.
 void boss_smooth_pos(RenderTarget& rt, bool use_float, float pfx, float pfy);
 
-// The per-frame present pipeline for a boss fight.
-//
-// WHAT IT DOES NOT HOLD.  §3.18's rule, established when the HUD got its owner:
-// a presenter may hold a live POINTER to what it displays, but not the state
-// that contains it.  So there is no `assets`, no `player`, no `l2`/`l4`/`l6`
-// and no `internal_level` here.  The arena background arrives as a buffer
-// pointer, and everything that needs to know WHICH boss this is arrives as a
-// callback the driver binds once — the three sprite renderers differ only in
-// which function is called, which makes them a seam rather than a branch.
+// The per-frame present pipeline for a boss fight.  It holds pointers to what
+// it displays, not the state around it: no assets, player, l2/l4/l6 or
+// internal_level.  Per-boss drawing arrives as callbacks bound once by the
+// driver.
 class BossArenaPresenter {
 public:
     BossArenaPresenter(LevelSurface& surface, BossWidescreen& ws, BossHud& hud,
                        FrameBuffer& fb, enhance::HdAssetCache& cache);
 
-    // ── what to draw (bound once by the driver) ──────────────────────────────
-    // The HUD-clean arena background, RGBA 320x200.  Static for the whole
-    // fight; the wide compose caches its upscaled form off it.
+    // ---- what to draw (bound once by the driver) ----
+    // The HUD-clean arena background, RGBA 320x200, static for the fight.
     const std::vector<std::uint8_t>* arena_bg = nullptr;
-    // Draw this frame's fight sprites into the target (render_l2/l4/l6_sprites).
+    // Draw this frame's fight sprites into the target
+    // (render_l2/l4/l6_sprites).
     std::function<void(RenderTarget&)> draw_fight_sprites;
-    // True while the L4 ride-off victory should take the wide sprite-overflow
-    // path instead of the mirrored-native one.  See present_any.
+    // L4 ride-off: take the wide sprite-overflow path, not the mirror.
     std::function<bool()> wide_victory;
     // The ride-off, drawn natively (fade source) and as overflowing sprites.
     std::function<void(RenderTarget&)> draw_victory_native;
     std::function<void(RenderTarget&)> draw_victory_sprites;
 
-    // ── the HUD's SDL side ───────────────────────────────────────────────────
-    // Paint the vector HUD into the renderer's output-resolution overlay and
-    // flush it over the scene.  §3.18 said not to lift these three as free
-    // functions — 22 branchless lines that move the metric by ~0.  As methods
-    // they cost nothing: this owner already holds every name they need.
+    // ---- the HUD's SDL side ----
+    // Paint the vector HUD into the output overlay and flush it over the scene.
     void hud_overlay(bool draw_lives);        // centre 320 domain
     void hud_overlay_wide(bool draw_lives);   // wide domain (origin M, width w)
 
-    // ── the present family ───────────────────────────────────────────────────
-    // The unchanged 320-wide present: upload `fb`, pillarbox it if a wide
-    // canvas is active, lay the HUD over it.
+    // ---- the present family ----
+    // The 320-wide present: upload `fb`, pillarbox it on a wide canvas, HUD
+    // over.
     void present_frame(bool draw_lives = true, bool do_present = true);
-    // Build one wide upscaled fight frame: cached static wide background, then
-    // this frame's sprites at origin_x = M so edge-crossers overflow into the
-    // margins.  Shared by present_wide and the wide screenshot branch, which
-    // is why it returns the buffer instead of presenting it.
+    // One wide upscaled fight frame: the cached static wide background, then
+    // the sprites at origin_x = M.  Returned rather than shown, for the
+    // screenshot.
     std::vector<std::uint8_t> build_wide_up();
-    // Show an already-upscaled wide buffer.  present_wide and the L4-victory
-    // branch differ only in how `up` is built; this is the shared frame around
-    // them, a duplicate shape the clone detector cannot see.
+    // Show an already-upscaled wide buffer (with HUD).
     void show_wide_up(const std::vector<std::uint8_t>& up, bool draw_lives,
                       bool do_present);
-    // Compose ONE wide native frame (RGBA, `wide_w()` x 200) from the clean
-    // arena background, with `draw` painting this frame's sprites at origin
-    // M so edge-crossers overflow into the margins.  Native, not upscaled:
-    // the post-victory fade darkens it per frame and the paused backdrop
-    // wants it as a FrameBuffer.  Empty when widescreen is inactive — the
-    // caller then has a 320 path to fall back to (§3.31).
+    // One wide native frame (wide_w() x 200) from the clean arena, `draw`
+    // painting sprites at origin M.  Native: the fade darkens it per frame and
+    // the pause wants a FrameBuffer.  Empty when widescreen is inactive.
     std::vector<std::uint8_t> compose_wide_native(
         const std::function<void(RenderTarget&)>& draw);
-    // Upscale one such frame and show it.  `draw_hud` off is the fade, which
-    // has no HUD over it.
+    // Upscale one such frame and show it; draw_hud=false for the fade.
     void show_wide_native(const std::vector<std::uint8_t>& wide,
                           bool draw_lives = true, bool do_present = true,
                           bool draw_hud = true);
-    // Make SDL's logical canvas the wide one (and the caller's mirror with
-    // it — see BossWidescreen::rebuild_if_resized on why both must move).
+    // Make SDL's logical canvas the wide one (and lsz with it).
     void use_wide_logical();
-    // The last native frame this presenter showed wide: the post-victory
-    // fade's source, because the fight's `fb` still holds the fight.  The
-    // present family records it; a sequence that composes its own wide frame
-    // (the L2 flash, the L6 finish) hands over the NATIVE frame it drew.
+    // The last native frame shown wide, for the post-victory fade.  Sequences
+    // that compose their own wide frame (L2 flash, L6 finish) hand theirs over.
     const FrameBuffer& last_wide_native() const;
     void keep_fade_source(const FrameBuffer& nat);
-    // The wide canvas this presenter composes into: 320 + 2*margin.  For
-    // callers that size a buffer; nobody outside needs the margin itself.
+    // 320 + 2*margin, for callers that size a buffer.
     int wide_w() const;
-    // Widescreen is SELECTED (enhanced, aspect widescreen, margin > 0) —
-    // the question "should this sequence take its wide path at all".
+    // Widescreen is selected (enhanced, aspect widescreen, margin > 0).
     bool wide_on() const;
-    // ...and its canvas is live (the wide texture exists).  A resize can
-    // drop the texture under a running sequence, which is why the two are
-    // separate questions and every caller of the second has a 320 fallback.
+    // ...and the wide texture exists.  A resize can drop it mid-sequence, so
+    // every caller of this has a 320 fallback.
     bool wide_ready() const;
-    // Recompute after a resize / Alt+Enter (the present family does this
-    // itself; a sequence that composes by hand asks here).
+    // Recompute after a resize (the present family does it itself).
     void rebuild_if_resized();
     void present_wide(bool draw_lives = true, bool do_present = true);
-    // Present a NATIVE 320x200 frame (a victory-sequence frame) at the wide
-    // width, mirrored like the fight.  Falls back to a plain 320 upscale if a
-    // resize dropped widescreen mid-sequence.
+    // Present a native 320x200 frame wide, mirrored like the fight; plain 320
+    // upscale if a resize dropped widescreen.
     void present_wide_native(const FrameBuffer& nat, bool draw_lives = true,
                              bool do_present = true, bool draw_hud = true);
-    // Route a FIGHT present: wide when active, the L4 ride-off through the
-    // overflow compose, else the 320 path.
+    // Route a fight present: wide, the L4 ride-off through the overflow
+    // compose, or the 320 path.
     void present_any(bool draw_lives = true, bool do_present = true);
+    // A native 320x200 frame, upscaled and pillarboxed inside the margins, and
+    // presented (the F5 form over the frozen fight).
+    void show_native(const FrameBuffer& f);
+    // --play-shot: the fight frame to `path`.  real_output: the window's own
+    // output (logical scaling and bars); otherwise the frame at its true size.
+    void capture_shot(const std::string& path, bool real_output);
+    // The frozen fight under the pause menu (or its confirm dialog), not
+    // flipped: the caller presents or reads back.  `render_frame` draws the
+    // whole frozen arena natively, `render_sprites` just the sprites for the
+    // wide rebuild; the menu art is the charset and the bone pointer.
+    void show_pause(const std::function<void(RenderTarget&)>& render_frame,
+                    const std::function<void(RenderTarget&)>& render_sprites,
+                    const Menu& menu, const ConfirmDialog& confirm,
+                    const std::vector<formats::Sprite>& charset,
+                    const formats::Sprite* bone,
+                    const std::vector<formats::Rgb>* bone_palette);
 
-    // OLDUVAI_FRAME_STATS sink, or null.  ONE pointer rather than the nine
-    // loose sinks FramePresenter and WidescreenPresenter carry — see the
-    // "what a presenter calls" block in diag/frame_stats.hpp for why the boss
-    // side got the typed version and the platform side has not been converted.
-    //
-    // Until this existed the boss driver was UNMEASURABLE, and that is not a
-    // hypothetical cost: the whole September 2026 handheld optimisation pass
-    // ran on levels 1/3/5/7 only, and the one boss-side pacing defect found in
-    // it (`c886259`) was found by reading the source, because there was no
-    // number to look at.
+    // OLDUVAI_FRAME_STATS sink, or null.
     FrameStats* stats = nullptr;
 
-    // The smooth-motion triple the live fight feeds the wide compose, bound as
-    // live cells rather than pushed in by a setter — same rule as the HUD's
-    // lives/health (§3.18): the driver owns these and rewrites them from five
-    // places in the frame loop, so a snapshot here would be a staleness bug
-    // waiting for whichever path forgot to re-push.  Inert while *use_float is
-    // false (classic, or a landed hold).
+    // The live smooth-motion cells, read (not pushed): the driver rewrites them
+    // from several places.  Inert while *use_float is false.
     const bool* smooth_use_float = nullptr;
     const float* smooth_fx = nullptr;
     const float* smooth_fy = nullptr;
 
 private:
+    // The live smooth cells onto a target (inert when unset or false).
+    void apply_smooth(RenderTarget& rt) const;
+
     LevelSurface& surface_;
     BossWidescreen& ws_;
     BossHud& hud_;
     FrameBuffer& fb_;
     enhance::HdAssetCache& cache_;
 
-    // Phase-2 perf (task #61): the arena background (RING.PC1, a single STATIC
-    // screen) never changes during the fight, so its composed+upscaled wide
-    // form is built once and copied per frame — no per-frame whole-frame
-    // upscale (omniscale was the budget-buster).  Rebuilt only when the margin
-    // (Alt+Enter) or the HD profile changes.
+    // The arena background never changes during the fight: its upscaled wide
+    // form is built once and copied per frame.  Rebuilt on a margin or HD
+    // profile change.
     std::vector<std::uint8_t> bg_hd_;
     int bg_hd_M_ = -1;
     std::string bg_hd_profile_;

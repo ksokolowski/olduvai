@@ -225,7 +225,7 @@ bool save_to_file(const SaveState& s, const std::string& path) {
 std::optional<SaveState> load_from_file(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return std::nullopt;
-    std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(f)),
+    const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(f)),
                                     std::istreambuf_iterator<char>());
     return deserialize(bytes);
 }

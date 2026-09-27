@@ -81,6 +81,19 @@ run_lints() {
     # database, so it skips loudly on a fresh tree and runs on every later
     # gate — which is when it matters, because by then something is changed.
     sh "${ROOT}/scripts/check_gcc.sh" || return 1
+    # clang-tidy on the unpushed lines, as CI's build-and-lint runs it: CI's
+    # base is the push's before-SHA, which before a push is origin/master.
+    # 77 = no clang-tidy or no compile database.
+    _rc=0
+    OLDUVAI_TIDY_BASE="$(git -C "${ROOT}" rev-parse origin/master)" \
+        sh "${ROOT}/scripts/check_tidy.sh" --diff || _rc=$?
+    [ ${_rc} -eq 0 ] || [ ${_rc} -eq 77 ] || return 1
+    # The complexity ratchet: every function over a size or cognitive-
+    # complexity threshold is in scripts/complexity_baseline.txt, with its
+    # numbers and a reason.
+    _rc=0
+    sh "${ROOT}/scripts/check_tidy.sh" --ratchet || _rc=$?
+    [ ${_rc} -eq 0 ] || [ ${_rc} -eq 77 ] || return 1
 }
 
 run_ctest() {
@@ -116,46 +129,25 @@ if ! run_lints; then
     exit 1
 fi
 
+# One job per CPU.  Tests are parallel-safe (own mktemp dirs, read-only game
+# files); if a timing test turns flaky, retry at OLDUVAI_GATE_JOBS=1 first.
+JOBS="${OLDUVAI_GATE_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+
 for lane in ${LANES}; do
     echo ""
     echo "═══ ${lane} ═══════════════════════════════════════════════════════"
     cmake --preset "${lane}" >/dev/null
-    cmake --build --preset "${lane}" --parallel 8 --target all tests >/dev/null
+    # `tools` too: the dev tools are EXCLUDE_FROM_ALL and no CI job builds them,
+    # so an API change leaves them uncompilable until someone needs one.
+    cmake --build --preset "${lane}" --parallel "${JOBS}" \
+        --target all tests tools >/dev/null
 
-    # Run the suite in parallel.  MEASURED on this corpus: 239 s serial vs
-    # 90 s at -j6, and 90 s is exactly boss_pause_shot's own runtime — that
-    # single test is the critical path, so more jobs buy nothing until it is
-    # faster.  The tests are parallel-safe by construction: each makes its own
-    # mktemp config dir and shot file, and the only shared input (the game
-    # files) is read-only.
-    #
-    # Most of the wall-clock is 18.2 Hz gameplay, not CPU, so the jobs overlap
-    # rather than contend.  If a timing-sensitive test ever does turn flaky
-    # here, drop to -j1 to confirm before assuming the change under test broke
-    # it.
-    run_ctest "${lane}" "${lane}" -j "${OLDUVAI_GATE_JOBS:-6}"
+    # release-full adds the `slow` label (hd_text_screens, ~256 s, the only
+    # classic-present coverage); run alongside the rest it adds no wall-clock.
+    preset="${lane}"
+    if [ "${lane}" = release ]; then preset=release-full; fi
+    run_ctest "${lane}" "${preset}" -j "${JOBS}"
 done
-
-# ── The `slow` label: registered tests kept out of the everyday suite ───────
-# hd_text_screens runs the loading card and the score tally through BOTH present
-# stacks in BOTH modes (~256 s), nearly all of it sleeping at 18 Hz through a
-# fight, a victory sequence and a fade.  Its four dos cells are the only
-# coverage the CLASSIC present path has, on either stack — `tally_pause` is
-# reachable from nowhere else.
-#
-# It is a REGISTERED ctest carrying LABELS `slow`, and the `release` / `asan`
-# test presets filter that label out, so the everyday suite stays ~550 s.  This
-# runs it — by LABEL, not by filename, so a future slow test joins in without
-# touching this script.
-#
-# IT USED TO BE A LOOSE SCRIPT INVOKED HERE BY NAME, and that cost something
-# real: a coverage sweep read `ctest -N`, did not find it, reported it as never
-# run, and registered it — when it had been running here the whole time.  Two
-# registries, and the one people reach for first did not list it.  Now there is
-# one: everything is a ctest, and `slow` decides what the default lane skips.
-echo ""
-echo "── slow-labelled gates (not in the everyday suite) ──"
-run_ctest "slow gates" release-full -L slow
 
 echo ""
 echo "═══ gate_local ════════════════════════════════════════════════════════"

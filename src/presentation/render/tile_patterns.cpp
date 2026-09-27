@@ -28,15 +28,13 @@ int sprite_w(const std::vector<formats::Sprite>& sprites, int idx) {
 }
 
 // Chain-membership sets over the placement list:
-//   starts — every tile's top-left (x, y)
-//   ends   — every tile's bottom-left (x, y + h)
-// A tile t is part of a vertical column iff a chain neighbour exists
-//   BELOW: some tile starts at (t.x, t.y + h(t))           → (…) ∈ starts
-//   ABOVE: some tile ends   at (t.x, t.y)                  → (…) ∈ ends
-// The ABOVE test uses the NEIGHBOUR's height (its end == our start), which is
-// what the three pre-consolidation detectors got subtly wrong for
-// mixed-height columns (they probed t.y - h(t) — off by one tile when the
-// sprite above has a different height, e.g. the giant trunk's 42/41 pair).
+//   starts: every tile's top-left (x, y)
+//   ends:   every tile's bottom-left (x, y + h)
+// A tile is in a vertical column iff it has a neighbour
+//   below: some tile starts at (t.x, t.y + h(t))   -> in starts
+//   above: some tile ends at (t.x, t.y)            -> in ends
+// The above test uses the neighbour's height (mixed-height columns like the
+// giant trunk's 42/41 pair).
 struct ChainSets {
     std::unordered_set<std::uint64_t> starts, ends;
 
@@ -73,13 +71,9 @@ void extend_columns_to_top(std::vector<TileDraw>& tiles,
         const int h = sprite_h(sprites, t.sprite_idx);
         if (h <= 0) continue;
         if (chain.ends.count(key(t.x, t.y)) != 0) continue;   // not the top
-        // Walk the chain downward to read the column's own sprite SEQUENCE.
-        // The giant level-end trunk is authored as an ALTERNATING pair
-        // (spr 24 over spr 25 over 24 …); repeating only the top tile would
-        // stack 24-over-24 and visibly break the bark's authored adjacency at
-        // the junction.  Continue the column's period instead: upward tile k
-        // reuses chain[k mod p] (p = 2 when the first two elements alternate,
-        // else 1 — uniform stacks are the p = 1 case and behave as before).
+        // Read the column's sprite sequence downward and continue its period:
+        // the giant trunk alternates 24/25, so upward tile k reuses chain[k mod
+        // p] (p = 2 when the first two alternate, else 1).
         std::vector<std::size_t> down;   // tile indices, top → bottom
         {
             const TileDraw* cur = &t;
@@ -93,12 +87,9 @@ void extend_columns_to_top(std::vector<TileDraw>& tiles,
         }
         if (down.empty()) continue;   // lone tile — bush/platform, leave it
         const int spr_below = tiles[down.front()].sprite_idx;
-        // Pattern gate: a repeating column's elements share WIDTH (bark 24/25
-        // are both 144 wide; forest trunks/pillars are uniform).  A mere
-        // coincidental adjacency — the S15 door piece (48 wide) ending exactly
-        // where a horizontal beam row (16 wide) starts — is NOT a pattern and
-        // must not be continued into the HUD band (it duplicated the door +
-        // floated a beam there).
+        // A repeating column's tiles share a width.  A coincidental adjacency
+        // (the S15 door, 48 wide, ending where a 16-wide beam row starts) is
+        // not a column.
         if (sprite_w(sprites, spr_below) != sprite_w(sprites, t.sprite_idx))
             continue;
         const int period = (spr_below == t.sprite_idx) ? 1 : 2;
@@ -121,9 +112,8 @@ std::vector<TileDraw> seam_row_bridges(
     const std::vector<TileDraw>& b_tiles, int b_backdrop,
     const std::vector<formats::Sprite>& sprites) {
     std::vector<TileDraw> out;
-    // LEVEL tiles only (index >= backdrop_tile_count): the bind-injected
-    // backdrop rows sit behind everything — they neither author a bridgeable
-    // row nor fill a hole (the backdrop showing through IS the hole).
+    // Level tiles only: backdrop rows neither form a bridgeable row nor fill a
+    // hole (the backdrop showing through is the hole).
     const auto level = [](const std::vector<TileDraw>& v, int bdc) {
         std::vector<TileDraw> o;
         for (std::size_t i = static_cast<std::size_t>(std::max(0, bdc));
@@ -141,18 +131,16 @@ std::vector<TileDraw> seam_row_bridges(
             return t.x + shift <= gx0 && gx1 <= t.x + shift + w2 &&
                    t.y <= y && y + h <= t.y + h2;
         };
-        for (const auto& t : a_lvl)
-            if (covers(t, 0)) return true;
-        for (const auto& t : b_lvl)
-            if (covers(t, 320)) return true;
-        return false;
+        return std::any_of(a_lvl.begin(), a_lvl.end(),
+                           [&](const TileDraw& t) { return covers(t, 0); }) ||
+               std::any_of(b_lvl.begin(), b_lvl.end(),
+                           [&](const TileDraw& t) { return covers(t, 320); });
     };
     auto run_of_two = [&](const std::vector<TileDraw>& tiles, int spr, int x,
                           int y, int w, int dir) {
-        for (const auto& t : tiles)
-            if (t.sprite_idx == spr && t.y == y && t.x == x + dir * w)
-                return true;
-        return false;
+        return std::any_of(tiles.begin(), tiles.end(), [&](const TileDraw& t) {
+            return t.sprite_idx == spr && t.y == y && t.x == x + dir * w;
+        });
     };
     for (const auto& t : a_lvl) {
         const int w = sprite_w(sprites, t.sprite_idx);

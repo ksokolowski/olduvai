@@ -58,7 +58,7 @@ void draw_text(FrameBuffer& fb, const std::vector<Sprite>& charset,
                const std::vector<Rgb>& pal, int x, int y,
                const std::string& text, int color_idx) {
     const Rgb c = pal_at(pal, static_cast<std::size_t>(color_idx));
-    for (char ch : text) {
+    for (const char ch : text) {
         const int idx = static_cast<unsigned char>(ch) - 0x20;
         if (idx >= 0 && idx < static_cast<int>(charset.size())) {
             const Sprite& g = charset[static_cast<std::size_t>(idx)];
@@ -72,7 +72,7 @@ void draw_text(FrameBuffer& fb, const std::vector<Sprite>& charset,
 
 void draw_text_rgb(FrameBuffer& fb, const std::vector<Sprite>& charset,
                    int x, int y, const std::string& text, Rgb color) {
-    for (char ch : text) {
+    for (const char ch : text) {
         const int idx = static_cast<unsigned char>(ch) - 0x20;
         if (idx >= 0 && idx < static_cast<int>(charset.size())) {
             const Sprite& g = charset[static_cast<std::size_t>(idx)];
@@ -86,7 +86,7 @@ void draw_text_rgb(FrameBuffer& fb, const std::vector<Sprite>& charset,
 
 int text_width(const std::vector<Sprite>& charset, const std::string& text) {
     int w = 0;
-    for (char ch : text) {
+    for (const char ch : text) {
         const int idx = static_cast<unsigned char>(ch) - 0x20;
         if (idx >= 0 && idx < static_cast<int>(charset.size()))
             w += charset[static_cast<std::size_t>(idx)].width;

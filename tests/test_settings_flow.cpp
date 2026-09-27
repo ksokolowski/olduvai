@@ -359,6 +359,44 @@ int main() {
         CHECK(rows.size() == 3);
     }
 
+    // A Button layout pick shows as one row; a custom mapping keeps its
+    // action rows and hides pad_confirm, which follows jump.
+    {
+        std::map<std::string, std::string> now = {
+            {"pad_jump", "b"}, {"pad_attack", "a"}, {"pad_confirm", "b"},
+            {"pad_back", "back"}, {"pad_pause", "start"}};
+        const auto value_of = [&now](const std::string& k) { return now[k]; };
+
+        SettingsSession s;   // Xbox -> Nintendo
+        s.stage("pad_jump", "pad_jump", "a", "b");
+        s.stage("pad_attack", "pad_attack", "x", "a");
+        s.stage("pad_confirm", "pad_confirm", "a", "b");
+        s.stage("pad_back", "pad_back", "b", "back");
+        auto rows = build_display_changes(s, model, value_of);
+        CHECK(rows.size() == 1);
+        if (rows.size() == 1) {
+            CHECK(rows[0].key == "button_layout");
+            CHECK(rows[0].old_value == "xbox");
+            CHECK(rows[0].new_value == "nintendo");
+        }
+
+        SettingsSession s2;  // Nintendo, then Attack moved to Top: custom
+        now["pad_attack"] = "y";
+        s2.stage("pad_attack", "pad_attack", "a", "y");
+        rows = build_display_changes(s2, model, value_of);
+        CHECK(rows.size() == 1);
+        if (rows.size() == 1) CHECK(rows[0].key == "pad_attack");
+
+        SettingsSession s3;  // a custom jump move: confirm follows, hidden
+        now["pad_jump"] = "x";
+        now["pad_confirm"] = "x";
+        s3.stage("pad_jump", "pad_jump", "b", "x");
+        s3.stage("pad_confirm", "pad_confirm", "b", "x");
+        rows = build_display_changes(s3, model, value_of);
+        CHECK(rows.size() == 1);
+        if (rows.size() == 1) CHECK(rows[0].key == "pad_jump");
+    }
+
     if (fails == 0) std::puts("settings_flow: OK");
     return fails == 0 ? 0 : 1;
 }

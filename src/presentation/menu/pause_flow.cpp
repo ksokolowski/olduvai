@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// make_pause_flow — extracted verbatim (modulo deps-pointer rewrite) from
-// run_platform_level's pause SettingsFlow::Hooks. See pause_flow.hpp.
+// In-game Pause wiring: the Options flow, the actions, the bindings.
 
 #include "presentation/menu/pause_flow.hpp"
 
@@ -15,10 +14,11 @@
 
 #include "core/types.hpp"                   // Entity, ObjType, kInitialEnergy
 #include "presentation/level/level_save.hpp"      // capture_save
-#include "presentation/menu/parse_util.hpp"      // parse_i, parse_f
+#include "presentation/input/gamepad.hpp"          // printed_family
+#include "presentation/menu/profile_table.hpp"    // family_button_layout
 #include "presentation/menu/settings_apply.hpp"  // classify_change, ApplyTier, StagedChange
-#include "presentation/menu/settings_preview.hpp"  // preview_cheap_key
 #include "presentation/menu/settings_seed.hpp"
+#include "presentation/window_util.hpp"    // window_fullscreen
 
 namespace olduvai::presentation {
 
@@ -44,93 +44,51 @@ void cheat_spawn_bonus(PauseActionsDeps* d, int bonus_type) {
 }
 }  // namespace
 
-std::optional<MenuModel> load_menu_model() {
-    // Built at compile time; cannot fail, cannot be missing, cannot drift from
-    // what the build produced.  Kept as optional<> so the call sites — which
-    // all handle a missing model — do not have to change shape.
-    return built_in_menu_model();
+std::optional<MenuModel> load_menu_model(const std::string& profile_family) {
+    // Built at compile time, so it cannot be missing; optional<> keeps the call
+    // sites' shape.
+    MenuModel m = built_in_menu_model();
+    const char* printed = family_button_layout(profile_family);
+    const PadFamily fallback = printed != nullptr &&
+                                       std::string(printed) == "nintendo"
+                                   ? PadFamily::kNintendo
+                                   : PadFamily::kXbox;
+    label_pad_rows(m, gamepad::printed_family().value_or(fallback));
+    return m;
 }
 
 SettingsFlow make_pause_flow(MenuModel& model, SettingsSession& session,
                              ConfirmDialog& confirm, PauseFlowDeps* d) {
-    SettingsFlow::Hooks h;
-    h.persist = [d](const std::string& k, const std::string& v) {
-        d->bind->save(k, v);
-    };
-    h.classify = [d, &session](const std::string& k, const std::string& v) {
-        // Set-aware: the Style preset's keys only cross the classic<->HD
-        // boundary together (see classify_change_in_set).
-        std::vector<std::pair<std::string, std::string>> staged;
-        for (const auto& ch : session.changes())
-            staged.emplace_back(ch.key, ch.new_value);
-        return classify_change_in_set(k, v, d->bind->cur, staged);
-    };
+    SettingsFlow::Hooks h = staging_flow_hooks(*d->bind, session, d->menu);
     h.apply_begin = [d]() {
         // Seed reinit_req from current rt first; staged reinit-class changes
-        // override below.  §8.6 step 4.
-        d->reinit_req->enhanced     = d->opts->enhanced;
-        d->reinit_req->render_scale = d->opts->render_scale;
-        d->reinit_req->hd_profile   = d->opts->hd_profile;
-        d->reinit_req->music_device = d->opts->music_device;
-        d->reinit_req->sfx_backend  = d->opts->sfx_backend;
+        // override below.
+        *d->reinit_req = display_settings_of(*d->opts);
     };
     h.apply_change = [d](const StagedChange& ch, ApplyTier tier) {
         // Apply the new value to the live rt / state.
         if (tier == ApplyTier::Reinit) {
-            if (ch.key == "enhanced") {
-                const bool on = ch.new_value == "true" || ch.new_value == "1";
-                d->reinit_req->enhanced = on;
-                // smooth-motion is DERIVED from the umbrella, so it has to
-                // move with it here too.  Leaving it stale would make the
-                // live options disagree with what the reinit is about to
-                // build, for however many frames the reinit takes.
-                d->opts->enhance.smooth_motion = on;
-            }
-            else if (ch.key == "render_scale")
-                d->reinit_req->render_scale =
-                    parse_i(ch.new_value, d->reinit_req->render_scale);
-            else if (ch.key == "hd_profile")
-                d->reinit_req->hd_profile = ch.new_value;
-            else if (ch.key == "music_device")
-                d->reinit_req->music_device = ch.new_value;
-            else if (ch.key == "sfx_backend")
-                d->reinit_req->sfx_backend = ch.new_value;
+            set_display_key(*d->reinit_req, ch.key, ch.new_value);
+            // smooth_motion derives from the umbrella; move it too, or the live
+            // options disagree with the reinit being built.
+            if (ch.key == "enhanced")
+                d->opts->enhance.smooth_motion = d->reinit_req->enhanced;
         }
         // Non-reinit keys: volume/fullscreen already previewed live;
         // hd_profile same-scale → rt.
         if (ch.key == "hd_profile" && tier == ApplyTier::Live &&
-            d->bind->rt_hd_profile)
-            *d->bind->rt_hd_profile = ch.new_value;
-        // enhance.* flags: adopt into the live GameOptions so they take
-        // effect in-session (most are read per-frame; the level-entry
-        // latches catch up on the next reinit/level).
+            d->bind->live_hd_profile)
+            *d->bind->live_hd_profile = ch.new_value;
+        // enhance.* flags are adopted into the live GameOptions (most are read
+        // per frame; level-entry latches catch up at the next reinit or level).
     };
     h.apply_done = [d](bool needs_reinit) {
-        if (needs_reinit) {
-            *d->want_reinit = true;
-            // pause_open stays true so the pause block sees want_reinit and
-            // captures the snapshot.
-        }
-        // No reinit: just return to pause root.
+        // The driver rebuilds the display in place from the pause block and
+        // clears the flag; the pause stays open either way.
+        if (needs_reinit) *d->want_reinit = true;
     };
-    // Discard/revert: restore each staged Options preview to its baseline value.
-    h.revert_change = [d](const StagedChange& ch) {
-        d->bind->mem[ch.key] = ch.old_value;
-        // Re-apply the cheap live preview at baseline (shared:
-        // settings_preview.hpp); the site-specific live keys follow.
-        if (preview_cheap_key(ch.key, ch.old_value, d->bind->audio,
-                              d->bind->win, d->bind->enhanced)) {
-            // handled
-        } else if (ch.key == "hd_profile" && d->bind->rt_hd_profile) {
-            *d->bind->rt_hd_profile = ch.old_value;
-        } else if (ch.key == "aspect" && d->bind->apply_aspect) {
-            d->bind->apply_aspect(ch.old_value);
-        }
-    };
-    h.reopen_options = [d]() { d->menu->open("options"); };
-    h.value_of = [d](const std::string& k) { return d->bind->get(k); };
     h.confirm_note = [](bool any_reinit, bool any_persist) {
-        if (any_reinit) return std::string("Your game will briefly reload.");
+        if (any_reinit) return std::string("Apply settings now.");
         if (any_persist)
             return std::string("Saved - takes effect on next launch.");
         return std::string{};
@@ -163,16 +121,13 @@ MenuActionTable make_pause_actions(PauseActionsDeps* d) {
         {"cheat_warp", [d] {
             if (d->replay->active()) return;
             const std::string v = d->bind->get("cheat.start_level");
-            // atoi is safe HERE: menus.json declares cheat.start_level as
-            // type "choice" over the closed list [1..7], so this bind only
-            // ever holds a digit this engine wrote (see :228). The user cycles
-            // the choice, never types into it. If it ever becomes a text field
-            // or gets persisted to play.json, this needs a checked parse.
+            // atoi is safe: menus.json declares cheat.start_level a choice over
+            // [1..7] and nothing types into it.  A text field or a persisted
+            // value would need a checked parse.
             // NOLINTNEXTLINE(bugprone-unchecked-string-to-number-conversion)
             const int lvl = v.empty() ? 0 : std::atoi(v.c_str());
-            // Leave pause_open set: the run loop's pause block is the only
-            // consumer of want_warp — closing the overlay here strands the
-            // flag until the menu is next opened.
+            // Leave pause open: the run loop's pause block is the only consumer
+            // of want_warp.
             if (lvl >= 1 && lvl <= 7) *d->want_warp = lvl;
         }},
         {"save_game", [d] {
@@ -183,8 +138,8 @@ MenuActionTable make_pause_actions(PauseActionsDeps* d) {
                 std::fprintf(stderr, "save: game written to %s\n",
                              d->opts->save_path.c_str());
             } else {
-                // Failed quicksave used to be SILENT (read-only dir, full
-                // disk) — the user believed they had a checkpoint.
+                // A failed quicksave must not be SILENT (read-only dir, full
+                // disk) — the user would believe they have a checkpoint.
                 std::fprintf(stderr, "save: FAILED to write %s\n",
                              d->opts->save_path.c_str());
             }
@@ -205,40 +160,12 @@ void configure_pause_bind(PauseBindings& bind, const PauseBindWireDeps& d) {
     bind.god = d.god_active;
     bind.god_session = &d.opts->god;   // survives the level boundary
     bind.autofire = &d.opts->autofire;
-    bind.audio = d.audio;
-    bind.win = d.sw->win;
-    bind.enhanced = d.opts->enhanced;
-    bind.persist = &d.opts->persist;
-    bind.session = d.session;
-    bind.sound_avail = probe_sound_cards(d.opts->rom_dir, d.opts->soundfont);
-    // Tier-classifier wiring: pause → reinit path.
-    bind.want_reinit = d.want_reinit;
-    bind.reinit_req = d.reinit_req;
-    bind.rt_hd_profile = &d.opts->hd_profile;   // opts == run_game's rt
-    SettingsSeed seed;
-    seed.enhanced = d.opts->enhanced;
-    seed.hd_profile = d.opts->hd_profile;
-    seed.render_scale = d.opts->render_scale;
-    seed.music_device = d.opts->music_device;
-    seed.sfx_backend = d.opts->sfx_backend;
-    seed.aspect = d.opts->aspect;
-    seed.fullscreen = (SDL_GetWindowFlags(d.sw->win) &
-                       SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
-    seed.flags = d.opts->enhance;
-    seed.profile_family = d.opts->profile_family;
-    seed_settings_mem(bind, seed);
-    // Tier-1 live Aspect: SDL_RenderSetLogicalSize + update run-loop logical_w/h
-    // + rt.aspect. No window/audio rebuild, no reload.
-    bind.apply_aspect = [opts = d.opts, lsz = d.lsz, hd_scale = d.hd_scale,
-                         notify = d.on_aspect_changed](const std::string& v) {
+    bind.attach(d.audio, d.sw->win, d.session, *d.opts);
+    bind.live_hd_profile = &d.opts->hd_profile;   // opts == run_game's rt
+    // Tier-1 live Aspect: the setting only; the presentation follows it
+    // before its next present (WidescreenPresenter::sync_output).
+    bind.apply_aspect = [opts = d.opts](const std::string& v) {
         opts->aspect = v;
-        const LogicalDims ld = aspect_logical(hd_scale, v);
-        lsz->set(ld.w, ld.h);   // SDL + mirror together (§3.13)
-        // aspect_logical maps "widescreen" to the KEEP fallback (it has no
-        // margin to work from), so the presenter must recompute and set the
-        // wide logical size itself — otherwise choosing widescreen shows a
-        // pillarbox until something resizes the window.
-        if (notify) notify();
     };
     bind.mem["cheat.start_level"] = std::to_string(d.display_level);
 }

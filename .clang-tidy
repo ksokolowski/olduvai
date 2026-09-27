@@ -46,6 +46,16 @@
 #                            churning.  Re-open if a scaler ever takes an
 #                            unbounded dimension.
 #
+# Widened 2026-09-27 (BACKLOG §3.42), each finding fixed first: member
+# initialisation, rule of five, override, member-const, static members,
+# emplace, any_of/all_of, boolean simplification WITHOUT De Morgan (the EXE-
+# shaped conditions in systems/ keep their cited shape), const locals (scope
+# guards exempt), and the checks that already found nothing, so they stay at
+# nothing.  Measured and NOT enabled:
+#     cppcoreguidelines-prefer-member-initializer  its fix hoisted two
+#                            margin computations above the SDL call that
+#                            feeds them (WidescreenPresenter, BossWidescreen)
+#
 # readability-function-size is used as a MEASUREMENT, not a hard rule: the
 # thresholds are set to flag genuine monsters (run_platform_level,
 # run_boss_level) and not ordinary code.  NestingThreshold and VariableThreshold
@@ -70,7 +80,37 @@ Checks: >
   readability-misleading-indentation,
   readability-redundant-control-flow,
   readability-redundant-string-init,
-  readability-inconsistent-declaration-parameter-name
+  readability-inconsistent-declaration-parameter-name,
+  cppcoreguidelines-pro-type-member-init,
+  cppcoreguidelines-special-member-functions,
+  cppcoreguidelines-virtual-class-destructor,
+  cppcoreguidelines-slicing,
+  modernize-use-override,
+  modernize-use-nullptr,
+  modernize-use-equals-default,
+  modernize-use-equals-delete,
+  modernize-use-using,
+  modernize-redundant-void-arg,
+  modernize-use-emplace,
+  misc-unused-parameters,
+  readability-else-after-return,
+  readability-simplify-boolean-expr,
+  readability-container-size-empty,
+  readability-make-member-function-const,
+  readability-convert-member-functions-to-static,
+  readability-non-const-parameter,
+  readability-redundant-member-init,
+  readability-redundant-declaration,
+  readability-qualified-auto,
+  readability-static-accessed-through-instance,
+  readability-duplicate-include,
+  readability-avoid-const-params-in-decls,
+  readability-const-return-type,
+  readability-delete-null-pointer,
+  readability-use-anyofallof,
+  readability-string-compare,
+  readability-redundant-smartptr-get,
+  misc-const-correctness
 
 CheckOptions:
   # Flag only genuine monsters — ordinary 100-line functions are fine here.
@@ -83,6 +123,15 @@ CheckOptions:
   readability-function-size.VariableThreshold: 40
   readability-function-cognitive-complexity.Threshold: 50
   readability-function-cognitive-complexity.IgnoreMacros: true
+  # Conditions mirroring the EXE's branches keep their shape.
+  readability-simplify-boolean-expr.SimplifyDeMorgan: false
+  # Deleting copy leaves the class non-movable, which is the intent; a
+  # defaulted virtual destructor alone marks an interface.
+  cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor: true
+  cppcoreguidelines-special-member-functions.AllowMissingMoveFunctionsWhenCopyIsDeleted: true
+  cppcoreguidelines-special-member-functions.AllowImplicitlyDeletedCopyOrMove: true
+  # Scope guards live for their destructor; const on them says nothing.
+  misc-const-correctness.AllowedTypes: 'FrameStats::Timer;OvTimer;std::lock_guard;std::unique_lock;std::scoped_lock'
 
 # Only our own sources; vendored third_party (Nuked-OPL3, doctest) is exempt.
 HeaderFilterRegex: '^.*/src/(formats|prepare|core|systems|enhance|presentation|app|trace)/.*\.hpp$'

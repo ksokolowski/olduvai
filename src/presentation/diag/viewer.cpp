@@ -58,14 +58,7 @@ struct Rgba {
 Rgba pc1_to_rgba(const Pc1Image& img) {
     Rgba out{img.width, img.height, {}};
     out.px.resize(static_cast<std::size_t>(img.width) * img.height * 4);
-    for (std::size_t i = 0; i < img.pixels.size(); ++i) {
-        const std::uint8_t idx = img.pixels[i];
-        const Rgb c = idx < img.palette.size() ? img.palette[idx] : Rgb{};
-        out.px[i * 4] = c.r;
-        out.px[i * 4 + 1] = c.g;
-        out.px[i * 4 + 2] = c.b;
-        out.px[i * 4 + 3] = 255;
-    }
+    indexed_to_rgba(img.pixels, img.palette, out.px.data(), out.px.size() / 4);
     return out;
 }
 
@@ -86,7 +79,7 @@ Rgba sprite_to_rgba(const Sprite& s) {
 
 // Build the viewer's inventory: every .PC1 image and .MAT sprite set found in
 // the four game archives, labelled by their source archive + entry name.
-// Split out of run_viewer (BACKLOG §3.12: 67 points) — the load is a phase
+// Split out of run_viewer (67 complexity points) — the load is a phase
 // with its own happy/empty paths, so the program reads as load → window →
 // loop, and the phase is testable on its own (viewer_shot exercises it).
 void load_viewer_assets(const ViewerOptions& opts, std::vector<Pc1Item>& pc1s,

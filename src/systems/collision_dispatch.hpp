@@ -35,7 +35,7 @@ void apply_sign_teleport(SystemsState& state, int screen, int x, int y);
 // the transition classifier sees the cave→surface edge and plays the cave
 // fade pair.  Completing it in the end-of-tick presentation block mutated
 // cave_flag/current_screen outside the snapshot bracket, and the next tick
-// misclassified the change as a surface pan-scroll (2026-07-06 regression).
+// misclassified the change as a surface pan-scroll (a regression).
 bool try_complete_sign_teleport(SystemsState& state);
 
 void process_entity_collisions(SystemsState& state);

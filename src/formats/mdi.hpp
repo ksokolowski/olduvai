@@ -1,18 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Music container → standard MIDI converter.  The container is standard
-// MThd/MTrk MIDI with two quirks the original driver resolves at play
-// time, mirrored here:
-//   * Note Off is encoded `0x8X 0x00 vel` — the note number is implicit
-//     ("release whatever this channel plays").  The driver substitutes a
-//     per-channel last-note register (sentinel 0x80) and auto-releases a
-//     held note when a new Note On arrives on the same channel.
-//   * Sequencer-specific meta events (FF 7F) carry OPL timbre blocks and
-//     are stripped for MIDI targets; per-track Roland program presets are
-//     injected up front instead (with channel volume 7=127).
-// In strict mode, runtime CC/Aftertouch/Channel-Pressure/Pitch-Bend are
-// dropped — the original forwards only Note On/Off + Program Change to
-// the Roland output.
+// Music container -> standard MIDI.  The container is MThd/MTrk MIDI with two
+// quirks the original driver resolves at play time:
+//   * Note Off is `0x8X 0x00 vel` (note implicit): the driver keeps a
+//     per-channel last note (sentinel 0x80) and releases a held note when a
+//     new Note On arrives on that channel.
+//   * FF 7F sequencer-specific metas carry OPL timbres: stripped for MIDI,
+//     with per-track Roland program presets injected up front (volume 7=127).
+// Strict mode drops runtime CC / aftertouch / channel pressure / pitch bend:
+// the original sends only Note On/Off and Program Change to the Roland.
 
 #pragma once
 
@@ -29,22 +25,19 @@ const std::map<int, int>* roland_program_map(int track_id);
 // Music name (lowercase) → track id for the preset table.
 int mdi_track_id(const std::string& lower_name);
 
-// Convert raw container bytes to a standard MIDI stream.
-// gm_translate maps the Roland preset numbers through the approximate
-// MT-32 -> General MIDI table for SoundFont playback targets.
+// Raw container -> standard MIDI.  gm_translate maps Roland programs through
+// the approximate MT-32 -> GM table (SoundFont targets).
 std::vector<std::uint8_t> build_gm_midi(
     const std::vector<std::uint8_t>& raw, int track_id,
     bool mt32_strict = false, bool gm_translate = false);
 
-// ── OPL event stream (the 'A'/AdLib branch) ────────────────────────────────
-// The FF 7F sequencer-specific events the GM converter strips carry the
-// authored OPL voice patches.  Payload layout (mirrors the reference
-// implementation's decode):
+// ---- OPL event stream (the AdLib branch) ----
+// The FF 7F events the GM converter strips carry the OPL voice patches:
 //   bytes 0..2   manufacturer id
 //   bytes 3..4   message type (big-endian)
-//   type 0x0001, len 34: byte 5 = channel; bytes 6.. = two 13-byte operator
-//     blocks (primary, secondary) + 2 waveform bytes at offsets 26/27.
-//   type 0x0002/0x0003, len 6: byte 5 = value (tremolo / vibrato depth).
+//   type 0x0001, len 34: byte 5 = channel; then two 13-byte operator blocks
+//     (primary, secondary) + waveform bytes at offsets 26/27
+//   type 0x0002/0x0003, len 6: byte 5 = tremolo / vibrato depth
 
 // One OPL operator voice block from a type-0x0001 timbre event.
 struct MdiOplOperatorState {
@@ -92,10 +85,9 @@ struct MdiEventStream {
     std::vector<MdiStreamEvent> events;
 };
 
-// Parse the raw container into the OPL-branch event stream: channel events
-// with RAW channels (no MT-32 remap), tempo metas, and decoded FF 7F timbre
-// events.  Other metas and sysex are dropped (the OPL driver ignores them).
-// Returns valid=false on a malformed container.
+// Parse the container into the OPL event stream: channel events on raw
+// channels (no MT-32 remap), tempo metas, decoded FF 7F timbres; other metas
+// and sysex dropped.  valid=false on a malformed container.
 MdiEventStream parse_mdi_events(const std::vector<std::uint8_t>& raw);
 
 }  // namespace olduvai::formats

@@ -118,4 +118,10 @@ MatFile::MatFile(const std::vector<std::uint8_t>& data,
     }
 }
 
+std::vector<Sprite> load_mat_sprites(const std::vector<std::uint8_t>* data,
+                                     const std::string& name) {
+    if (data == nullptr) return {};
+    return MatFile(*data, name).sprites();
+}
+
 }  // namespace olduvai::formats

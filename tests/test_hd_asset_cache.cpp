@@ -75,3 +75,23 @@ TEST_CASE("HdAssetCache: clear empties the store") {
     cache.clear();
     CHECK(cache.size() == 0);
 }
+
+TEST_CASE("HdAssetCache: get_by_source builds once and shares get()'s entries") {
+    olduvai::enhance::HdAssetCache cache;
+    int builds = 0;
+    const auto make = [&] { ++builds; return opaque4(); };
+    const auto& a = cache.get_by_source(7, make, 4, 4, 2, "smooth");
+    const auto& b = cache.get_by_source(7, make, 4, 4, 2, "smooth");
+    CHECK(builds == 1);                 // a hit never calls the builder
+    CHECK(&a == &b);
+    // The same pixels under another source key land on the same asset.
+    const auto& c = cache.get_by_source(8, make, 4, 4, 2, "smooth");
+    CHECK(builds == 2);
+    CHECK(&c == &a);
+    // ... and get() on those pixels finds it too.
+    CHECK(&cache.get(opaque4(), 4, 4, 2, "smooth") == &a);
+    // clear() forgets the source keys with the assets.
+    cache.clear();
+    cache.get_by_source(7, make, 4, 4, 2, "smooth");
+    CHECK(builds == 3);
+}

@@ -62,7 +62,7 @@ std::vector<std::uint8_t> xbr_2x(const std::vector<std::uint8_t>& rgba,
                                  int w, int h, int threshold) {
     const int ow = w * 2;
     std::vector<std::uint8_t> out(static_cast<std::size_t>(ow) * h * 2 * 4);
-    // §3.22: row-band split.  Writes are y-derived (base/row2 from y), reads go to the
+    // Row-band split.  Writes are y-derived (base/row2 from y), reads go to the
     // read-only input via the clamping accessor, so bands never share an
     // output byte — bit-identical, and test_upscale_threading proves it.
     parallel_rows(h, [&](int y_begin, int y_end) {

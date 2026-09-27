@@ -24,9 +24,8 @@ using formats::Rgb;
 
 namespace {
 
-// EXE bug — matches original: the EXE hardcodes 0x69 = 105 ONE-BASED at
-// 27f7:1140; our 0-based sheet makes that 104 (red arrow).  105 here would
-// draw the fire monster (gameplay-confirmed, reference commit 1fe2cc1).
+// EXE quirk kept: 27f7:1140 hardcodes 0x69 = 105, one-based, so 104 in our
+// 0-based sheet (red arrow); 105 would draw the fire monster.
 constexpr int kSprKoArrow = 104;
 constexpr int kSprPlayerGhost1 = 38;
 constexpr int kSprFallingStone = 108;   // also the fireball sprite
@@ -49,12 +48,9 @@ bool bottom_aligned(ObjType t) {
 void compose_frame(RenderTarget& t, systems::SystemsState& state,
                    const LevelRenderAssets& a, bool draw_player,
                    const std::function<void(RenderTarget&)>& post_background_hook) {
-    // Background + floor tiles + secret clip-line, then the foreground pass.
-    // Splitting the two lets the enhanced widescreen present compose an entity-
-    // free background center, assemble the wide buffer, and draw the foreground
-    // ONCE over it at origin_x = margin (so entities overflow the 320 edge) —
-    // see draw_entities + draw_background.  Here both phases run; advance_state
-    // defaults true so the per-frame club_flag mutation fires once.
+    // Background (+ floor tiles, secret clip), then the foreground.  The
+    // widescreen present runs the two separately; here both run and club_flag
+    // advances once.
     draw_background(t, state, a, post_background_hook);
 
     // 3+. Foreground (entities, spring, hazards/popups, death halo, player).
@@ -67,15 +63,10 @@ static inline float fsel(bool use_float, float f, int i) {
     return use_float ? f : static_cast<float>(i);
 }
 
-// Moving platform: two 16-px tile pieces at the oscillating y.
-// The EXE queues sentinel sprite 1000 (Objects_Update PLATFORM handler
-// 2A04:0c73) and the flush special-cases it into FUN_263c_0931, which
-// picks the tile pair BY LEVEL: capstone 263c:0936-0x094b
-// tests the level word [0x9c6c] against 3 → Dark Woods uses 1-based tiles 13/15 = ELEML3[12]
-// and [14] (16x9 planks), every other level 1-based 1/3 = ELEMLx[0]
-// and [2].  Raw EXE bytes at file 0x18cf1 verified.  Drawing [0]/[2]
-// unconditionally (cyxx-derived) attached L3's 16x55 ground pillars
-// to the moving planks.
+// Moving platform: two 16 px tile pieces at the oscillating y.  The EXE queues
+// sentinel sprite 1000 (PLATFORM handler 2A04:0c73) and FUN_263c_0931 picks the
+// pair by level (263c:0936-0x094b tests [0x9c6c] against 3): Dark Woods
+// ELEML3[12]/[14] (16x9 planks), every other level ELEMLx[0]/[2].
 static void draw_moving_platform(RenderTarget& t,
                                  const systems::SystemsState& state,
                                  const LevelRenderAssets& a, const Entity& e) {
@@ -91,10 +82,9 @@ static void draw_moving_platform(RenderTarget& t,
     }
 }
 
-// One entity's sprite and everything drawn WITH it: the two-part L3 snake and
-// L7 pteriyaki (body and head placed independently, which is why the shared
-// sprite is not blitted on that path until the head goes down), the launcher
-// the entity was fired from, and a chimp's rock while it is in flight.
+// One entity's sprite and what is drawn with it: the two-part L3 snake and L7
+// pteriyaki (body and head placed separately), the launcher it was fired
+// from, a chimp's rock in flight.
 static void draw_entity_composite(RenderTarget& t,
                                   const LevelRenderAssets& a,
                                   const Entity& e, int spr_idx,
@@ -147,11 +137,9 @@ void draw_entity_list(RenderTarget& t, systems::SystemsState& state,
         const int spr_idx = e.sprite;
         if (spr_idx < 0 || spr_idx >= static_cast<int>(spr_mat.size()))
             continue;
-        // Base position: float render position (fx/fy) on the HD smooth-motion
-        // path, else the integer logic position (byte-identical — lround of an
-        // exact int round-trips).  All the per-type draw_x/draw_y adjustments
-        // below are integer offsets added to this base, so they carry the
-        // sub-pixel component through to the HD-rounded blit.
+        // Base position: fx/fy on the HD smooth path, else the integer
+        // position.  The per-type offsets below are integers added to it, so
+        // the sub-pixel part reaches the blit.
         const float bx = t.use_float_pos ? e.fx : static_cast<float>(e.x);
         const float by = t.use_float_pos ? e.fy : static_cast<float>(e.y);
         float draw_x = bx, draw_y = by;
@@ -185,11 +173,9 @@ void draw_entity_list(RenderTarget& t, systems::SystemsState& state,
 void draw_secret_spring(RenderTarget& t, systems::SystemsState& state,
                       const LevelRenderAssets& a) {
     const auto& spr_mat = a.entity_sprites;
-    // 3b. Secret-room spring/trampoline sprite.
-    // EXE: drawn by L1 main at Ghidra 24199-24222, sprite 0x93 (1-based)
-    // = index 146 (0-based) from L1SPR.MAT.  Fixed x=6; y=148 while the
-    // bounce fires, y=164 otherwise.  Only drawn when in the secret room.
-    // Draw order spec F1: after entities, before death halo + HUD.
+    // 3b. Secret-room spring: L1 main draws sprite 0x93 (1-based) = 146 from
+    // L1SPR.MAT at x=6, y=148 while bouncing, else y=164.  After entities,
+    // before the death halo and HUD.
     if (state.secret_flag) {
         constexpr int kSprSecretSpring = 146;   // EXE 0x93 1-based
         constexpr int kSpringX = 6;             // EXE const at 0x1425b
@@ -208,13 +194,10 @@ void draw_secret_spring(RenderTarget& t, systems::SystemsState& state,
 void draw_food_gate_cue(RenderTarget& t, systems::SystemsState& state,
                       const LevelRenderAssets& a) {
     const auto& spr_mat = a.entity_sprites;
-    // 3c. Food-gate indicators ("NOT ENOUGH FOOD" cue): on the level-end gate
-    // screen, when the food bar isn't full, the EXE draws two indicator sprites
-    // either side of the gate so the player knows to go back and eat (the gate
-    // itself blocks the exit until food >= 45).  EXE all gate levels:
-    // FUN_263c_09ab(0,0x6e,100,0x53,0) + (0,0xad,100,0x5c,0) → sprites 82 + 91
-    // at (110,100) + (173,100).  Gate screen: L3=17, L1/L5/L7=18.  L1 capstone
-    // 0x0475 / 0x048f.  FOOD_GATE = 45.
+    // 3c. Food-gate cue: on the gate screen with food < 45 the EXE draws
+    // sprites 82 + 91 either side of the gate at (110,100) and (173,100)
+    // (FUN_263c_09ab(0,0x6e,100,0x53,0) + (0,0xad,100,0x5c,0); L1 0x0475 /
+    // 0x048f).  Gate screen: L3 17, L1/L5/L7 18.
     if (!a.enhanced_vector_banners &&
         (state.current_level == 1 || state.current_level == 3 ||
          state.current_level == 5 || state.current_level == 7) &&
@@ -244,15 +227,9 @@ void draw_hazards_and_popups(RenderTarget& t, systems::SystemsState& state,
     }
     if (state.fireball_flag != 0 &&
         kSprFallingStone < static_cast<int>(spr_mat.size())) {
-        // Flip the fireball sprite to face its travel direction.  The fireball
-        // and falling stone share sprite 108; the stone falls vertically (no
-        // flip) but the fireball is directional.  EXE FUN_27f7_089f
-        // 0x08d8-0x08dc passes palette_flag = fireball_flag-1 (0 = right, 1 =
-        // left) to Game_EnqueueSprite for a flipped sprite variant; with one
-        // fireball sprite the equivalent is flip_h when moving LEFT
-        // (fireball_flag == 2).  Matches the Python reference + the EXE-faithful
-        // fireball-gate behaviour.  Travel direction
-        // is already correct (toward the player).
+        // The fireball shares sprite 108 with the falling stone but is
+        // directional: flip when moving left (fireball_flag == 2).
+        // FUN_27f7_089f 0x08d8-0x08dc passes fireball_flag-1 as the flip flag.
         blit_sprite(t, spr_mat[kSprFallingStone], a.palette,
                     fsel(t.use_float_pos, state.fireball_fx, state.fireball_x),
                     fsel(t.use_float_pos, state.fireball_fy, state.fireball_y),
@@ -297,12 +274,9 @@ void draw_death_halo(RenderTarget& t, systems::SystemsState& state,
 void draw_l5_glider_flyaway(RenderTarget& t, systems::SystemsState& state,
                       const LevelRenderAssets& a) {
     const auto& spr_mat = a.entity_sprites;
-    // 4c. L5 screen-12 DETACHED glider fly-away (empty glider, no rider) — the
-    // player has dismounted; the glider drifts up-right (handle_l5_screen12_
-    // glider: glider_x += 5, glider_y -= 4 while glider_y > -30).  Body sprite
-    // 117 (0x76) + chute 124, EXE capstone 0x036d/0x0387, reference
-    // _GLIDER_BODY_SPR.  Drawn here (in draw_entities) so the widescreen overflow
-    // pass carries it across the margin instead of hard-clipping at x=320.
+    // 4c. L5 screen-12 detached glider (no rider) drifting up-right while
+    // glider_y > -30: body 117 (0x76) + chute 124 (0x036d / 0x0387).  Drawn
+    // here so the widescreen overflow pass carries it into the margin.
     if (state.current_level == 5 && state.current_screen == 12 &&
         state.glider_y > -30) {
         constexpr int kGliderBody = 117, kGliderChute = 124;
@@ -316,12 +290,10 @@ void draw_l5_glider_flyaway(RenderTarget& t, systems::SystemsState& state,
 
 }
 
-// Post-hit invulnerability halo/shield overlay.  // FUN_27f7_12c7
-// Visibility (capstone 0x12ff-0x130b): skip the blink-off phase —
-// show = (hit_counter > 15) OR (hit_blink != 0).
-// L5 glider branch (DS:0x989c != 0): sprite 0x8d at (x+6, y+10)
-// (capstone 0x134d / 0x1346); otherwise frames 127+hit_blink at
-// (x-5, y-11), x another -4 while climbing (capstone 0x132b).
+// Post-hit halo.  // FUN_27f7_12c7
+// Shown when hit_counter > 15 or hit_blink != 0 (0x12ff-0x130b).  L5 glider
+// (DS:0x989c != 0): sprite 0x8d at (x+6, y+10) (0x134d / 0x1346); otherwise
+// frames 127+hit_blink at (x-5, y-11), x -4 more while climbing (0x132b).
 static void draw_player_halo(RenderTarget& t, const systems::SystemsState& state,
                              const LevelRenderAssets& a, float px, float py) {
     const systems::PlayerState& p = state.player;
@@ -345,9 +317,8 @@ static void draw_player_halo(RenderTarget& t, const systems::SystemsState& state
     }
 }
 
-// Flight composites replace the walk sprite while alive in flight —
-// the halo overlay still applies (only the base sprite is swapped).
-// Returns true when it drew the player, i.e. the body draw below is done.
+// Flight composites replace the walk sprite while alive in flight (the halo
+// still applies).  Returns true when it drew the player.
 static bool draw_flight_composite(RenderTarget& t,
                                   const systems::SystemsState& state,
                                   const LevelRenderAssets& a,
@@ -362,11 +333,9 @@ static bool draw_flight_composite(RenderTarget& t,
         return true;
     }
     if (state.current_level == 5) {
-        // RIDING glider = flight body sprite 116 (0x75), which INCLUDES the
-        // caveman on the glider — NOT 117 (0x76), the empty detached body
-        // drawn during the screen-12 fly-away.  EXE Player_UpdateAndDraw
-        // branch E (capstone 0x1c39) / reference _GLIDER_FLIGHT_BODY_SPR.
-        // (olduvai previously used 117 here → glider looked riderless.)
+        // Riding glider: sprite 116 (0x75, includes the caveman), not 117 (the
+        // empty body of the screen-12 fly-away).  Player_UpdateAndDraw branch E
+        // (0x1c39).
         constexpr int kGliderFlightBody = 116, kGliderChute = 124;
         if (kGliderFlightBody < static_cast<int>(spr_mat.size())) {
             blit_sprite(t, spr_mat[kGliderFlightBody], a.palette, px, py);
@@ -390,18 +359,12 @@ struct PlayerBodyPose {
     int dim_num;      // palette scale numerator, of 3 (3 = full bright)
 };
 
-// Cave-EMERGE animation — intentional divergence (owner ruling
-// 2026-07-05, same class as the in-game-font tally screens): the
-// DOS EXE restores from a cave with a bare fade and no emerge
-// frames; the owner deems that a DOS oversight vs the Amiga port.
-// After exit_cave the player renders kSprPlayerTurn (134,
-// front-facing; catalog-verified PLAYER_TURN, FUN_27f7_1b51
-// 0x1da1/0x1e2b store sprite 0x87 in a local).  Enhanced v2 pacing (matches
-// the Enhanced #20 teleport idiom): 9 ticks = 3 dim stages held 3
-// ticks each (1/3 → 2/3 → full thirds of the palette), player
-// frozen meanwhile (frame_runner gate).  Classic: 2 lit ticks,
-// draw-only, physics/input untouched.  +2 aligns the ink centre
-// (13) with STAND's (15).
+// Cave-emerge pose, an intentional divergence (the DOS EXE fades back with no
+// emerge frames; the Amiga port has them): after exit_cave the player shows
+// kSprPlayerTurn (134, front-facing; FUN_27f7_1b51 0x1da1/0x1e2b store 0x87).
+// Enhanced: 9 ticks, 3 dim stages held 3 ticks each (1/3, 2/3, full), player
+// frozen.  Classic: 2 lit ticks, draw only.  +2 aligns the ink centre (13)
+// with STAND's (15).
 static PlayerBodyPose player_body_pose(const systems::SystemsState& state,
                                        bool tel_pose) {
     const systems::PlayerState& p = state.player;
@@ -411,9 +374,8 @@ static PlayerBodyPose player_body_pose(const systems::SystemsState& state,
     pose.sprite = systems::kSprPlayerTurn;
     pose.dx = 2;
     pose.overridden = true;
-    // Enhanced v2 3-stage reveal, 3-tick holds: frames 9-7 →
-    // 1/3, 6-4 → 2/3, 3-1 → full (thirds formula, clamped so the
-    // teleport POSE ticks — frames == 0 — stay full-bright).
+    // Frames 9-7 -> 1/3, 6-4 -> 2/3, 3-1 -> full (clamped: teleport pose ticks
+    // at frames == 0 stay full).
     if (state.enhanced_active && state.cave_emerge_frames > 0)
         pose.dim_num = std::min(
             3, 1 + (systems::kCaveEmergeTicksEnhanced -
@@ -433,16 +395,10 @@ static std::vector<formats::Rgb> dimmed_palette(
     return out;
 }
 
-// Weapon overlay + the club_flag decrement (the decrement lives in
-// the weapon DRAW, after rendering).  // FUN_27f7_1f72
-//
-// The DRAW must run in every pass (so the club sprite overflows into
-// the widescreen margin too), but the STATE MUTATIONS — the death/
-// cave-warp clear and the post-draw decrement — must fire EXACTLY ONCE
-// per gameplay frame.  The single authoritative advance is the main fb
-// compose (advance_state defaults true); the widescreen entity-overflow
-// pass sets t.advance_state = false so its draw shows the SAME club_flag
-// (identical sprite) without double-advancing it.
+// Weapon overlay and the club_flag decrement, which sits in the weapon draw.
+// // FUN_27f7_1f72
+// The draw runs in every pass (the club overflows into the margin too); the
+// death/cave-warp clear and the decrement only when t.advance_state.
 static void draw_weapon_overlay(RenderTarget& t, systems::SystemsState& state,
                                 const LevelRenderAssets& a,
                                 float px, float py) {
@@ -467,36 +423,25 @@ static void draw_weapon_overlay(RenderTarget& t, systems::SystemsState& state,
 void draw_player_overlay(RenderTarget& t, systems::SystemsState& state,
                       const LevelRenderAssets& a, bool draw_player) {
     const auto& spr_mat = a.entity_sprites;
-    // 5. Player + weapon overlay.  Skipped wholesale when composing the
-    // outgoing screen-transition frame (see the header comment) — this
-    // also skips the club_flag decrement below, which must fire once
-    // per gameplay frame, not per compose.
+    // 5. Player + weapon.  Skipped for a transition's outgoing frame, which
+    // also skips the club_flag decrement.
     if (!draw_player) return;
-    // Switch to the PLAYER-only clip (default = no clip, so non-widescreen and
-    // every other caller is byte-identical).  The widescreen overflow pass sets
-    // this to the no-neighbour edge so the player can't spill onto the synthetic
-    // fill, while entities above kept the wide entity clip and overflow freely.
+    // Player-only clip (no clip by default; the widescreen overflow pass sets
+    // the no-neighbour edge).
     t.clip_x_lo = t.player_clip_x_lo;
     t.clip_x_hi = t.player_clip_x_hi;
-    systems::PlayerState& p = state.player;
-    // Float render base on the HD smooth-motion path (else integer logic pos,
-    // byte-identical).  Every player blit below is this base + integer offsets,
-    // HD-rounded — 1-HD-pixel motion granularity instead of the 4-HD-pixel snap.
+    const systems::PlayerState& p = state.player;
+    // Float base on the HD smooth path, else the integer position; every blit
+    // below adds integer offsets to it.
     const float px = t.use_float_pos ? t.player_fx : static_cast<float>(p.x);
     const float py = t.use_float_pos ? t.player_fy : static_cast<float>(p.y);
     if (draw_flight_composite(t, state, a, px, py)) return;
-    // Enhanced #20 — teleport cloud phases: on the POSE bookend ticks
-    // (depart 12-10, arrive 3-1) the player renders as PLAYER_TURN via
-    // the shared 134 override below; on cloud/empty ticks the player is
-    // fully dematerialized — no body, no halo (game_app's
-    // draw_teleport_fx draws the cloud instead).
-    //
-    // pending_sign_teleport ALSO hides: between the departure countdown
-    // hitting 0 (end-of-tick decrement) and the deferred completion (next
-    // tick's logic step), both tick counters read 0 while the player is
-    // still dissolved — without this term the widescreen end-of-tick
-    // re-compose drew one frame of a fully materialized player after the
-    // smoke (2026-07-06 regression of the fade-fix ordering).
+    // Teleport clouds: on the pose ticks (depart 12-10, arrive 3-1) the player
+    // is PLAYER_TURN (the 134 override below); on cloud/empty ticks nothing is
+    // drawn (draw_teleport_fx draws the cloud).  pending_sign_teleport also
+    // hides: both counters read 0 between the departure's end-of-tick decrement
+    // and the deferred completion, and the widescreen re-compose would show one
+    // frame of a whole player.
     bool tel_pose = false;
     if ((state.teleport_out_ticks > 0 || state.teleport_in_ticks > 0 ||
          state.pending_sign_teleport) &&
@@ -508,12 +453,9 @@ void draw_player_overlay(RenderTarget& t, systems::SystemsState& state,
     }
     if (p.sprite < 0 || p.sprite >= static_cast<int>(spr_mat.size())) return;
     const PlayerBodyPose pose = player_body_pose(state, tel_pose);
-    // Cave-descent sprites (back view, 44-46) never flip either:
-    // FUN_27f7_1b51's descent block (1b63-1b8b) is one unconditional
-    // enqueue — the flip flag is zeroed at 1b58; no facing branch.
-    // The art is left-packed (ink 0-21; the +4 at 1b7f centres it), so
-    // mirroring shifts the figure +10 px right — the owner-reported
-    // "snap right on re-enter after a left-facing cave exit".
+    // Cave-descent sprites (44-46) never flip: FUN_27f7_1b51's descent block
+    // (1b63-1b8b) enqueues unconditionally (flip zeroed at 1b58).  The art is
+    // left-packed, so a flip would shift the figure 10 px right.
     const bool never_flip =
         pose.overridden ||
         p.death_counter > 0 || pose.sprite == kSprPlayerGhost1 ||
@@ -550,15 +492,10 @@ void draw_mirrored_lava_bubbles(RenderTarget& t,
                                 bool mirror_right) {
     if (!mirror_left && !mirror_right) return;
     const auto& spr = a.entity_sprites;
-    // Continue the lava pool's activity into the no-neighbour margin by
-    // TRANSLATION — a copy of each bubble shifted by two lavarock tiles
-    // (128 px, keeping phase with the 64-wide pool tiling), NOT a
-    // reflection: the earlier mirror produced twin bubbles rising
-    // symmetrically around the seam (user: "just a mirror effect, visible
-    // seam"), while the translated copy reads as the same pool going on.
-    // Handedness preserved (no flip).  origin_x = margin places it in the
-    // margin and blit clips any off-margin part.  Float fx → smooth-motion
-    // sub-pixel.
+    // Continue the lava pool into the no-neighbour margin by translation (each
+    // bubble shifted two lavarock tiles, 128 px, in phase with the 64 px
+    // tiling), not reflection, which gave twin bubbles and a visible seam.  No
+    // flip; the blit clips anything outside the margin.
     constexpr float kPoolPeriod = 128.0f;
     auto mirror_blit = [&](int idx, float ex, float ey, bool orig_flip) {
         if (idx < 0 || idx >= static_cast<int>(spr.size())) return;

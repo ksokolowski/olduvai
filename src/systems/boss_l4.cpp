@@ -122,7 +122,7 @@ void update_l4_boss_frame(BossPlayerState& p, L4BossState& boss,
         // [10, 280] at +0x0663).  The phase-1 mount window
         // (boss_x-60, boss_x-20) tops out below x=250; without this clamp
         // a far-right player is unreachable and the boss patrols forever
-        // (softlock hit in playtest 2026-07-06).
+        // (softlock hit in playtest).
         if (p.x > 0xDC) p.x = 0xDC;
         if (p.x < 0x14) p.x = 0x14;
     }

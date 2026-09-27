@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Cave system — entry/exit, collision, boundaries.  // Cave dispatcher
-// FUN_2759_0645; per-level inits FUN_2759_027a/04ee/0428/033a
-//
-// Entry: 2-frame descent animation (sprites 44 lit → 45 dim; sprite 46 is
-// unreachable in the EXE flow — see cave_enter_exit_presentation_model.md)
-// driven by cave_entrance_mask
-// (bits[1:0] = frame, bits[7:2] = cave index), then the teleport into
-// current_screen = 100 + cave_index.  Exit: walk left past x=6
-// (L1/L5/L7), or the cave-sign teleport (collision dispatch).  The
-// counter==1000 entrance is the L7 screen-transition marker.
+// Cave system: entry/exit, collision, boundaries.  Dispatcher FUN_2759_0645;
+// per-level inits FUN_2759_027a/04ee/0428/033a.
+// Entry: a descent animation driven by cave_entrance_mask (bits 1:0 frame,
+// 7:2 cave index), then current_screen = 100 + cave_index.  Exit: walk left
+// past x=6 (L1/L5/L7) or the cave-sign teleport.  counter == 1000 marks the L7
+// screen-transition entrance.
 
 #pragma once
 
@@ -20,22 +16,15 @@ namespace olduvai::systems {
 constexpr int kCaveSpawnY = 139;
 constexpr int kSprCaveDescent1 = 44;
 
-// Cave-EMERGE reveal length (ticks armed by exit_cave).  Enhanced v2
-// pacing (owner directive 2026-07-05, matches the Enhanced #20 teleport
-// idiom): 3 dim stages x 3-tick holds = 9 ticks (1/3 -> 2/3 -> full thirds
-// of PLAYER_TURN), with game time frozen for the player (frame_runner).
-// Classic: 2 lit ticks, draw-only, NO freeze — classic gameplay timing
-// stays EXE-identical.
+// Cave-emerge reveal length, armed by exit_cave.  Enhanced: 3 dim stages x 3
+// ticks, player frozen (frame_runner).  Classic: 2 lit ticks, draw only.
 constexpr int kCaveEmergeTicksEnhanced = 9;
 constexpr int kCaveEmergeTicksClassic = 2;
 constexpr int kCaveEmergeStageHold = 3;   // ticks per dim stage (enhanced)
 
-// Cave palettes (16 RGB entries per level) — hand-authored approximations
-// of the cave tint (note the uniform quantized steps: every component is a
-// multiple of one 6-bit increment).  The original applies its own palette
-// at cave entry (FUN_2759_00b7); these VALUES are the project's and appear
-// nowhere in the executable (byte-searched 2026-07-19, both 6-bit
-// encodings — not a copied data block).
+// Cave palettes (16 RGB per level): hand-authored approximations of the cave
+// tint (the original sets its own at entry, FUN_2759_00b7).  Project values,
+// absent from the executable (byte-searched in both 6-bit encodings).
 struct CaveRgb { int r, g, b; };
 constexpr CaveRgb kCavePaletteL1[16] = {
     {0,0,0}, {162,97,65}, {130,65,32}, {97,32,0}, {0,0,0}, {162,0,32},
@@ -68,10 +57,9 @@ void setup_cave_collision(SystemsState& state);
 // Right-edge clamp + left-edge exit.  Call once per frame while in a cave.
 void check_cave_exit(SystemsState& state);
 
-// Descent animation ticks 2 and 3 (sprite 45, then the deferred cave enter;
-// the ARM frame's sprite-44 draw lives in collision_dispatch, matching the
-// EXE's same-frame arm+draw).  Returns true while it owns the player update
-// this frame (caller skips the player physics step).
+// Descent ticks 2 and 3 (sprite 45, then the deferred cave entry); the arm
+// frame's sprite 44 is drawn in collision_dispatch.  True while it owns the
+// player update (the caller skips player physics).
 bool tick_cave_descent(SystemsState& state);
 
 }  // namespace olduvai::systems

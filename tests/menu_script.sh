@@ -21,10 +21,14 @@
 #   menu_quit      — Quit → Exit Game → No, then → Yes ends the run (2 shots)
 #   title          — the title menu: About opens; Quit asks; Yes ends the run
 #   sound_card     — title Options -> Audio -> AdLib -> Apply: dialog + play.json
+#   button_layout  — pause Options -> Controls -> Nintendo -> Apply: dialog,
+#                    play.json, and the live mapping on reopen
 #
-# NB: scenarios deliberately avoid reinit/warp/load/restart — those re-enter
-# run_platform_level, which re-reads OLDUVAI_MENU_SCRIPT from the top (the script
-# has no cross-re-entry state). The reinit path is covered by reinit_smoke.
+# NB: scenarios deliberately avoid warp/load/restart — those re-enter
+# run_platform_level, which re-reads OLDUVAI_MENU_SCRIPT from the top (the
+# script has no cross-re-entry state).  A display reinit rebuilds in place and
+# the script runs on: tests/reinit_in_place.sh; the state round trip is
+# reinit_smoke's.
 #
 # Determinism (host-independent by construction):
 #  - --render-scale 1 → INTEGER upscale path (see mainmenu_shot.sh).
@@ -229,6 +233,38 @@ for want in '"music_device": "opl"' '"sfx_backend": "opl"'; do
 done
 rm -rf "${CCFG}"
 if [ ${CFAIL} -eq 0 ]; then rm -rf "${CDIR}"; else echo "  kept: ${CDIR}"; FAIL=1; fi
+
+# Button layout (BACKLOG §3.34): pause -> Options -> Controls, Right
+# (Xbox -> Nintendo), back out, Apply, then reopen Controls.  Shots: the
+# picked layout with its four rows moved (000), the dialog folding the pad
+# keys into one "Button layout" row (001), and the reopened screen (002),
+# which reads the LIVE mapping — so it shows Nintendo only if the Apply took
+# effect without a restart.  play.json gets the four keys that moved.
+BDIR="$(mktemp -d /tmp/menu_layout.XXXXXX)"
+BCFG="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
+XDG_CONFIG_HOME="${BCFG}" \
+    OLDUVAI_MENU_SCRIPT="esc down down down enter down down down enter right shot esc esc shot enter esc wait esc down down down enter down down down enter shot quit" \
+    OLDUVAI_MENU_SCRIPT_DIR="${BDIR}" timeout 60 \
+    "${BINARY}" --play --level 1 --render-scale 1 --window 640x400 \
+    --game-dir "${GAME_DIR}" >/dev/null 2>"${BDIR}/run.err"
+BFAIL=0
+while read -r WANT NAME; do
+    [ -n "${NAME}" ] || continue
+    if [ ! -s "${BDIR}/${NAME}" ]; then
+        echo "menu_script[button_layout]: FAIL — shot ${NAME} not produced"
+        BFAIL=1
+    elif [ "$(sha256 "${BDIR}/${NAME}")" != "${WANT}" ]; then
+        echo "menu_script[button_layout]: FAIL — ${NAME} differs from golden hash"
+        BFAIL=1
+    fi
+done < "${FIX}/button_layout.sha256"
+for want in '"pad_jump": "b"' '"pad_attack": "a"' '"pad_confirm": "b"' \
+            '"pad_back": "back"'; do
+    grep -qF "${want}" "${BCFG}/olduvai/play.json" 2>/dev/null || {
+        echo "menu_script[button_layout]: FAIL — play.json lacks ${want}"; BFAIL=1; }
+done
+rm -rf "${BCFG}"
+if [ ${BFAIL} -eq 0 ]; then rm -rf "${BDIR}"; else echo "  kept: ${BDIR}"; FAIL=1; fi
 
 [ ${FAIL} -eq 0 ] && echo "menu_script: PASS"
 exit ${FAIL}

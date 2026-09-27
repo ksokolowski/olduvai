@@ -181,7 +181,7 @@ int main() {
             return &b[(static_cast<std::size_t>(y) * w + x) * 4];
         };
 
-        hud.draw_into(buf, 320, 200, /*draw_lives=*/true, 0, 320);
+        hud.draw_into({buf, 320, 200}, /*draw_lives=*/true, 0, 320);
         // Row 3 samples strip row 2 → green 99.  Full health fills to 317.
         CHECK(px(buf, 320, 285, 3)[1] == 99);
         CHECK(px(buf, 320, 316, 3)[1] == 99);
@@ -192,7 +192,7 @@ int main() {
         // Drain it: health below bar.left leaves the dark interior everywhere.
         std::fill(buf.begin(), buf.end(), 0);
         health = 279;
-        hud.draw_into(buf, 320, 200, /*draw_lives=*/true, 0, 320);
+        hud.draw_into({buf, 320, 200}, /*draw_lives=*/true, 0, 320);
         CHECK(px(buf, 320, 285, 3)[0] == 18);
         CHECK(px(buf, 320, 285, 3)[2] == 30);
 
@@ -202,7 +202,7 @@ int main() {
         const int M = 40, WW = 320 + 2 * M;
         std::vector<std::uint8_t> wbuf(static_cast<std::size_t>(WW) * 200 * 4, 0);
         health = 317;
-        hud.draw_into(wbuf, WW, 200, /*draw_lives=*/true, M, WW);
+        hud.draw_into({wbuf, WW, 200}, /*draw_lives=*/true, M, WW);
         CHECK(px(wbuf, WW, M + 285, 3)[1] == 99);   // gradient, shifted by M
         CHECK(px(wbuf, WW, 285, 3)[1] == 0);        // nothing at the unshifted x
     }

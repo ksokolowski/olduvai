@@ -60,7 +60,7 @@ std::vector<std::uint8_t> mmpx_2x(const std::vector<std::uint8_t>& rgba,
 
     std::vector<std::uint32_t> dst(static_cast<std::size_t>(w) * h * 4);
     const int W2 = w * 2;
-    // §3.22: row-band split.  Writes are y-derived (o = (y*2)*W2 + x*2), reads go to the
+    // Row-band split.  Writes are y-derived (o = (y*2)*W2 + x*2), reads go to the
     // read-only input via the clamping accessor, so bands never share an
     // output byte — bit-identical, and test_upscale_threading proves it.
     parallel_rows(h, [&](int y_begin, int y_end) {

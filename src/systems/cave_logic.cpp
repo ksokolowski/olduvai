@@ -14,11 +14,10 @@ void enter_cave(SystemsState& state, int cave_index) {
             state.current_screen = 10;
             state.player.x = 10;
             state.player.y = 131;
-            // L7-style screen-9 cave ENTRY — EXE FUN_25b2_020b 0x0837 clears
-            // bp-6 = 0, routing the next frame through Sprite_DrawDispatch
-            // mode=2 (fade-out → blit → fade-in).  This entry short-circuits
-            // the cave_warp_freeze 0xFA1>>2 path (descent block calls
-            // enter_cave directly), so the fade signal must be raised here.
+            // Screen-9 cave entry: FUN_25b2_020b 0x0837 clears bp-6, routing
+            // the next frame through Sprite_DrawDispatch mode 2 (the fade
+            // pair).  This entry bypasses the cave_warp_freeze path, so raise
+            // the fade signal here.
             state.player.cave_warp_pending = true;
         } else if (state.current_screen == 18) {
             state.current_screen = 19;
@@ -57,11 +56,7 @@ void exit_cave(SystemsState& state) {
     state.player.x = state.cave_return_x;
     state.player.y = state.cave_return_y;
     state.player.gravity_flag = 0;
-    // Cave-EMERGE animation (owner-ruled divergence) — see
-    // SystemsState::cave_emerge_frames.  Enhanced v2 pacing: 9 ticks =
-    // 3 stages x 3-tick holds (1/3 → 2/3 → full brightness of
-    // PLAYER_TURN), player frozen for the duration (frame_runner gate).
-    // Classic: 2 lit ticks, draw-only, no freeze (EXE gameplay timing).
+    // Cave-emerge (see SystemsState::cave_emerge_frames).
     state.cave_emerge_frames = state.enhanced_active
                                    ? kCaveEmergeTicksEnhanced
                                    : kCaveEmergeTicksClassic;
@@ -100,25 +95,16 @@ bool tick_cave_descent(SystemsState& state) {
     const int frame_idx = state.cave_entrance_mask & 3;
     if (frame_idx == 0) return false;
     PlayerState& p = state.player;
-    // EXE presentation (byte-walked 2026-07-05, Finding
-    // cave_enter_exit_presentation_model.md): the descent shows exactly TWO
-    // sprites on the surface — 44 (lit, on the arm frame) then 45 (dim) —
-    // and only then does the transition fire.  FUN_27f7_1b51 0x1b6e-0x1b86
-    // draws (mask&3)+0x2c at player_x+4 and increments at 0x1b9c; the level
-    // main checks (mask&3)==3 AFTER that frame is presented (L1 check at
-    // 21f3:07b7-07c5, present at 21f3:0534-0551) and consumes mask>>2 →
-    // Cave_Enter at 21f3:07db-07f6.  Sprite 46 (full silhouette) is
-    // unreachable in this flow — (mask&3) never survives a frame at 3.
-    // The old port code entered the cave on the sprite-45 tick, so 45 was
-    // never presented on the surface and leaked into the first cave frames.
+    // EXE: the descent shows two sprites on the surface, 44 (lit, arm frame)
+    // then 45 (dim), then the transition.  FUN_27f7_1b51 0x1b6e-0x1b86 draws
+    // (mask&3)+0x2c at player_x+4 and increments at 0x1b9c; the level main
+    // checks (mask&3)==3 after that frame is presented (L1 21f3:07b7-07c5,
+    // present 21f3:0534-0551) and calls Cave_Enter at 21f3:07db-07f6.
     if (frame_idx == 3) {
-        // THIRD descent frame (46, full silhouette) — intentional
-        // divergence, owner ruling 2026-07-05: the EXE's own art + the
-        // (mask&3)+0x2c indexing clearly intend a 3-frame descent, but the
-        // post-present ==3 check makes 46 unreachable (a DOS sequencing
-        // oversight).  Restored: 46 gets one tick before the transition,
-        // so cave entry lands ONE 55 ms tick later than the EXE — the one
-        // deliberate gameplay-timing divergence in this path.
+        // Third descent frame (46), an intentional divergence: the art and the
+        // (mask&3)+0x2c indexing intend three frames, but the post-present
+        // check makes 46 unreachable.  Restored for one tick, so cave entry
+        // lands one 55 ms tick later than the EXE.
         if (!state.cave_descent_third_shown) {
             state.cave_descent_third_shown = true;
             p.sprite = kSprCaveDescent1 + 2;   // 46

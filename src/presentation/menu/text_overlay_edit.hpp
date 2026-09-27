@@ -48,7 +48,7 @@ void draw_edit_overlay(FrameBuffer& fb,
                        const EditOverlayState& st);
 
 // Vector path: draw into an output-res RGBA buffer with the HD font.
-void draw_edit_overlay_vector(std::vector<std::uint8_t>& buf, int ow, int oh,
+void draw_edit_overlay_vector(const enhance::Canvas& cv,
                               enhance::HdText& font, const EditOverlayState& st);
 
 }  // namespace olduvai::presentation

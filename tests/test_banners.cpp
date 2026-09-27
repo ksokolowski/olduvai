@@ -45,25 +45,25 @@ TEST_CASE("the food-gate banner is hidden while a transition plays") {
 
     const int ow = 448, oh = 200;
     std::vector<std::uint8_t> buf(static_cast<std::size_t>(ow) * oh * 4, 0);
-    banners.draw(buf, ow, oh);
+    banners.draw({buf, ow, oh});
     CHECK(lit(buf) > 0);
     const auto drawing_key = banners.key();
 
     std::fill(buf.begin(), buf.end(), 0);
     banners.set_suppressed(true);
-    banners.draw(buf, ow, oh);
+    banners.draw({buf, ow, oh});
     CHECK(lit(buf) == 0);
     CHECK(banners.key() != drawing_key);   // "draws nothing", not "redraw"
 
     std::fill(buf.begin(), buf.end(), 0);
     banners.set_suppressed(false);
-    banners.draw(buf, ow, oh);
+    banners.draw({buf, ow, oh});
     CHECK(lit(buf) > 0);
 
     // Enough food: nothing to say, suppressed or not.
     st.food_count = 45;
     std::fill(buf.begin(), buf.end(), 0);
-    banners.draw(buf, ow, oh);
+    banners.draw({buf, ow, oh});
     CHECK(lit(buf) == 0);
     SDL_Quit();
 }

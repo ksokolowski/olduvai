@@ -4,52 +4,39 @@
 
 <p align="center"><a href="https://github.com/ksokolowski/olduvai/actions/workflows/ci.yml"><img src="https://github.com/ksokolowski/olduvai/actions/workflows/ci.yml/badge.svg" alt="ci"></a> <a href="https://github.com/ksokolowski/olduvai/releases/latest"><img src="https://img.shields.io/github/v/release/ksokolowski/olduvai" alt="latest release"></a> <a href="https://github.com/ksokolowski/olduvai/releases"><img src="https://img.shields.io/github/downloads/ksokolowski/olduvai/total" alt="downloads"></a> <a href="https://github.com/sponsors/ksokolowski"><img src="https://img.shields.io/badge/Sponsor-%E2%99%A5-ea4aaa?logo=githubsponsors&logoColor=white" alt="sponsor"></a> <a href="https://ko-fi.com/styledconsole"><img src="https://img.shields.io/badge/Ko--fi-support-ff5e5b?logo=ko-fi&logoColor=white" alt="ko-fi"></a></p>
 
-**Prehistorik** (Titus Interactive, 1991) is the DOS platformer a generation
-grew up with: a club-swinging caveman braving dinosaurs, ice and volcanoes
-to fill his tribe's larder. Thirty-five years on, the floppies are fading
-and the machines that ran them are museum pieces — but the game is too good
-to be left behind.
+Remember **Prehistorik**? 1991: a caveman with a club, a tribe waiting for
+dinner, and a world of dinosaurs, frozen lakes and volcanoes standing
+between him and the food.  If you played it as a kid on a 386 with a Sound
+Blaster, it is back, and it plays exactly the way you remember.  If you
+missed it, or were not around yet in 1991, this is a good time to meet a
+proper 90s platformer: tough, funny, with a few secrets and a lot of caves
+to crawl into, and not in the mood to explain itself.
 
-Olduvai exists to preserve it and keep it playable: a native C++/SDL2
-recreation of the Prehistorik engine for modern platforms — macOS
-(Apple Silicon), desktop Linux, Windows, and Linux handhelds running KNULLI
-(the TrimUI Smart Pro and the Powkiddy A12), with PortMaster support next.
-Faithful to the DOS original down to its quirks for the players who
-remember feeding that caveman the first time around — and, when you want
-it, widescreen, HD and gamepad-ready for a generation meeting him for the
-first time.
+**Olduvai** is a new engine for that game, running natively on macOS, Linux,
+Windows and Linux handhelds.  Play it as it was, pixel for pixel and bug for
+bug, or switch on widescreen, HD graphics and smooth motion and see the old
+levels as they never looked before.
 
-(This repository and its releases contain **no game files and no game
-data** — CI-enforced. A few curated, silent screenshots and clips of the
-engine itself are the one documented exception; see [LEGAL.md](LEGAL.md).
-Bring your own copy and it looks just like 1991.)
-
-Olduvai is an engine only — it ships no game content. You bring your own
-copy of the game: see [Getting the game](#getting-the-game) and
-[LEGAL.md](LEGAL.md).
+You bring the game files ([GOG sells them](#getting-the-game)); Olduvai does
+the rest.  No game data ships here, and CI makes sure it stays that way
+([LEGAL.md](LEGAL.md)).
 
 ## Status
 
-**Release candidate — 0.9.8.** Olduvai is feature-complete, with no known
-bugs. The full game is playable natively — on the desktop and on Linux
-handhelds: all seven levels, the three boss fights, caves, secret rooms,
-flight sequences and the ending. Behaviour is validated frame-by-frame
-against an independent reference implementation — a 26-scenario
-cross-engine corpus, with per-level golden traces run in CI, both engines
-in shared-RNG lockstep, zero tolerance.
+**Release candidate: 0.9.9.**  The whole game plays, on the desktop and on
+handhelds: seven levels, three boss fights, caves, secret rooms, the balloon
+flights and the ending.  No known bugs.  Every frame is checked against an
+independent reference implementation, in lockstep, with zero tolerance.
 
-What stands between this and 1.0.0 is confirmation, not features. If
-something plays differently from the 1991 original, or anything else looks
-wrong, that is a bug — please
-[open an issue](https://github.com/ksokolowski/olduvai/issues) (F5 in the
-game writes a report you can attach).
+What stands between this and 1.0.0 is you playing it.  If anything plays
+differently from 1991, that is a bug: [open an
+issue](https://github.com/ksokolowski/olduvai/issues).  F5 in the game saves
+a report with a screenshot you can attach.
 
-Under the hood, some parts are still convoluted — I know, and I'm not
-pretending otherwise. The priority stays simple: **keep what
-works.** The engine is being untangled steadily, one small
-behaviour-preserving change at a time — each verified frame-for-frame
-against the same reference before it lands — never a risky rewrite. The
-code gets cleaner; the game stays exactly as it played in 1991.
+For the curious, the code is held to the same standard as the play.  Every
+change passes a complexity ratchet and whole-tree static analysis, coverage is
+measured per layer, and no cleanup may move a single frame.  Start at
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Screenshots
 
@@ -64,123 +51,81 @@ code gets cleaner; the game stays exactly as it played in 1991.
 </tr>
 </table>
 
-Frames of this engine running a legitimately owned copy of the game — see
-[assets/screenshots](assets/screenshots/README.md).
+Frames of this engine running a legitimately owned copy of the game (see
+[assets/screenshots](assets/screenshots/README.md)).
 
 ## Features
 
-**Faithful by default.** The `dos` profile reproduces the DOS original —
-including its bugs — at the exact PIT tick rate (18.2065 Hz, absolute-
-deadline scheduler), with a VGA-style hold-frame scanout for CRT-smooth
-presentation and whole-pixel integer scaling in fullscreen. Known,
-deliberate deviations are individually documented.
+Two ways to play, one switch apart (*Options → Style*):
 
-**Enhanced when you want it.** The `hd` profile (`--enhanced`) adds: HD
-sprite upscaling (OmniScale, xBR, MMPX, Eagle, smooth, retro), true
-widescreen with live level margins and panorama transitions, smooth 60 FPS
-motion interpolation, vector text and enhanced HUD, and a set of
-hand-crafted animation extensions (cave descent/emerge sequences, teleport
-clouds, descent dust, balloons that float away when a ride ends, and more). It is all-or-nothing by design — see the
-0.9.5 changelog for why. For the classic 4:3 look, add `--aspect 4:3`.
+- **Classic DOS**: the 1991 game, its quirks included, at the original timer
+  rate, with a VGA-style scanout and whole-pixel scaling.
+- **Enhanced HD**: sharp HD upscaling, real widescreen (the side margins show
+  the neighbouring screens instead of black bars), smooth 60 FPS motion, a
+  vector HUD, and a few new touches, like balloons that drift away when a
+  ride ends.
 
-**Audio.** OPL/AdLib FM synthesis is built in — an EXE-faithful AdLib
-driver on the vendored Nuked-OPL3 core, with no external dependency.
-Roland MT-32 emulation is built in too (vendored libmt32emu — supply your
-own ROM images). General MIDI (FluidSynth + SoundFont) loads at runtime,
-plus host MIDI
-out for real hardware. Data-driven sound effects follow the selected
-backend. *Options → Audio → Sound card* picks all of this in one setting
-named after the 1991 hardware — Sound Blaster, AdLib, Roland MT-32,
-General MIDI, MIDI out or Off — listing only the cards your machine can play.
+The sound of 1991 comes with it.  Pick the card you had: Sound Blaster or
+AdLib are built in, the Roland MT-32 is emulated if you have its ROMs,
+General MIDI works with a SoundFont ([docs/AUDIO.md](docs/AUDIO.md)).
 
-**In-game menus.** Title menu with direct level select on Start Game
-(left/right), a one-click Style preset (Classic DOS / Enhanced HD) in
-Options, pause menu with live-apply settings, quicksave/load, cheats,
-a boss-fight pause, one **Quit** that always asks first, and an **About**
-screen with the exact build — all driven by a declarative menu model
-shared with the reference engine.
-
-**Tooling.** F5 in-game bug capture — in the levels and the boss fights —
-with an annotation form (tag /
-reproducibility / multi-line description, edited in a native text field);
-reports land in `~/olduvai/bug_reports` (override with the `bug_report_dir`
-key in `play.json` or `$OLDUVAI_BUG_DIR`).  Plus input record/replay,
-draw-call logging, debug overlays (collision/entities/perf), god mode, and
-headless screenshot hooks.
+Also in the box: any SDL2 gamepad (Xbox and Nintendo layouts), level select,
+quicksave, cheats for the hard bits, and F5 bug reports from anywhere in the
+game.
 
 ## Getting the game
 
-Olduvai reads the original data files from your own copy of the game:
+- **GOG (recommended):** [*Prehistorik 1+2*](https://www.gog.com/game/prehistorik_12)
+  works out of the box.  Olduvai finds the installation and reads its
+  `PREH.SQZ` directly.
+- **Your original floppies:** `FILESA.CUR`, `FILESB.CUR`, `FILESA.VGA`,
+  `FILESB.VGA` and `HISTORIK.EXE`.  Point `--game-dir` at them.
 
-- **GOG (recommended):**
-  [*Prehistorik 1+2*](https://www.gog.com/game/prehistorik_12) — supported
-  out of the box. The engine reads the `PREH.SQZ` container the GOG release
-  ships and auto-discovers a GOG installation, so a plain `--play` typically
-  just works.
-- **Original floppies / DOS files:** if a dusty box in the attic still holds
-  your 1991 diskettes — or a backup of them — those files work directly:
-  `FILESA.CUR`, `FILESB.CUR`, `FILESA.VGA`, `FILESB.VGA`, `HISTORIK.EXE`.
-  Point `--game-dir` at wherever they live.
-
-The engine reads the game files it needs directly on
-your machine; your original files are never modified.
+Your files are only read, never modified.
 
 ## Downloads
 
-Prebuilt engine binaries for each release are on the
-[Releases page](../../releases/latest):
+On the [Releases page](../../releases/latest):
 
 | Platform | File |
 |---|---|
 | Linux x86_64 (any distro) | `olduvai-<version>-linux-x86_64.AppImage` |
 | Windows x86_64 (portable) | `olduvai-<version>-windows-x86_64.zip` |
-| macOS (universal: Apple Silicon + Intel) | `olduvai-<version>-macos-universal.dmg` |
+| macOS (universal) | `olduvai-<version>-macos-universal.dmg` |
 | TrimUI Smart Pro (KNULLI) | `olduvai-<version>-knulli-trimui.zip` |
 | Powkiddy A12 (KNULLI) | `olduvai-<version>-knulli-a12.zip` |
 
-**Handhelds:** Enhanced HD — smooth motion, widescreen, HD graphics — runs on
-the TrimUI Smart Pro close to full speed; the A12 starts in Classic. Install
-steps, controls and music: [docs/HANDHELD.md](docs/HANDHELD.md). Support for
-many more handhelds through [PortMaster](https://portmaster.games/) is the next
-goal.
+**Handhelds:** Enhanced HD runs on the TrimUI Smart Pro close to full speed.
+Install steps, controls and music: [docs/HANDHELD.md](docs/HANDHELD.md).  A
+**[PortMaster](https://portmaster.games/) port is coming** to reach many more
+devices.  It needs more time than planned, so 0.9.10 or 0.9.11; time will
+tell.
 
-Binaries are **not code-signed** (a hobby project without paid developer
-accounts):
+The binaries are not code-signed yet (see [the first funding
+goal](#supporting-the-project)):
 
-- **macOS:** first launch — right-click `Olduvai.app` → *Open* → *Open*.
-  On macOS 15+ the dialog has no Open button: try to open the app once,
-  then allow it under *System Settings → Privacy & Security → Open Anyway*.
-  If Gatekeeper still refuses: `xattr -cr /Applications/Olduvai.app`.
-- **Windows:** if SmartScreen shows "Windows protected your PC", click
-  *More info* → *Run anyway*.
-- **Linux:** `chmod +x olduvai-*.AppImage`, then run it.
+- **macOS:** right-click `Olduvai.app` → *Open* → *Open*; on macOS 15+,
+  allow it under *System Settings → Privacy & Security → Open Anyway*;
+  if Gatekeeper still refuses, `xattr -cr /Applications/Olduvai.app`.
+- **Windows:** SmartScreen → *More info* → *Run anyway*.
+- **Linux:** `chmod +x olduvai-*.AppImage`.
 
-Verify a download against the release's `SHA256SUMS.txt`:
-`shasum -a 256 -c SHA256SUMS.txt --ignore-missing`.
+Verify a download: `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`.
 
-## Running
+## Playing
+
+Double-click to play.  If Olduvai cannot find the game it asks for the
+folder once, then for Classic or Enhanced.  From a terminal:
 
 ```sh
-# Faithful DOS experience
-./build/release/olduvai --game-dir /path/to/your/prehistorik/files --profile dos --play
-
-# Full enhanced experience (widescreen HD)
-./build/release/olduvai --game-dir /path/to/your/prehistorik/files --profile hd --play
-
-# Jump straight into a level (1-7 by in-game numbering; 0 = intro, 8 = ending)
-./build/release/olduvai --game-dir ... --profile hd --play --level 3
+olduvai --game-dir /path/to/game --profile dos --play   # the 1991 game
+olduvai --game-dir /path/to/game --profile hd --play    # Enhanced HD
+olduvai --game-dir /path/to/game --play --level 3       # straight to a level
 ```
 
-Launched from a terminal without game files, Olduvai reports what is
-missing and exits; launched from the GUI (double-click), it opens a dialog
-instead — locate your game folder (remembered from then on) or jump to the
-GOG store page, then choose Classic or Enhanced HD once (changeable any
-time under Options → Style). ALT+ENTER toggles fullscreen; ESC opens the pause menu.
-
-**Gamepad:** any SDL2-recognised controller works out of the box, with
-hotplug. Defaults: d-pad / left stick to move, **A** jump (and confirm in
-menus), **X** attack, **Start** / **B** pause / back. Remap via the
-`pad_*` settings keys below.
+ESC opens the pause menu, ALT+ENTER toggles fullscreen.  A pad works out of
+the box; *Options → Controls* remaps it.  Everything the settings file can
+hold: [docs/SETTINGS.md](docs/SETTINGS.md).
 
 ## Building
 
@@ -188,90 +133,65 @@ menus), **X** attack, **Start** / **B** pause / back. Remap via the
 cmake --preset release && cmake --build --preset release   # → build/release/olduvai
 ```
 
-Requires CMake ≥ 3.21, a C++17 compiler and SDL2 2.0.20 or newer (the
-floor CI builds against on every push). Per-platform
-instructions, packaging (AppImage / dmg / Windows zip), the test suite and
-all build options: [docs/BUILDING.md](docs/BUILDING.md).
-
-## Settings
-
-Settings live in `~/.config/olduvai/play.json` (flat JSON; profile beats
-saved config, CLI flags beat both; `--save-config` persists the current
-flags). Common keys: `game_dir`, `music_device` (`auto`, `opl`,
-`mt32-builtin`, `gm-builtin`, `host-midi`, `gm-host`, `none`), `rom_dir`,
-`soundfont`, `sfx_backend`, `hd_profile`, `render_scale`, `aspect` (`keep`,
-`4:3`, `stretch`, `widescreen`), `vga_scan`, `fullscreen`, per-feature `enhance.*`
-toggles, and gamepad mapping: `pad_jump`, `pad_attack`, `pad_pause`,
-`pad_confirm`, `pad_back` (SDL button names — `a`, `b`, `x`, `y`,
-`start`, `back`, `leftshoulder`, …) plus `pad_deadzone` (default 8000),
-and `smooth_subframes` / `smooth_vsync` for smooth-motion pacing.
-`--sound-card` sets the music and effects backends together.
-
-Built-in profiles: `dos` (byte-faithful) and `hd` (enhanced widescreen),
-plus a handheld pair: `hd-handheld` (the `smooth` scaler at ×3, sized for
-1280×720 and 1024×600 panels, with lighter smooth-motion pacing) and
-`dos-handheld` (identical to `dos`; it keeps the menu's Style switch within
-the handheld pair). A launcher can pass its device defaults with
-`--default-profile`; it ranks below `play.json`, so choices you make in
-the menus still stick.
+CMake ≥ 3.21, a C++17 compiler, SDL2 ≥ 2.0.20.  Platforms, packaging and the
+test suite: [docs/BUILDING.md](docs/BUILDING.md).
 
 ## How it was built
 
-The engine is the product of an evidence-driven reverse-engineering
-pipeline: multi-tool triangulation of the original DOS executable
-(Ghidra, Reko, Rizin, with Capstone byte-level arbitration and raw-byte
-verification), a Findings knowledge base, an executable Python
-reference implementation proven first, then mapped here with both
-engines validated in cross-engine lockstep. The full method is
-described in [docs/METHOD.md](docs/METHOD.md).
-
-## Acknowledgements
-
-- **Titus Interactive** created Prehistorik in 1991 — the game this whole
-  project is a love letter to. Buy and own the original.
-- Built with [SDL2](https://libsdl.org),
-  [Nuked-OPL3](https://github.com/nukeykt/Nuked-OPL3) (OPL/AdLib synthesis),
-  [munt / libmt32emu](https://github.com/munt/munt) (MT-32 emulation),
-  [FluidSynth](https://www.fluidsynth.org) (General MIDI), and
-  [stb](https://github.com/nothings/stb) (PNG output).
+Evidence first.  The DOS executable was read with several disassemblers and
+checked byte by byte, every finding went into a knowledge base, a reference
+implementation proved each behaviour, and this engine is held to that
+reference frame by frame.  The full story: [docs/METHOD.md](docs/METHOD.md).
 
 ## Supporting the project
 
-Olduvai is a hobby project, free software, and will stay that way. If it
-brought your caveman back to life and you'd like to support the engine's
-continued development:
+Olduvai is a hobby project and free software, and will stay that way.  If it
+brought your caveman back to life:
 
 | Platform        | Link                                                                       |
 | --------------- | -------------------------------------------------------------------------- |
 | GitHub Sponsors | [github.com/sponsors/ksokolowski](https://github.com/sponsors/ksokolowski) |
 | Ko-fi           | [ko-fi.com/styledconsole](https://ko-fi.com/styledconsole)                 |
 
-(Sponsoring supports the development of this open-source engine; it does
-not buy the game — you still [bring your own copy](#getting-the-game).)
+Sponsoring supports the engine; it does not buy the game.  What it would buy,
+in order:
 
-**First funding goal — signed binaries:** an Apple Developer membership
-(~$99/yr) so the macOS build installs without the Gatekeeper workarounds,
-plus code-signing for the Windows build. Everything so far has been built
-on personal time and money; this is the first thing sponsorship would buy.
+1. **Signed binaries.** An Apple Developer membership (~$99/yr) and Windows
+   code-signing, so installing needs no workarounds.
+2. **Modern handhelds.** Newer devices to port to and test on, Android-based
+   ones in particular, on the way to an Android port.
+
+Everything so far has been built on personal time and money.
+
+## Thank you, Titus
+
+Prehistorik was made by **Titus Interactive** in 1991.  I was one of the
+kids who played it back then, and this engine is my thank-you to the people
+who made it.  If Olduvai brings back a good memory, buy the original on GOG
+and keep their work alive.
+
+Olduvai stands on [SDL2](https://libsdl.org),
+[Nuked-OPL3](https://github.com/nukeykt/Nuked-OPL3),
+[munt / libmt32emu](https://github.com/munt/munt),
+[FluidSynth](https://www.fluidsynth.org) and
+[stb](https://github.com/nothings/stb).  Thanks to their authors too.
 
 ## Legal
 
-The short version — the complete position is in [LEGAL.md](LEGAL.md):
+The complete position is in [LEGAL.md](LEGAL.md); in short:
 
-- Olduvai is an **independent, from-scratch reimplementation**. It contains
-  no code or data files from the original game, and never will
-  (CI-enforced); a few curated, silent screenshots and clips of the engine
-  are the one documented exception.
-- **You need your own copy of the game**; the engine reads it locally and
-  never redistributes it.
-- Prehistorik © 1991 Titus Interactive; all marks belong to their respective
-  owners. This project is not affiliated with or endorsed by any rights
-  holder of the original game.
-- "Olduvai"™, the bone logo and the fire-styled wordmark are this project's
-  marks — forks must use a different name.
+- An **independent, from-scratch reimplementation**.  It contains no code or
+  data from the original game (CI-enforced), apart from a few curated,
+  silent frames of this engine's own output.
+- **You need your own copy of the game**; it is read locally, never
+  redistributed.
+- Prehistorik © 1991 Titus Interactive; all marks belong to their owners.
+  Not affiliated with or endorsed by any rights holder.
+- "Olduvai"™, the bone logo and the wordmark are this project's marks;
+  forks must use a different name.
 
 ## License
 
-GPL-3.0-or-later — see [LICENSE](LICENSE). Third-party components and their
-licenses: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) (release binaries
-carry the same texts in `licenses/`).
+GPL-3.0-or-later: [LICENSE](LICENSE).  Third-party components:
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) (release binaries carry the
+texts in `licenses/`).

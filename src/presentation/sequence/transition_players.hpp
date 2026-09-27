@@ -1,21 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Blocking screen-change transition/cinematic players (OL-B3).
-//
-// Extracted from run_platform_level (game_app.cpp): the three players that
-// take over the frame loop for the sub-second screen-change animations —
-//   * play_transition        — classic 320-window pan / fade / secret slides
-//   * play_transition_wide   — the same kinds over WIDE native buffers
-//   * play_panorama_wide     — the continuous 4-screen strip pan (kind 1)
-//
-// They are free functions over TransitionShellCtx — a narrow view of the
-// shell state they genuinely read.  Everything that owns SDL textures, the
-// widescreen cache or the private `Loaded` aggregate stays in game_app and
-// is reached through the ctx callbacks (present/pacing + the three screen
-// compose helpers).  BEHAVIOR-PRESERVING move: the player internals are
-// verbatim from game_app.cpp; none of them touches core::global_rng() (the
-// compose helpers behind the callbacks are documented RNG-free — see
-// compose_surface_screen_static's contract in game_app.cpp).
+// Blocking screen-change transition players:
+//   * play_transition        classic 320-window pan / fade / secret slides
+//   * play_transition_wide   the same kinds over wide native buffers
+//   * play_panorama_wide     the continuous 4-screen strip pan (kind 1)
+// Free functions over TransitionShellCtx; SDL textures, the widescreen cache
+// and `Loaded` stay in game_app behind the ctx callbacks.  None touches
+// core::global_rng() (the compose callbacks are RNG-free).
 #pragma once
 
 #include <SDL.h>
@@ -29,19 +20,18 @@
 #include <vector>
 
 #include "presentation/render/game_render.hpp"
+#include "presentation/sequence/secret_slide.hpp"         // SlideLanding
+#include "presentation/sequence/transition_geometry.hpp"   // TransitionKind
 
 namespace olduvai::presentation {
 
-// Narrow context for the blocking transition players.  Built by
-// run_platform_level right before the transition dispatch, once per played
-// transition — so the by-value fields (slide geometry, widescreen metrics)
-// carry that frame's values, and pace_last starts at 0 exactly like the old
-// per-frame `Uint32 pace_last = 0;` local.
+// Context built per played transition, so the by-value fields carry that
+// frame's values and pace_last starts at 0.
 struct TransitionShellCtx {
     // Session / loop state.
     SDL_Window* win = nullptr;
     bool* running = nullptr;        // SDL_QUIT inside a player aborts the app
-    std::FILE* draw_log = nullptr;  // harness: kind-4 arc overlay trace (JSONL)
+    std::FILE* draw_log = nullptr;  // harness: the exit arc's trace (JSONL)
 
     // Pacing.
     Uint32 frame_ms = 1000 / 18;    // 18 Hz logic step
@@ -52,15 +42,8 @@ struct TransitionShellCtx {
     bool hd = false;
     int hd_scale = 1;
     const std::string* hd_profile = nullptr;   // opts.hd_profile
-    // The widescreen geometry is READ FROM ITS OWNER, not copied.  Until
-    // 2026-09-06 this struct carried ws_margin / ws_native_w /
-    // ws_backdrop_ok / ws_backdrop, each assigned from the identical
-    // WidescreenPresenter accessor at the one call site — four copies of one
-    // object's state, taken once and then held for the length of a
-    // transition.  That is exactly the shape BACKLOG §3.7 forbids ("members,
-    // never by-value copies"), and it is the frozen-`hd_profile` defect's
-    // shape: `rebuild_if_resized()` can move the margin mid-transition while
-    // the copy does not.  One borrowed pointer cannot go stale.
+    // Widescreen geometry is read from its owner (a resize can move the margin
+    // mid-transition).
     WidescreenPresenter* wsp = nullptr;
     enhance::HdAssetCache* hd_cache = nullptr; // g.hd_cache (RenderTarget)
 
@@ -69,10 +52,7 @@ struct TransitionShellCtx {
     const LevelRenderAssets* render = nullptr;      // g.render
     int screen_count = 0;                           // g.tiles.screens.size()
 
-    // Enhanced secret-slide geometry (kinds 3/4).
-    int slide_secret_exit_x = 0;   // departure x (= state.secret_exit_x)
-    int slide_end_x = 0;           // surface resume position
-    int slide_end_y = 0;
+    SlideLanding landing;   // the secret exit's arc (secret_slide.hpp)
 
     // Callbacks into the shell (own the SDL textures, the widescreen cache
     // and the TU-private Loaded&).
@@ -96,17 +76,17 @@ struct TransitionShellCtx {
         build_assets;
 };
 
-// Classic (320-window) transition playback: kind 1 pan-scroll, kind 2 fade
-// pair, kinds 3/4 enhanced secret slides (kind 4 with the player jump-arc
-// overlay).  Presents via ctx.upload_and_show.
+// Classic (320-window) playback: the pan, the fade pair, the secret slides
+// (the exit with its arc).  Presents via ctx.upload_and_show.
 void play_transition(TransitionShellCtx& ctx, const FrameBuffer& oldf,
-                     FrameBuffer& newf, int kind, char dir);
+                     FrameBuffer& newf, TransitionKind kind, char dir);
 
-// Widescreen transition playback (§8.7): the same kinds over WIDE native
+// Widescreen transition playback: the same kinds over WIDE native
 // buffers, presented through ctx.present_wide_transition.
 void play_transition_wide(TransitionShellCtx& ctx,
                           std::vector<std::uint8_t>& oldw,
-                          std::vector<std::uint8_t>& neww, int kind, char dir);
+                          std::vector<std::uint8_t>& neww, TransitionKind kind,
+                          char dir);
 
 // Widescreen PANORAMA pan (kind-1 surface scroll): slide a (320+2M) window
 // across a continuous native strip of the four screens involved.

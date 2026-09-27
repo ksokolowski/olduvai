@@ -87,6 +87,16 @@ bool btn(SDL_GameControllerButton b) {
     return g_pad != nullptr && SDL_GameControllerGetButton(g_pad, b) != 0;
 }
 
+// The Config field a pad_* key names, or nullptr.
+SDL_GameControllerButton* field_of(const std::string& key) {
+    if (key == "pad_jump") return &g_cfg.jump;
+    if (key == "pad_attack") return &g_cfg.attack;
+    if (key == "pad_confirm") return &g_cfg.confirm;
+    if (key == "pad_back") return &g_cfg.back;
+    if (key == "pad_pause") return &g_cfg.pause;
+    return nullptr;
+}
+
 bool axis_past(SDL_GameControllerAxis a, int sign) {
     if (g_pad == nullptr) return false;
     const int v = SDL_GameControllerGetAxis(g_pad, a);
@@ -98,6 +108,10 @@ bool axis_past(SDL_GameControllerAxis a, int sign) {
 void init(const Config& cfg) {
     g_cfg = cfg;
     if (g_inited) return;
+    // Report face buttons by POSITION on every pad.  SDL2's default reports
+    // a Switch-type pad by its labels, which would make "a" its right
+    // button and every layout here wrong on it.
+    SDL_SetHint(SDL_HINT_GAMECONTROLLER_USE_BUTTON_LABELS, "0");
     if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {
         std::fprintf(stderr, "gamepad: init failed: %s (keyboard only)\n",
                      SDL_GetError());
@@ -129,6 +143,23 @@ void shutdown() {
 
 bool connected() { return g_pad != nullptr; }
 
+std::optional<PadFamily> printed_family() {
+    if (g_pad == nullptr) return std::nullopt;
+    switch (SDL_GameControllerGetType(g_pad)) {
+        case SDL_CONTROLLER_TYPE_XBOX360:
+        case SDL_CONTROLLER_TYPE_XBOXONE:
+            return PadFamily::kXbox;
+        case SDL_CONTROLLER_TYPE_PS3:
+        case SDL_CONTROLLER_TYPE_PS4:
+        case SDL_CONTROLLER_TYPE_PS5:
+            return PadFamily::kPlayStation;
+        case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO:
+            return PadFamily::kNintendo;
+        default:
+            return std::nullopt;
+    }
+}
+
 bool left() {
     return btn(SDL_CONTROLLER_BUTTON_DPAD_LEFT) ||
            axis_past(SDL_CONTROLLER_AXIS_LEFTX, -1);
@@ -148,6 +179,23 @@ bool down() {
 bool jump_held() { return btn(g_cfg.jump); }
 bool attack_held() { return btn(g_cfg.attack); }
 bool fire_held() { return btn(g_cfg.confirm) || btn(g_cfg.jump); }
+
+std::string binding(const std::string& key) {
+    const SDL_GameControllerButton* f = field_of(key);
+    if (f == nullptr) return {};
+    const char* name = SDL_GameControllerGetStringForButton(*f);
+    return name != nullptr ? name : "";
+}
+
+bool apply_binding(const std::string& key, const std::string& button) {
+    SDL_GameControllerButton* f = field_of(key);
+    if (f == nullptr) return false;
+    const SDL_GameControllerButton b =
+        SDL_GameControllerGetButtonFromString(button.c_str());
+    if (b == SDL_CONTROLLER_BUTTON_INVALID) return false;
+    *f = b;
+    return true;
+}
 
 SDL_GameControllerButton button_from_string(const std::string& name,
                                             SDL_GameControllerButton def) {

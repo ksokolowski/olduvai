@@ -53,7 +53,7 @@ systems::FrameInputs InputReplay::at(int frame) const {
     // Fold all events up to `frame` into key state.
     systems::FrameInputs in;
     bool state[5] = {false, false, false, false, false};
-    static const char* kKeys[5] = {"left", "right", "up", "down", "attack"};
+    static const char* const kKeys[5] = {"left", "right", "up", "down", "attack"};
     for (const auto& [f, events] : frames_) {
         if (f > frame) break;
         for (const auto& [key, pressed] : events) {
@@ -70,11 +70,10 @@ systems::FrameInputs InputReplay::at(int frame) const {
     return in;
 }
 
-// Binary mode, both writers: "w" is TEXT mode on Windows and turned every
-// '\n' into CRLF, so a trace or recording made there differed byte for byte
-// from the same run anywhere else — which the zero-tolerance oracle diff and
-// the record->replay round-trip gate both compare (found 2026-09-22, the
-// first Windows CI run with game data).  LF on every platform.
+// Binary mode, both writers: "w" is TEXT mode on Windows and turns every
+// '\n' into CRLF, so a trace or recording made there would differ byte for
+// byte from the same run anywhere else — which the zero-tolerance oracle diff
+// and the record->replay round-trip gate both compare.  LF on every platform.
 bool TraceWriter::open(const std::string& path) {
     f_ = std::fopen(path.c_str(), "wb");
     return f_ != nullptr;
@@ -118,7 +117,7 @@ void InputRecorder::record(int reader_frame, const systems::FrameInputs& in) {
     if (f_ == nullptr) return;
     // The reader's canonical key order + name list (InputReplay::at kKeys).
     // FrameInputs field mapping must match InputReplay::at exactly.
-    static const char* kKeys[5] = {"left", "right", "up", "down", "attack"};
+    static const char* const kKeys[5] = {"left", "right", "up", "down", "attack"};
     const bool cur[5] = {in.left, in.right, in.up, in.down, in.attack};
     // Inverse of the reader's frame = time_ms / 55: time_ms = frame * 55
     // lands the event back on `reader_frame` (integer-exact, no rounding).

@@ -1,14 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Per-frame entity update handlers (batch 1).
-//
-// The shared monster state machine          // FUN_27f7_093d
+// The per-frame entity step: the shared monster state machine
 //   RESET(0) → SPAWN(1) → HEADING(3) ⇄ RUNNING_AWAY(4) → KO(5) → DEAD(6)
-// and the per-type dispatcher               // FUN_2A04_0003
-// This batch: shared monster, fish, platform, egg, rock, no-op types.
-// Remaining handlers (bird, chimp, spider, bat, snake, projectile, bonus,
-// pterodactyl, jumping fish, L7 variants, animated food, breakable rock,
-// fire/peak) land in batch 2.
+// (FUN_27f7_093d), and the per-type dispatcher over every entity type
+// (FUN_2A04_0003).
 
 #pragma once
 
@@ -28,11 +23,20 @@ struct UpdateEntitiesResult {
     bool screen_clear_of_monsters = true;
 };
 
-UpdateEntitiesResult update_entities(
-    std::vector<core::Entity>& entities, int player_x, int player_y,
-    int frame, const core::CollisionBitmap* collision,
-    int l3a_phase_counter = 0, bool kill_all = false,
-    bool axe_powered = false, bool fireball_active = false);
+// What the entity step reads from the tick.
+struct EntityTick {
+    int player_x = 0;
+    int player_y = 0;
+    int frame = 0;
+    const core::CollisionBitmap* collision = nullptr;
+    int l3a_phase_counter = 0;   // before this tick's advance
+    bool kill_all = false;       // the bomb power-up fired this tick
+    bool axe_powered = false;    // halo flight: a club hit knocks out at once
+    bool fireball_active = false;
+};
+
+UpdateEntitiesResult update_entities(std::vector<core::Entity>& entities,
+                                     const EntityTick& tick);
 
 // Recompute e.sprite from current state for shared-state-machine
 // monsters.  Call whenever the live entity list is (re)bound to a
@@ -44,18 +48,12 @@ void refresh_entity_sprites_on_screen_bind(
     std::vector<core::Entity>& entities, int l3a_phase_counter);
 
 // Individual handlers (exposed for scenario tests).
-void update_monster(core::Entity& e, int px, int py, int frame,
-                    const core::CollisionBitmap* collision,
-                    int l3a_phase_counter, bool axe_powered,
-                    bool fireball_active);
+void update_monster(core::Entity& e, const EntityTick& t);
 void update_fish(core::Entity& e);
 void update_platform(core::Entity& e);
 void update_egg(core::Entity& e);
 void update_rock(core::Entity& e);
-// Batch 2:
-void update_monster_l7_a(core::Entity& e, int px, int py, int frame,
-                         const core::CollisionBitmap* collision,
-                         int l3a_phase_counter, bool axe_powered);
+void update_monster_l7_a(core::Entity& e, const EntityTick& t);
 void update_bird(core::Entity& e, int px);
 void update_chimp(core::Entity& e);            // CHIMP + CHIMP_L5 (snowman)
 void update_chimp_l7(core::Entity& e);         // fish-arc with x scatter

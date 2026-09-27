@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "presentation/render/logical_size.hpp"
+
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 // Vendored single-header: silence its own warnings under -Werror.
 #if defined(__GNUC__) || defined(__clang__)   // MSVC: C4068 unknown pragma
@@ -57,22 +59,7 @@ bool capture_renderer_output(SDL_Renderer* ren, const std::string& path) {
     int ow = 0, oh = 0;
     SDL_GetRendererOutputSize(ren, &ow, &oh);
 
-    // CLEAR THE LOGICAL SIZE FOR THE READ, RESTORE IT AFTER.
-    // SDL_RenderReadPixels(rect = nullptr) reads the current VIEWPORT, not the
-    // target.  With a logical size set, the viewport is a centred sub-rect, so
-    // the read starts at its offset and lands at (0,0) of a full-size surface:
-    // the image comes out CROPPED ON THE LEFT with black filling the right,
-    // and a reader concludes the game drew it that way.
-    //
-    // §3.14b found and fixed exactly this in capture_gate_frame (which carries
-    // the same comment) and did NOT fix it here — so every F5 bug report taken
-    // in a pillarboxed mode has been showing a shifted, cropped frame rather
-    // than what the player saw.  Found 2026-09-07 from a widescreen report
-    // whose screenshot was itself the misleading evidence.
-    int lw = 0, lh = 0;
-    SDL_RenderGetLogicalSize(ren, &lw, &lh);
-    if (lw != 0 || lh != 0) SDL_RenderSetLogicalSize(ren, 0, 0);
-
+    const LogicalScalingOff whole_target(ren);
     SDL_Surface* s = SDL_CreateRGBSurfaceWithFormat(
         0, ow, oh, 32, SDL_PIXELFORMAT_RGBA32);
     bool ok = false;
@@ -82,8 +69,6 @@ bool capture_renderer_output(SDL_Renderer* ren, const std::string& path) {
         ok = save_surface_image(s, path);
     }
     if (s != nullptr) SDL_FreeSurface(s);
-
-    if (lw != 0 || lh != 0) SDL_RenderSetLogicalSize(ren, lw, lh);
     return ok;
 }
 

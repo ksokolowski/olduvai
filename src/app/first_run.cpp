@@ -44,9 +44,11 @@ namespace {
 constexpr const char* kGogUrl = "https://www.gog.com/game/prehistorik_12";
 
 // Run a shell command and return its trimmed single-line stdout, or nullopt
-// on failure/cancel (non-zero exit or empty output).
+// on failure/cancel (non-zero exit or empty output).  Every caller passes a
+// string literal (the folder pickers below): nothing reaches the shell from
+// input.
 std::optional<std::string> capture_line(const char* cmd) {
-    FILE* p = popen(cmd, "r");
+    FILE* p = popen(cmd, "r");   // NOLINT(bugprone-command-processor): literals
     if (p == nullptr) return std::nullopt;
     char buf[4096] = {0};
     const bool got = std::fgets(buf, sizeof(buf), p) != nullptr;
@@ -105,16 +107,14 @@ int show_box(const std::string& text) {
         SDL_MESSAGEBOX_INFORMATION, nullptr, "Olduvai — game files needed",
         text.c_str(), SDL_arraysize(buttons), buttons, nullptr};
     int hit = kQuit;
-    // No box could be shown — a handheld frontend (KNULLI: kmsdrm / mali, no
-    // desktop to host it) or a headless run.  NOT the same as Quit: the
-    // caller then puts the message on screen itself.
+    // No box could be shown (a handheld frontend on kmsdrm, or headless).  Not
+    // Quit: the caller then draws the message itself.
     if (SDL_ShowMessageBox(&box, &hit) != 0) return kNoBox;
     return hit;
 }
 
-// HdText walks BYTES (stb_truetype codepoint per char), so the screen below
-// gets plain ASCII: the messages' em dashes and ellipses become their ASCII
-// spellings, anything else outside ASCII is dropped rather than drawn as junk.
+// HdText walks bytes, so give it ASCII: em dashes and ellipses become ASCII
+// spellings, other non-ASCII is dropped.
 std::string ascii_only(const std::string& s) {
     std::string out;
     for (std::size_t i = 0; i < s.size();) {
@@ -130,18 +130,10 @@ std::string ascii_only(const std::string& s) {
     return out;
 }
 
-// The missing-files message ON SCREEN, for when no message box can be shown.
-// Without it a handheld launch from the Ports menu exited in under a second
-// with the explanation only in a log file the player never sees (Powkiddy A12,
-// KNULLI, 2026-09-13: rc=1, "ran 0s").  Drawn with the bundled vector font —
-// there is no game data to borrow a font from, by definition.  Waits for any
-// button, key or touch, or two minutes.  OLDUVAI_NOFILES_SHOT=<file> saves the
-// composed screen and returns at once (tests/nofiles_screen.sh).  Returns false
-// if it could not show anything; the log line has been printed either way.
-// Paint the page: the first line in the title colour, the rest in body grey,
-// the block centred.  The cap size fits the longest line to 90% of the width
-// and the whole block to 90% of the height, never below a readable 8 px --
-// the handhelds' panels and a desktop window are the same code path here.
+// Paint a text page (for the on-screen missing-files message when no message
+// box can be shown): first line in the title colour, the rest grey, the block
+// centred; the cap fits the longest line to 90% of the width and the block to
+// 90% of the height, never below 8 px.
 std::vector<std::uint8_t> paint_text_page(enhance::HdText& text,
                                           const std::vector<std::string>& lines,
                                           int ow, int oh) {
@@ -160,27 +152,27 @@ std::vector<std::uint8_t> paint_text_page(enhance::HdText& text,
     for (std::size_t i = 0; i < lines.size(); ++i, y += line_h) {
         const int x = (ow - text.measure(lines[i])) / 2;
         if (i == 0)
-            text.draw(px, ow, oh, x, y, lines[i], 255, 196, 64);
+            text.draw({px, ow, oh}, x, y, lines[i], {255, 196, 64});
         else
-            text.draw(px, ow, oh, x, y, lines[i], 220, 220, 228);
+            text.draw({px, ow, oh}, x, y, lines[i], {220, 220, 228});
     }
     return px;
 }
 
-// Hold the page on screen until the player presses something, or two minutes
-// pass.  Every pad is opened for the wait: on a handheld there is no keyboard
-// to fall back to, and the launcher hands us a device nobody has opened yet.
+// Hold until any button, key or touch, or two minutes.  Every pad is opened (a
+// handheld has no keyboard, and nothing else has opened the device).
 void wait_for_any_button(SDL_Renderer* ren, SDL_Texture* tex) {
     std::vector<SDL_Joystick*> pads;
     for (int j = 0; j < SDL_NumJoysticks(); ++j)
+        // A false positive: a const pointee cannot go into `pads`.
+        // NOLINTNEXTLINE(misc-const-correctness)
         if (SDL_Joystick* js = SDL_JoystickOpen(j)) pads.push_back(js);
     // The button that launched the port may still be bouncing:
     // ignore input for the first 700 ms.
     const Uint32 t0 = SDL_GetTicks();
     bool done = false;
     while (!done && SDL_GetTicks() - t0 < 120000) {
-        SDL_RenderClear(ren);
-        SDL_RenderCopy(ren, tex, nullptr, nullptr);
+        presentation::show_texture(ren, tex);
         SDL_RenderPresent(ren);
         SDL_Event e;
         while (SDL_WaitEventTimeout(&e, 100)) {
@@ -206,10 +198,8 @@ bool show_text_screen(const std::vector<std::string>& lines) {
         "Olduvai", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
         SDL_WINDOW_FULLSCREEN_DESKTOP);
     // PRESENTVSYNC: on kmsdrm a non-vsynced present is an async page flip,
-    // which the A12's driver rejects ("Could not queue pageflip: -22", seen
-    // on this very screen) — and a static text screen has no use for more
-    // frames than the panel shows.  Retry without it for a driver that
-    // refuses the flag outright.
+    // which the A12 driver rejects ("Could not queue pageflip: -22").  Retry
+    // without it for a driver that refuses the flag.
     SDL_Renderer* ren = nullptr;
     if (win != nullptr) {
         ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_PRESENTVSYNC);
@@ -242,9 +232,8 @@ bool show_text_screen(const std::vector<std::string>& lines) {
     return shown;
 }
 
-// The missing-files screen's lines.  game_dir is made ABSOLUTE: a handheld
-// launcher passes ./game, and "copy them into ./game" helps no one holding an
-// SD card.
+// Missing-files screen lines.  game_dir is made absolute (a launcher passes
+// ./game, which means nothing to someone holding an SD card).
 std::vector<std::string> missing_files_lines(
     const std::filesystem::path& game_dir, const std::string& problems) {
     std::error_code ec;
@@ -258,16 +247,16 @@ std::vector<std::string> missing_files_lines(
     std::istringstream in(problems);
     for (std::string line; std::getline(in, line);)
         if (!line.empty()) l.push_back(ascii_only(line));
-    l.push_back("");
-    l.push_back("GOG's \"Prehistorik 1+2\" works; so do the original DOS files.");
-    l.push_back("");
-    l.push_back("Press any button to exit.");
+    l.emplace_back("");
+    l.emplace_back(
+        "GOG's \"Prehistorik 1+2\" works; so do the original DOS files.");
+    l.emplace_back("");
+    l.emplace_back("Press any button to exit.");
     return l;
 }
 
-// One-time "how should it look?" ask, right after the game folder is
-// accepted — the moment a fresh user actually cares.  Returns the profile
-// name.  OLDUVAI_FIRSTRUN_PRESET=dos|hd skips the box (tests/headless).
+// One-time Classic/Enhanced question, right after the game folder is accepted.
+// Returns the profile name.  OLDUVAI_FIRSTRUN_PRESET=dos|hd skips the box.
 std::string ask_preset() {
     if (const char* forced = std::getenv("OLDUVAI_FIRSTRUN_PRESET")) {
         return std::strcmp(forced, "hd") == 0 ? "hd" : "dos";
@@ -296,9 +285,8 @@ bool launched_from_gui() {
         env != nullptr && env[0] == '1') {
         return false;
     }
-    // Dev/testing: treat a terminal launch as a GUI one WITHOUT auto-
-    // answering — the real dialogs appear and wait for clicks (the
-    // FIRSTRUN_* hooks below force GUI mode too, but answer for you).
+    // OLDUVAI_FORCE_GUI=1: treat a terminal launch as a GUI one, with the real
+    // dialogs (the FIRSTRUN_* hooks answer for you instead).
     if (const char* env = std::getenv("OLDUVAI_FORCE_GUI");
         env != nullptr && env[0] == '1') {
         return true;
@@ -343,9 +331,8 @@ std::optional<std::filesystem::path> first_run_dialog(
                           "data files.";
                     continue;
                 }
-                // Remember the choice so the next double-click just plays,
-                // and ask the one-time presentation question while we have
-                // the user's attention (changeable later in Options).
+                // Save the choice and ask the Style question while the user is
+                // here (changeable in Options).
                 const std::string preset =
                     presentation::resolve_preset(family, ask_preset()).name;
                 Config c = load_config_file();

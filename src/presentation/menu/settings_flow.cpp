@@ -2,10 +2,12 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "presentation/menu/settings_flow.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <utility>
 
 #include "presentation/audio/sound_card.hpp"
+#include "presentation/input/button_layout.hpp"
 
 namespace olduvai::presentation {
 
@@ -13,7 +15,7 @@ namespace {
 
 // The Confirm dialog's row for a Sound-card pick: fold the pick's one or two
 // audio rows (music_device / sfx_backend) into a single "Sound card" row.
-// Split out of build_display_changes (BACKLOG §3.12: 62 points) — it is a
+// Split out of build_display_changes (62 complexity points) — it is a
 // distinct transform with its own contract, not another arm of the label-
 // resolution loop above it, and it reads as such once it names its inputs.
 // When nothing folds (no audio keys, or a pick that maps to no single card)
@@ -48,6 +50,52 @@ std::vector<StagedChange> fold_sound_card_rows(
     bool placed = false;
     for (auto& r : rows) {
         if (r.key == "music_device" || r.key == "sfx_backend") {
+            if (!placed) { folded.push_back(row); placed = true; }
+            continue;
+        }
+        folded.push_back(std::move(r));
+    }
+    return folded;
+}
+
+// A Button layout pick: its pad rows become one "Button layout" row.  A
+// custom mapping keeps the action rows and drops pad_confirm, which follows
+// jump and has no row of its own.
+std::vector<StagedChange> fold_button_layout_rows(
+    std::vector<StagedChange> rows, const SettingsSession& sess,
+    const std::function<std::string(const std::string&)>& value_of,
+    const std::function<const MenuItem*(const std::string&)>& find_item,
+    const std::function<std::string(const MenuItem&, const std::string&)>&
+        resolve_value) {
+    PadBindings now, was;
+    bool any = false;
+    for (std::size_t i = 0; i < std::size(kPadKeys); ++i) {
+        const std::string key = kPadKeys[i];
+        std::string* n = binding_for_key(now, key);
+        std::string* w = binding_for_key(was, key);
+        *n = value_of(key);
+        *w = *n;
+        for (const auto& ch : sess.changes())
+            if (ch.key == key) { *w = ch.old_value; any = true; }
+    }
+    if (!any) return rows;
+    const std::string layout_new = button_layout_for(now);
+    std::vector<StagedChange> folded;
+    if (layout_new == kCustomButtonLayout) {
+        for (auto& r : rows)
+            if (r.key != "pad_confirm") folded.push_back(std::move(r));
+        return folded;
+    }
+    const std::string layout_old = button_layout_for(was);
+    StagedChange row{"button_layout", "Button layout", layout_old, layout_new};
+    if (const MenuItem* item = find_item("button_layout")) {
+        row.label = item->label;
+        row.old_value = resolve_value(*item, layout_old);
+        row.new_value = resolve_value(*item, layout_new);
+    }
+    bool placed = false;
+    for (auto& r : rows) {
+        if (r.key.rfind("pad_", 0) == 0) {
             if (!placed) { folded.push_back(row); placed = true; }
             continue;
         }
@@ -107,10 +155,14 @@ std::vector<StagedChange> build_display_changes(
         out.push_back(std::move(disp));
     }
 
-    // A Sound card pick: fold its one or two audio rows into one card row.
-    if (value_of)
+    // A Sound card pick: fold its one or two audio rows into one card row;
+    // a Button layout pick likewise.
+    if (value_of) {
         out = fold_sound_card_rows(std::move(out), sess, value_of, find_item,
                                    resolve_value);
+        out = fold_button_layout_rows(std::move(out), sess, value_of,
+                                      find_item, resolve_value);
+    }
     return out;
 }
 
@@ -122,10 +174,10 @@ SettingsFlow::SettingsFlow(const MenuModel& model, SettingsSession& session,
 
 bool SettingsFlow::any_reinit_staged_() const {
     if (!hooks_.classify) return false;
-    for (const auto& ch : session_.changes())
-        if (hooks_.classify(ch.key, ch.new_value) == ApplyTier::Reinit)
-            return true;
-    return false;
+    const auto& ch = session_.changes();
+    return std::any_of(ch.begin(), ch.end(), [this](const StagedChange& c) {
+        return hooks_.classify(c.key, c.new_value) == ApplyTier::Reinit;
+    });
 }
 
 void SettingsFlow::track_screen(const std::string& menu_screen) {
@@ -191,7 +243,7 @@ SettingsFlow::KeyOutcome SettingsFlow::handle_key(Key k) {
 
 void SettingsFlow::apply_() {
     // APPLY: persist every staged change, hand its environment effect to the
-    // call site, and report once whether any key was reinit-class.  §8.6.
+    // call site, and report once whether any key was reinit-class.
     if (hooks_.apply_begin) hooks_.apply_begin();
     bool needs_reinit = false;
     for (const auto& ch : session_.changes()) {
@@ -207,7 +259,7 @@ void SettingsFlow::apply_() {
 }
 
 void SettingsFlow::discard() {
-    // DISCARD: revert staged previews to baseline, clear, close.  §8.6.
+    // DISCARD: revert staged previews to baseline, clear, close.
     for (const auto& ch : session_.changes())
         if (hooks_.revert_change) hooks_.revert_change(ch);
     session_.clear();

@@ -1,24 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// SettingsFlow — ONE controller for the Options staging/confirm/apply flow
-// (OL-B1).  Owns the pieces that were previously triplicated across
-// game_app.cpp (in-game Pause path, main-menu path, discard helpers):
-//
-//   * options-subtree membership — derived from the MenuModel (screens
-//     reachable from the "options" screen via submenu targets), replacing the
-//     verbatim-duplicated hardcoded lambda;
-//   * the SettingsSession staging handoff and subtree-exit detection
-//     (leaving Options with staged changes opens the confirm dialog);
-//   * ConfirmDialog lifecycle — open contents, Prev/Next/Accept/Cancel keys;
-//   * apply/discard resolution — Apply drains the session through the
-//     tier-classifier, Discard reverts every staged change.
-//
-// Environment-specific EFFECTS are injected as hooks: the pause call site
-// routes reinit-class keys into a PendingReinit request (kReinitDisplay),
-// the main-menu call site writes rt.* and rebuilds window/audio in place.
-// Same policy, one encoding.  Pure logic: no SDL.
-//
-// Spec: OL-B1 (SettingsFlow controller extraction; internal design notes).
+// SettingsFlow: one controller for the Options stage / confirm / apply flow,
+// used by the in-game Pause, the boss pause and the main menu.
+//   * Options-subtree membership, derived from the MenuModel;
+//   * staging and subtree-exit detection (leaving Options with staged changes
+//     opens the confirm dialog);
+//   * the ConfirmDialog lifecycle and keys;
+//   * Apply drains the session through the tier classifier; Discard reverts.
+// Environment effects are hooks (pause: a reinit target; main menu:
+// rt.* and an in-place rebuild).  No SDL.
 
 #pragma once
 
@@ -34,36 +24,27 @@
 
 namespace olduvai::presentation {
 
-// Screens inside the Options subtree: `root` plus every screen reachable from
-// it via `submenu` item targets.  Derived from the model so menus.json stays
-// the single source of truth (the hardcoded set this replaces listed exactly
-// "options","audio","video","enhancements","cave_paintings"; "dev" and
-// "cheats" are NOT reachable from "options" and stay out).  A target id is
-// included even if its screen is missing from the model (dangling targets
-// are diagnosed elsewhere); traversal only recurses into existing screens.
+// Screens in the Options subtree: `root` plus every screen reachable through
+// `submenu` targets, so menus.json stays the source of truth ("dev" and
+// "cheats" are not reachable).  A target missing from the model is included
+// but not recursed into.
 std::set<std::string> options_subtree_screens(const MenuModel& model,
                                               const std::string& root = "options");
 
-// Resolve staged session changes into display-friendly StagedChange rows,
-// looking up labels and value-labels from the MenuModel.  Used for the
-// confirm-dialog contents by both the Pause and main-menu flows.
-//
-// `value_of` (optional) reads a key's current, staged-or-not value.  With it,
-// a Sound card pick — which stages music_device and/or sfx_backend — shows as
-// the ONE choice the player made ("Sound card: Auto -> Sound Blaster"), not
-// as the two keys it wrote.  A pair no card names keeps the raw rows.
+// Staged changes as display rows (labels from the MenuModel), for the confirm
+// dialog.  With `value_of`, a Sound card pick (music_device and/or
+// sfx_backend) shows as one row ("Sound card: Auto -> Sound Blaster"); a pair
+// no card names keeps the raw rows.
 std::vector<StagedChange> build_display_changes(
     const SettingsSession& sess, const MenuModel& model,
     const std::function<std::string(const std::string&)>& value_of = {});
 
 class SettingsFlow {
 public:
-    // Semantic dialog keys (call sites map SDL keycodes; kNone = any other
-    // key — consumed while the dialog is open, no effect).
+    // Dialog keys (call sites map SDL keys); kNone = any other key, consumed.
     enum class Key { kNone, kPrev, kNext, kAccept, kCancel };
-    // kAnswered: a yes/no question (ConfirmDialog::ask) was resolved — Accept
-    // runs its Yes callback if Yes is selected; Cancel (ESC) answers No.  The
-    // settings session is not touched.
+    // kAnswered: a yes/no question (ConfirmDialog::ask) resolved.  Accept runs
+    // Yes if selected; Cancel answers No.  The session is untouched.
     enum class KeyOutcome { kIgnored, kConsumed, kApplied, kDiscarded, kCancelled,
                             kAnswered };
 
@@ -71,34 +52,28 @@ public:
         // Persist one applied change (config write; play.json).
         std::function<void(const std::string& key, const std::string& value)>
             persist;
-        // Tier-classify one staged change against the environment's live
-        // baseline (classify_change(key, value, cur)).
+        // Tier of one staged change against the environment's live baseline.
         std::function<ApplyTier(const std::string& key,
                                 const std::string& value)> classify;
-        // Optional: runs once at the start of Apply, before any change is
-        // drained (the pause site seeds its PendingReinit from the live rt).
+        // Optional, once at the start of Apply (pause seeds its reinit target).
         std::function<void()> apply_begin;
-        // Environment effect of one applied change (pause: PendingReinit
-        // field / live rt_hd_profile; main menu: rt.* write).
+        // Effect of one applied change (pause: the reinit target / live hd_profile;
+        // main menu: rt.*).
         std::function<void(const StagedChange&, ApplyTier)> apply_change;
-        // Runs once after the session is drained + cleared;
-        // `needs_reinit` = any staged change classified ApplyTier::Reinit
-        // (pause: raise want_reinit; main menu: in-place rebuild).
+        // Once after the session is drained and cleared; needs_reinit = any
+        // change was Reinit-tier.
         std::function<void(bool needs_reinit)> apply_done;
-        // Revert the live preview of one staged change to its baseline
-        // (Discard, and close-without-apply).
+        // Revert one change's live preview (Discard, close-without-apply).
         std::function<void(const StagedChange&)> revert_change;
-        // Cancel (ESC in the dialog): re-open the Options screen to keep
-        // editing.
+        // Cancel in the dialog: reopen Options to keep editing.
         std::function<void()> reopen_options;
-        // Note line under the confirm-dialog change list.  `any_reinit` =
-        // some staged key classifies Reinit; `any_persist` = some staged key
-        // classifies PersistOnly (i.e. takes effect only on the next launch
-        // — the note should SAY so, or the Apply looks like a no-op).
+        // The note under the change list.  any_persist = some change takes
+        // effect only on the next launch (the note must say so, or Apply looks
+        // like a no-op).
         std::function<std::string(bool any_reinit, bool any_persist)>
             confirm_note;
-        // Optional: a key's current value (the bindings' get), so the dialog
-        // can name a Sound card pick as one row (build_display_changes).
+        // Optional: a key's current value, to name a Sound card pick as one
+        // row.
         std::function<std::string(const std::string&)> value_of;
     };
 
@@ -109,19 +84,17 @@ public:
         return subtree_.count(screen_id) != 0;
     }
 
-    // Per-frame subtree-exit detection.  Call after input handling, with the
-    // menu's current screen, only while the menu is open and the confirm
-    // dialog is closed (both call sites guard this; also guarded here).  On
-    // an inside→outside transition with staged changes, opens the dialog.
+    // Per-frame subtree-exit detection, after input handling, with the menu's
+    // current screen (only while the menu is open and the dialog closed; also
+    // guarded here).  Leaving the subtree with staged changes opens the dialog.
     void track_screen(const std::string& menu_screen);
 
-    // Handle a key while the confirm dialog is open.  Returns kIgnored if
-    // the dialog is closed (the call site should not have routed the key).
+    // A key while the dialog is open; kIgnored if it is closed.
     KeyOutcome handle_key(Key k);
 
-    // Revert all staged changes through revert_change, clear the session,
-    // close the dialog.  Also the close-without-apply path (Resume / Start
-    // Game / Quit with a dirty session = implicit discard).
+    // Revert every staged change, clear the session, close the dialog.  Also
+    // the close-without-apply path (Resume / Start Game / Quit with a dirty
+    // session).
     void discard();
 
     bool confirm_open() const { return dialog_.is_open(); }

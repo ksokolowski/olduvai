@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Input replay + frame tracing — the native half of the cross-engine
-// regression harness.  Both files use the reference engine's JSONL
-// schemas verbatim, so any scripted playthrough can be replayed through
-// both engines and diffed frame-by-frame:
+// Input replay + frame tracing for the cross-engine harness, in the reference
+// engine's JSONL schemas:
 //   inputs: {"time_ms":N,"key":"left|right|up|down|attack",
 //            "action":"press|release"}   (frame = time_ms / 55)
-//   trace:  one FrameState object per line (the reference field set).
+//   trace:  one FrameState object per line.
 
 #pragma once
 
@@ -37,12 +35,14 @@ private:
 class TraceWriter {
 public:
     bool open(const std::string& path);
+    TraceWriter() = default;
     ~TraceWriter();
+    TraceWriter(const TraceWriter&) = delete;
+    TraceWriter& operator=(const TraceWriter&) = delete;
     bool active() const { return f_ != nullptr; }
     void write(int frame, const systems::SystemsState& state);
-    // Boss-arena trace line: same FrameState schema; fields with no boss
-    // equivalent are 0, `energy` carries the boss health.  Mirrors the
-    // reference implementation's boss-arena trace end-frame mapping.
+    // Boss-arena trace line: the same schema; fields without a boss equivalent
+    // are 0, `energy` holds the boss health.
     void write_boss(int frame, const systems::BossPlayerState& p,
                     int boss_health);
 
@@ -50,21 +50,18 @@ private:
     std::FILE* f_ = nullptr;
 };
 
-// Records the live per-frame inputs back into the same JSONL schema
-// InputReplay::load reads, so a played (or replayed) session can be turned
-// into a reusable scenario.  Mirrors `op play --record-inputs`.
-//
-// For every key whose state changed since the previous frame it emits one
-//   {"time_ms":T,"key":K,"action":"press"|"release"}
-// line.  `T` is the INVERSE of the reader's frame→time_ms map
-// (time_ms = frame * 55), so the reader folds the event back onto the same
-// frame.  The caller hands in the frame index the reader will resolve this
-// input at — i.e. `frame + 1` when the game loop reads `replay.at(frame+1)`
-// — so a record-while-replaying round-trips byte-for-byte.
+// Record the live inputs in InputReplay's schema (--record-inputs): one
+// {"time_ms":T,"key":K,"action":"press"|"release"} line per key change, with
+// T = frame * 55 (the reader's inverse).  Pass the frame the reader will
+// resolve (frame + 1 when the loop reads replay.at(frame+1)), so recording a
+// replay round-trips byte for byte.
 class InputRecorder {
 public:
     bool open(const std::string& path);
+    InputRecorder() = default;
     ~InputRecorder();
+    InputRecorder(const InputRecorder&) = delete;
+    InputRecorder& operator=(const InputRecorder&) = delete;
     bool active() const { return f_ != nullptr; }
     // `reader_frame` is the absolute frame the reader must resolve this input
     // at (see class comment).  Emits one line per changed key.
@@ -76,10 +73,8 @@ private:
     bool prev_[5] = {false, false, false, false, false};
 };
 
-// The three per-run harness files every level driver opens: the --replay
-// input script, the --trace output and the --record-inputs output.  Both
-// drivers built these by hand, and the warning for an empty replay had
-// already drifted apart between them.  Empty paths leave that part inactive.
+// The per-run harness files: the --replay script, --trace output,
+// --record-inputs output.  Empty paths leave a part inactive.
 struct RunCapture {
     InputReplay replay;
     TraceWriter trace;

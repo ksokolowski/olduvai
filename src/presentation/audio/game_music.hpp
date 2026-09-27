@@ -2,8 +2,8 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 // Playing one of the game's MDI tracks by entry name.
 //
-// Five call sites used to open FILESA.CUR / FILESB.CUR themselves, find the
-// entry and derive its track id: the level music, the boss music, the tally
+// Five call sites once opened FILESA.CUR / FILESB.CUR themselves, found the
+// entry and derived their track id: the level music, the boss music, the tally
 // and the title intro (twice).  One of them lower-cased the name by hand for
 // mdi_track_id, the others spelled the lower-case name out a second time.
 #pragma once
@@ -27,6 +27,11 @@ void play_mdi(SdlAudio* audio, const std::vector<std::uint8_t>* raw_mdi,
 // plus a missing entry.
 void play_game_music(SdlAudio* audio, const std::filesystem::path& game_dir,
                      const std::string& name);
+
+// A level's or boss fight's own track, by internal level id.  No-op for an id
+// without one, and in play_game_music's no-op cases.
+void play_level_music(SdlAudio* audio, const std::filesystem::path& game_dir,
+                      int internal);
 
 // The score tally's music: fade the level or boss track out (MDI_FadeStop
 // 1f75:00e4), then BONUS.MDI (1f75:01bb; FUN_270a_01b4

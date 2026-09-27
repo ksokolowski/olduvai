@@ -31,4 +31,7 @@
 set(OLDUVAI_ZIG_TRIPLE    "aarch64-linux-gnu.2.17")
 set(OLDUVAI_ZIG_PREFIX    "aarch64-linux")
 set(OLDUVAI_ZIG_PROCESSOR "aarch64")
+# Scheduled for the in-order A53 (zig's cortex_a53 also enables CRC32, which
+# every 64-bit handheld core has).
+set(OLDUVAI_ZIG_CPU       "cortex_a53")
 include("${CMAKE_CURRENT_LIST_DIR}/zig-linux.cmake")

@@ -6,6 +6,52 @@ candidates for 1.0.0.
 
 ## Unreleased
 
+## 0.9.9 — 2026-09-27
+
+**Controls, and an engine to match.** The handhelds now play with the
+buttons printed on them, a display change in the pause menu no longer throws
+you out of the level, and the code underneath was untangled from end to end
+without moving a single frame of the game.
+
+- **Added: *Options → Controls*.** One *Button layout* row (Xbox or
+  Nintendo) and a row per action (jump, attack, back, pause) to move one
+  button at a time; picking a taken button swaps the two.  The handhelds
+  start in the Nintendo layout, so **A** jumps and **B** attacks as printed.
+  Each row names the button the way your pad prints it and where it sits
+  (*A - right*): Nintendo letters on a Nintendo-style pad or a handheld,
+  PlayStation symbols on a PlayStation pad, Xbox letters otherwise.
+- **Fixed:** on a Nintendo Switch Pro controller, SDL reported the face
+  buttons by their labels, so every layout was rotated; buttons are now
+  read by position on every pad.
+- **Changed: display and audio changes in the pause menu keep you in the
+  level.**  A new render scale, Style, HD profile, music device or effects
+  backend used to reload the level behind a loading card (3 s) and restart
+  the music; the display is now rebuilt in place (about 40 ms), in the
+  levels and the boss fights alike.
+- **Improved (Enhanced, handhelds): sprites draw faster.**  A sprite that
+  is already upscaled no longer gets decoded and hashed again on every
+  frame: 41-55% less sprite drawing time on the handhelds.  The handheld
+  builds are also compiled for their exact CPUs, which speeds up the
+  TrimUI's upscaling by 12%.
+- **Fixed:** the AdLib card's FM sound effects were silent (0.9.8).
+- **Fixed:** with a smooth-motion sub-frame cap set (`smooth_subframes`),
+  the boss fights ran faster than the game's 18.2 Hz.
+- **Fixed:** leaving Widescreen live in the pause menu fell back to the
+  aspect the level started with (Keep → Widescreen → 4:3 showed Keep).
+- **Fixed:** in Classic, switching Stretch → Keep live scaled the picture by
+  a fraction (uneven pixel columns) instead of whole pixels.
+- **Fixed (Enhanced):** the paused widescreen frame's HUD bars were blurred
+  by the upscaler; the secret-room exit moved every rising bubble on its
+  first frame.
+- **Fixed:** a long line in a confirm dialog ran past its edge.
+- **Fixed:** the music after the final cave stopped dead instead of fading
+  out.
+- **Under the hood:** the code is held by a complexity ratchet, whole-tree
+  static analysis with a wide check set, and a per-layer coverage read; the
+  L3 trunk descent and the enhanced secret slide gained their first tests.
+- **Docs:** a shorter README, and [docs/SETTINGS.md](docs/SETTINGS.md) for
+  everything `play.json` can hold.
+
 ## 0.9.8 — 2026-09-22
 
 **Release candidate.** Olduvai leaves beta: it is feature-complete, with

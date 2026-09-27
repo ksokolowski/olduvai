@@ -15,10 +15,13 @@
 # 2.28.5 built with all backends off, same pattern as the aarch64 leg.
 #
 # The armhf leg extends the same "one build story, two sysroots" that the aarch64
-# zig leg demonstrated for the TrimUI Smart Pro.  It is NOT the shipping path —
-# KNULLI's SDK (GCC 12.3 + libstdc++) produces the release binary.  This leg
-# exists to measure dos-classic minimum CPU/RAM cost on the weakest owned device
-# before deciding the V90 go/no-go (SPIKE_LOWEST_TIER.md Q3/Q4).
+# zig leg demonstrated for the TrimUI Smart Pro; packaging/build_knulli_release.sh
+# builds the A12 release bundle through it.
+#
+# CPU: cortex_a7.  The target's baseline is ARMv7-A + NEON WITHOUT hardware
+# divide, so every a / b by a variable is an __aeabi_idiv call; the A7 has
+# sdiv, and the code is scheduled for its in-order core.  The binary then
+# needs an A7 or later: a PortMaster armhf build must choose its own floor.
 #
 # Requires two paths, both outside the tree:
 #   -DOLDUVAI_ZIG_XTOOL=<dir with arm-linux-gnueabihf-g++/gcc/ar/ranlib wrappers>
@@ -27,4 +30,5 @@
 set(OLDUVAI_ZIG_TRIPLE    "arm-linux-gnueabihf.2.17")
 set(OLDUVAI_ZIG_PREFIX    "arm-linux-gnueabihf")
 set(OLDUVAI_ZIG_PROCESSOR "arm")
+set(OLDUVAI_ZIG_CPU       "cortex_a7")
 include("${CMAKE_CURRENT_LIST_DIR}/zig-linux.cmake")

@@ -16,7 +16,7 @@ std::size_t TextEditor::total_chars() const {
 void TextEditor::set_text(const std::string& s) {
     lines_.clear();
     std::string cur;
-    for (char c : s) {
+    for (const char c : s) {
         if (c == '\n') { lines_.push_back(cur); cur.clear(); }
         else cur += c;
     }
@@ -39,10 +39,10 @@ void TextEditor::insert(const std::string& utf8) {
     if (utf8.empty()) return;
     // Whole-reject if the insert would cross either cap.
     std::size_t added_lines = 0;
-    for (char c : utf8) if (c == '\n') ++added_lines;
+    for (const char c : utf8) if (c == '\n') ++added_lines;
     if (total_chars() + utf8.size() > kMaxChars) return;
     if (lines_.size() + added_lines > kMaxLines) return;
-    for (char c : utf8) {
+    for (const char c : utf8) {
         if (c == '\n') { newline(); continue; }
         lines_[static_cast<std::size_t>(row_)]
             .insert(static_cast<std::size_t>(col_), 1, c);

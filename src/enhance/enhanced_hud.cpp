@@ -30,8 +30,9 @@ Rgb8 grad(double f) {
                    : lerp(kYellow, kGreen, (f - 0.5) / 0.5);
 }
 
-void fill_rect(std::vector<std::uint8_t>& px, int bw, int bh, int x, int y,
-               int w, int h, const Rgb8& c) {
+void fill_rect(const Canvas& cv, int x, int y, int w, int h, const Rgb8& c) {
+    auto& px = cv.px;
+    const int bw = cv.w, bh = cv.h;
     for (int yy = y; yy < y + h; ++yy) {
         if (yy < 0 || yy >= bh) continue;
         for (int xx = x; xx < x + w; ++xx) {
@@ -63,9 +64,10 @@ EnhancedHudLayout compute_enhanced_hud_layout(
     constexpr int label_gap = 6, col_gap = 18;
 
     auto add_text = [&](int x, int y, const std::string& str, const Rgb8& c) {
-        L.texts.push_back({x, y, str, static_cast<std::uint8_t>(c.r),
-                           static_cast<std::uint8_t>(c.g),
-                           static_cast<std::uint8_t>(c.b)});
+        L.texts.push_back({x, y, str,
+                           {static_cast<std::uint8_t>(c.r),
+                            static_cast<std::uint8_t>(c.g),
+                            static_cast<std::uint8_t>(c.b)}});
     };
     // 1px (native) closed white border box with the dark empty fill.
     auto add_box = [&](int x, int y, int w, int h) {
@@ -124,39 +126,39 @@ EnhancedHudLayout compute_enhanced_hud_layout(
     return L;
 }
 
-void draw_enhanced_hud_bars(std::vector<std::uint8_t>& rgba, int buf_w, int buf_h,
-                            int scale, const EnhancedHudLayout& layout, int x_off_native) {
+void draw_enhanced_hud_bars(const Canvas& cv, int scale,
+                            const EnhancedHudLayout& layout, int x_off_native) {
     // Gauge outline + dark empty fill, native coords x scale (x shifted by the
     // native x-origin so the bars land at the centre in a wide buffer).
     for (const auto& b : layout.boxes) {
         const int x = (b.x + x_off_native) * scale, y = b.y * scale,
                   w = b.w * scale, h = b.h * scale;
-        fill_rect(rgba, buf_w, buf_h, x, y, w, scale, kWhite);             // top
-        fill_rect(rgba, buf_w, buf_h, x, y + h - scale, w, scale, kWhite);     // bottom
-        fill_rect(rgba, buf_w, buf_h, x, y, scale, h, kWhite);             // left
-        fill_rect(rgba, buf_w, buf_h, x + w - scale, y, scale, h, kWhite);     // right
-        fill_rect(rgba, buf_w, buf_h, x + scale, y + scale, w - 2 * scale, h - 2 * scale, kEmpty);
+        fill_rect(cv, x, y, w, scale, kWhite);               // top
+        fill_rect(cv, x, y + h - scale, w, scale, kWhite);   // bottom
+        fill_rect(cv, x, y, scale, h, kWhite);               // left
+        fill_rect(cv, x + w - scale, y, scale, h, kWhite);   // right
+        fill_rect(cv, x + scale, y + scale, w - 2 * scale, h - 2 * scale,
+                  kEmpty);
     }
     // Food fill / energy pips.
     for (const auto& f : layout.fills) {
-        fill_rect(rgba, buf_w, buf_h, (f.x + x_off_native) * scale, f.y * scale, f.w * scale,
+        fill_rect(cv, (f.x + x_off_native) * scale, f.y * scale, f.w * scale,
                   f.h * scale, {f.r, f.g, f.b});
     }
 }
 
-void draw_enhanced_hud_text(std::vector<std::uint8_t>& rgba, int out_w, int out_h,
-                            const HdText& text, const EnhancedHudLayout& layout,
-                            int fx, int fy, int fw, int fh) {
+void draw_enhanced_hud_text(const Canvas& cv, const HdText& text,
+                            const EnhancedHudLayout& layout, Rect pic) {
     // Native x scales by fw/320, native baseline by fh/200, offset into the
     // picture's rect.  The font is already sized for the picture by the
     // caller.
-    if (fw <= 0 || fh <= 0) { fx = 0; fy = 0; fw = out_w; fh = out_h; }
-    const double sx = fw / 320.0;
-    const double sy = fh / 200.0;
+    if (pic.w <= 0 || pic.h <= 0) pic = {0, 0, cv.w, cv.h};
+    const double sx = pic.w / 320.0;
+    const double sy = pic.h / 200.0;
     for (const auto& t : layout.texts) {
-        const int x = fx + static_cast<int>(t.x * sx + 0.5);
-        const int y = fy + static_cast<int>(t.baseline_y * sy + 0.5);
-        text.draw(rgba, out_w, out_h, x, y, t.str, t.r, t.g, t.b);
+        const int x = pic.x + static_cast<int>(t.x * sx + 0.5);
+        const int y = pic.y + static_cast<int>(t.baseline_y * sy + 0.5);
+        text.draw(cv, x, y, t.str, t.ink);
     }
 }
 

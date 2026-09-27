@@ -1,26 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Minimal MIDI sequencer — parses a format-0 stream (the converter's
-// output) into timed channel messages and serves them sample-accurately
-// against an output rate.  Tempo defaults to 500000 µs/qn and follows
-// FF 51 tempo events; playback loops.
-//
-// The loop is *seamless* (matches the EXE MDI dispatcher, which resets the
-// stream pointer to DS:0x8834 at end-of-track without any silence, and the
-// Python reference, which loops a pre-rendered gapless PCM buffer).
-// Two things make a naive
-// idx_=0 restart NOT seamless, both handled in advance():
-//   1. Tempo: a hard reset to the 120-BPM MIDI default (500000) would make
-//      the seam play at the wrong speed until the track's own SET_TEMPO is
-//      re-hit.  We restore the track's *initial* tempo (captured at load)
-//      instead.  BONUS.MDI is 155 BPM (387096 µs/qn, SET_TEMPO at tick 0).
-//   2. Hung notes: notes still sounding at track end would collide with the
-//      re-triggered opening (a "bump"/cacophony).  We emit all-notes-off
-//      (CC 123) on all 16 channels at the seam before replaying from idx_=0.
-//      Re-played program/controller events at the loop point restore timbre.
-// Leading silence (first-event tick > 0) is skipped at the seam so it isn't
-// replayed every loop as a gap.  BONUS.MDI's first event is at tick 0, so
-// this is a no-op for it, but it keeps the loop gapless for any track.
+// Minimal MIDI sequencer: parses a format-0 stream into timed channel messages
+// and serves them sample-accurately at an output rate.  Tempo defaults to
+// 500000 us/qn and follows FF 51.  The loop is seamless, like the EXE
+// dispatcher (stream pointer back to DS:0x8834 with no silence):
+//   1. the track's initial tempo is restored at the seam, not the 120 BPM
+//      default (BONUS.MDI is 155 BPM, SET_TEMPO at tick 0);
+//   2. all-notes-off (CC 123) on all 16 channels at the seam, so hung notes do
+//      not collide with the restart;
+//   3. leading silence (first event tick > 0) is skipped at the seam.
 
 #pragma once
 
@@ -56,9 +44,7 @@ public:
         double budget = frames;
         while (budget > 0) {
             if (idx_ >= events_.size()) {   // seamless loop
-                // Silence anything still sounding so the re-triggered opening
-                // doesn't collide with hung notes (a single all-notes-off is
-                // instant — no audible gap).
+                // All notes off before the restart (instant, no gap).
                 for (int chn = 0; chn < 16; ++chn) {
                     fn(static_cast<std::uint8_t>(0xB0 | chn), 123, 0);
                 }
@@ -67,9 +53,7 @@ public:
                 // silence isn't replayed as a per-loop gap.
                 last_tick_ = first_event_tick_;
                 frac_ = 0;
-                // Restore the track's initial tempo (NOT the 120-BPM default),
-                // so the seam plays at the right speed before the track's own
-                // SET_TEMPO is re-hit.
+                // The track's initial tempo, not the 120 BPM default.
                 tempo_ = initial_tempo_;
                 samples_per_tick =
                     static_cast<double>(tempo_) / 1e6 * rate / division_;
@@ -96,6 +80,8 @@ public:
     }
 
 private:
+    void capture_loop_point_();
+
     std::vector<MidiEventMsg> events_;
     int division_ = 96;
     std::size_t idx_ = 0;

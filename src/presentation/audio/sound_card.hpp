@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// The "Sound card" choice (BACKLOG §3.27): the sound setup a 1991 player
+// The "Sound card" choice: the sound setup a 1991 player
 // would recognise, as one choice instead of two.  It is a VIEW of the two
 // settings the audio code has always read — music_device + sfx_backend — not
 // a third stored key: picking a card writes the pair, and the pair on disk

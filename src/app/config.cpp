@@ -2,6 +2,9 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "config.hpp"
 
+#include <algorithm>
+#include <cctype>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -14,64 +17,102 @@ namespace olduvai::app {
 
 namespace {
 
+// A cursor over the settings text.
+class FlatJsonReader {
+public:
+    explicit FlatJsonReader(const std::string& text) : text_(text) {}
+
+    bool at(char c) const { return i_ < text_.size() && text_[i_] == c; }
+    bool done() const { return i_ >= text_.size(); }
+    void advance() { ++i_; }
+
+    void skip_ws() {
+        while (i_ < text_.size() &&
+               std::isspace(static_cast<unsigned char>(text_[i_])))
+            ++i_;
+    }
+
+    // A quoted string, the cursor on its opening quote.  The escapes the
+    // writer and a hand edit can produce are decoded; any other escaped
+    // character stands for itself (\" \\ \/).
+    std::string read_string() {
+        std::string s;
+        ++i_;
+        while (i_ < text_.size() && text_[i_] != '"') {
+            if (text_[i_] == '\\' && i_ + 1 < text_.size()) {
+                s += unescape(text_[i_ + 1]);
+                i_ += 2;
+            } else {
+                s += text_[i_++];
+            }
+        }
+        ++i_;
+        return s;
+    }
+
+    // A number, bool or null: up to the next ',' or '}', whitespace dropped.
+    std::string read_bare() {
+        std::string s;
+        for (; i_ < text_.size() && text_[i_] != ',' && text_[i_] != '}'; ++i_)
+            if (!std::isspace(static_cast<unsigned char>(text_[i_])))
+                s += text_[i_];
+        return s;
+    }
+
+private:
+    static char unescape(char e) {
+        switch (e) {
+            case 'n': return '\n';
+            case 't': return '\t';
+            case 'r': return '\r';
+            default:  return e;
+        }
+    }
+
+    const std::string& text_;
+    std::size_t i_ = 0;
+};
+
+// A quote or backslash inside a value (a game_dir) keeps the file valid.
+std::string json_escape(const std::string& v) {
+    std::string o;
+    for (const char ch : v) {
+        if (ch == '"' || ch == '\\') o += '\\';
+        o += ch;
+    }
+    return o;
+}
+
+// Written unquoted: a bool or an integer.  Anything else ("-", "4:3") is a
+// string, or the file stops being JSON.
+bool is_bare_json(const std::string& v) {
+    if (v == "true" || v == "false") return true;
+    const std::size_t digits = !v.empty() && v[0] == '-' ? 1 : 0;
+    return v.size() > digits &&
+           std::all_of(v.begin() + static_cast<std::ptrdiff_t>(digits),
+                       v.end(), [](char c) { return c >= '0' && c <= '9'; });
+}
+
 // Minimal tolerant reader for a flat JSON object of string/number/bool
-// values — exactly the shape the settings file uses.
+// values — exactly the shape the settings file uses.  It stops at the first
+// malformed token and keeps what it read.
 Config parse_flat_json(const std::string& text) {
     Config out;
-    std::size_t i = 0;
-    auto skip_ws = [&] {
-        while (i < text.size() && std::isspace(
-            static_cast<unsigned char>(text[i]))) ++i;
-    };
-    auto read_string = [&]() -> std::string {
-        std::string s;
-        ++i;   // opening quote
-        while (i < text.size() && text[i] != '"') {
-            if (text[i] == '\\' && i + 1 < text.size()) {
-                // Decode the JSON escapes the writer (and hand-edits) can
-                // produce — the old "skip the backslash, keep the next char
-                // literally" turned \n into 'n' and \t into 't'.
-                const char e = text[i + 1];
-                i += 2;
-                switch (e) {
-                    case 'n': s += '\n'; break;
-                    case 't': s += '\t'; break;
-                    case 'r': s += '\r'; break;
-                    default:  s += e;    break;   // \" \\ \/ and unknown
-                }
-                continue;
-            }
-            s += text[i++];
-        }
-        ++i;   // closing quote
-        return s;
-    };
-    skip_ws();
-    if (i >= text.size() || text[i] != '{') return out;
-    ++i;
-    while (i < text.size()) {
-        skip_ws();
-        if (i < text.size() && text[i] == '}') break;
-        if (i >= text.size() || text[i] != '"') break;
-        const std::string key = read_string();
-        skip_ws();
-        if (i >= text.size() || text[i] != ':') break;
-        ++i;
-        skip_ws();
-        std::string value;
-        if (i < text.size() && text[i] == '"') {
-            value = read_string();
-        } else {
-            while (i < text.size() && text[i] != ',' && text[i] != '}') {
-                if (!std::isspace(static_cast<unsigned char>(text[i]))) {
-                    value += text[i];
-                }
-                ++i;
-            }
-        }
-        out[key] = value;
-        skip_ws();
-        if (i < text.size() && text[i] == ',') ++i;
+    FlatJsonReader r(text);
+    r.skip_ws();
+    if (!r.at('{')) return out;
+    r.advance();
+    while (!r.done()) {
+        r.skip_ws();
+        if (!r.at('"')) break;   // '}' ends the object
+        const std::string key = r.read_string();
+        r.skip_ws();
+        if (!r.at(':')) break;
+        r.advance();
+        r.skip_ws();
+        out[key] = r.at('"') ? r.read_string() : r.read_bare();
+        r.skip_ws();
+        if (r.at(',')) r.advance();
     }
     return out;
 }
@@ -82,7 +123,7 @@ std::string config_path() {
 #if defined(_WIN32)
     // Plain Windows launches (Explorer / cmd) set neither XDG_CONFIG_HOME
     // nor HOME — the POSIX fallback degraded to a CWD-relative ./.config
-    // that never round-tripped (first Windows field test, 2026-07-19).
+    // that never round-tripped.
     // %APPDATA% is the platform config root; XDG still wins when set so
     // MSYS-shell users keep one config with their POSIX tools.
     const char* xdg_w = std::getenv("XDG_CONFIG_HOME");
@@ -111,8 +152,8 @@ std::string config_path() {
 
 Config builtin_profile(const std::string& name) {
     // The pins live in presentation/menu/profile_table.hpp — the one
-    // definition the CLI, the first-run path and the menu all read.  hd-43
-    // used to be a third profile differing from hd only by aspect, a display
+    // definition the CLI, the first-run path and the menu all read.  `hd-43`
+    // was a third profile differing from hd only by aspect, a display
     // setting with its own Video row; `--profile hd-43` stays an alias
     // (cli_args.cpp).
     Config c;
@@ -128,7 +169,7 @@ void apply_profile(Config& cfg, const std::string& name) {
 }
 
 Config load_config_file() {
-    std::ifstream in(config_path());
+    const std::ifstream in(config_path());
     if (!in) return {};
     std::stringstream ss;
     ss << in.rdbuf();
@@ -148,34 +189,14 @@ bool save_config_file(const Config& c) {
                      tmp.c_str());
         return false;
     }
-    // Escape backslashes and quotes so a value containing either round-trips
-    // as valid JSON (a game_dir with a quote used to corrupt the file).
-    const auto esc = [](const std::string& v) {
-        std::string o;
-        for (const char ch : v) {
-            if (ch == '"' || ch == '\\') o += '\\';
-            o += ch;
-        }
-        return o;
-    };
-    // Bare token only for real numbers/bools — the old "made of -0123456789"
-    // test emitted values like "-" or "--" as bare tokens = invalid JSON.
-    const auto is_number = [](const std::string& v) {
-        if (v.empty()) return false;
-        std::size_t i = (v[0] == '-') ? 1 : 0;
-        if (i >= v.size()) return false;
-        for (; i < v.size(); ++i)
-            if (v[i] < '0' || v[i] > '9') return false;
-        return true;
-    };
     out << "{\n";
     bool first = true;
     for (const auto& [k, v] : c) {
         if (!first) out << ",\n";
         first = false;
-        out << "  \"" << esc(k) << "\": ";
-        if (v == "true" || v == "false" || is_number(v)) out << v;
-        else out << '"' << esc(v) << '"';
+        out << "  \"" << json_escape(k) << "\": ";
+        if (is_bare_json(v)) out << v;
+        else out << '"' << json_escape(v) << '"';
     }
     out << "\n}\n";
     out.flush();

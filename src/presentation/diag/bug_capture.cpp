@@ -21,6 +21,7 @@
 #include "enhance/parallel_rows.hpp"
 #include "presentation/diag/debug_overlay.hpp"
 #include "presentation/image_out.hpp"
+#include "presentation/window_util.hpp"   // window_fullscreen
 
 #ifndef OLDUVAI_VERSION
 #define OLDUVAI_VERSION "0.0.0"
@@ -92,19 +93,8 @@ const char* level_main_func(int internal) {
     }
 }
 
-// Local time, formatted.  The two callers below differed in nothing but the
-// format string — including the platform #if, which is the part least worth
-// having twice.
-// The strftime-format attribute, not a pragma: it tells GCC/Clang that `fmt`
-// IS a format string, which both silences -Wformat-nonliteral at the strftime
-// call below AND starts checking the two callers' literals — strictly more
-// checking than before, where the wrapper was an opaque hole.
-//
-// -Wformat=2 (which implies -Wformat-nonliteral) was adopted in 56fb90d as
-// "0 sites, measured".  It was 0 sites ON CLANG: this diagnostic is GCC-only
-// here, and that commit said so — "the GCC-only corners of -Wformat=2 are
-// covered by inspection; CI's first g++ -Werror run remains the formal
-// verdict".  This is that run, and inspection had missed one.
+// Local time, formatted.  The strftime format attribute makes GCC/Clang treat
+// `fmt` as a format string and check the callers' literals (-Wformat=2).
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((format(strftime, 1, 0)))
 #endif
@@ -117,11 +107,8 @@ std::string local_time(const char* fmt) {
     localtime_r(&now, &tmv);
 #endif
     char buf[32];
-    // The format attribute above makes GCC CHECK the two callers' literals,
-    // but it does not stop -Wformat-nonliteral firing here on the forwarded
-    // parameter, so this one call is scoped out.  Safe by construction: both
-    // callers below pass string literals, and `fmt` reaches strftime by no
-    // other path.
+    // -Wformat-nonliteral still fires on the forwarded parameter; scoped out
+    // here. Both callers pass literals.
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
@@ -142,16 +129,9 @@ bool save_fb_png(const FrameBuffer& fb, const std::string& path) {
     return save_rgba_image(fb.px.data(), fb.w, fb.h, path);
 }
 
-// Active entities, sorted deterministically by (obj_type, init_x, init_y, x, y)
-// — matches state_dump._serialize_entities ordering.
-//
-// stable_sort, not sort, and the difference is the whole point: the reference
-// orders with Python's list.sort, which is STABLE, so two entities tying on all
-// five key fields keep their order in state.entities.  std::sort does not
-// promise that, so on a tie the two engines could emit different rows for
-// identical state — a divergence invented by the dumper rather than the
-// engine.  A tie needs a duplicated spawn-table row to occur and may not exist
-// in the shipped corpus; the cost of ruling it out is one word.
+// Active entities sorted by (obj_type, init_x, init_y, x, y), as
+// state_dump._serialize_entities.  stable_sort: the reference's sort is stable,
+// so ties keep their state.entities order in both engines.
 std::vector<const core::Entity*> sorted_active_entities(
     const systems::SystemsState& state) {
     std::vector<const core::Entity*> rows;
@@ -159,9 +139,7 @@ std::vector<const core::Entity*> sorted_active_entities(
         if (!e.active) continue;
         rows.push_back(&e);
     }
-    // The comparator orders by VALUES read through the pointers, never by the
-    // pointer addresses themselves, so the result does not depend on where the
-    // entities happen to live.  The check fires on the element type alone.
+    // Orders by values read through the pointers, not addresses.
     // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     std::stable_sort(rows.begin(), rows.end(),
               [](const core::Entity* a, const core::Entity* b) {
@@ -175,15 +153,11 @@ std::vector<const core::Entity*> sorted_active_entities(
 }
 
 
-void write_report_md(const fs::path& path,
-                     const systems::SystemsState& state,
-                     const std::vector<const core::Entity*>& ents,
-                     int display_level, int internal_level,
-                     const std::string& captured_at,
-                     const BugAnnotations& ann, bool has_presented,
-                     const DisplayInfo& display, const BossInfo& boss) {
-    std::ofstream f(path);
-    if (!f) return;
+// The header block and the state summary; a boss arena gets its own table.
+void md_summary(std::ostream& f, const systems::SystemsState& state,
+                std::size_t n_entities, int display_level,
+                int internal_level, const std::string& captured_at,
+                const BugAnnotations& ann, const BossInfo& boss) {
     const auto& p = state.player;
     const std::string cave_str =
         state.cave_flag ? ("cave_idx=" + std::to_string(state.cave_index))
@@ -235,65 +209,69 @@ void write_report_md(const fs::path& path,
         f << "| Score | " << state.score << " |\n";
         f << "| Timer | " << state.timer << " |\n";
         f << "| Frame counter | " << state.frame_counter << " |\n";
-        f << "| Active entities | " << ents.size() << " |\n";
+        f << "| Active entities | " << n_entities << " |\n";
         f << "| God mode | " << (state.god_mode ? "yes" : "no") << " |\n\n";
     }
 
-    // Display / present path.  A visual report is not actionable without it:
-    // "widescreen gone" is a claim about ws_active and ws_margin, and neither
-    // is visible in a screenshot taken through a pillarbox.
-    if (display.supplied) {
-        f << "## Display\n\n";
-        f << "| Field | Value |\n|-------|-------|\n";
-        f << "| Renderer output | " << display.out_w << "x" << display.out_h
-          << " (" << (display.out_h > 0
-                          ? static_cast<double>(display.out_w) / display.out_h
-                          : 0.0)
-          << ":1) |\n";
-        f << "| Logical size | "
-          << (display.logical_w == 0 && display.logical_h == 0
-                  ? std::string("none (1:1)")
-                  : std::to_string(display.logical_w) + "x" +
-                        std::to_string(display.logical_h))
-          << " |\n";
-        f << "| Fullscreen | " << (display.fullscreen ? "yes" : "no") << " |\n";
-        f << "| HD | " << (display.hd ? "yes" : "no") << " (scale "
-          << display.hd_scale << ") |\n";
-        f << "| Aspect setting | " << (display.aspect.empty() ? "(unset)"
-                                                              : display.aspect)
-          << " |\n";
-        f << "| Widescreen active | " << (display.ws_active ? "YES" : "NO")
-          << " |\n";
-        // Say WHY it is off.  Margin is only ever computed under aspect
-        // "widescreen", so 0 has two very different meanings and the reader of
-        // a "widescreen gone" report needs to be told which one applies.
-        f << "| Widescreen margin | " << display.ws_margin;
-        if (display.ws_margin == 0) {
-            if (display.aspect != "widescreen")
-                f << "  (0 = widescreen not selected; Aspect is \""
-                  << (display.aspect.empty() ? "(unset)" : display.aspect)
-                  << "\")";
-            else if (!display.hd)
-                f << "  (0 = widescreen needs enhanced/HD mode)";
-            else
-                f << "  (0 = display not wider than 16:10)";
-        }
-        f << " |\n";
-        f << "| Wide native width | " << display.ws_native_w << " |\n";
-        f << "| Upscale threads | " << display.upscale_threads << " |\n\n";
+}
+
+// Display / present path: a visual report is not actionable without it.
+void md_display(std::ostream& f, const DisplayInfo& display) {
+    if (!display.supplied) return;
+    f << "## Display\n\n";
+    f << "| Field | Value |\n|-------|-------|\n";
+    f << "| Renderer output | " << display.out_w << "x" << display.out_h
+      << " (" << (display.out_h > 0
+                      ? static_cast<double>(display.out_w) / display.out_h
+                      : 0.0)
+      << ":1) |\n";
+    f << "| Logical size | "
+      << (display.logical_w == 0 && display.logical_h == 0
+              ? std::string("none (1:1)")
+              : std::to_string(display.logical_w) + "x" +
+                    std::to_string(display.logical_h))
+      << " |\n";
+    f << "| Fullscreen | " << (display.fullscreen ? "yes" : "no") << " |\n";
+    f << "| HD | " << (display.hd ? "yes" : "no") << " (scale "
+      << display.hd_scale << ") |\n";
+    f << "| Aspect setting | " << (display.aspect.empty() ? "(unset)"
+                                                          : display.aspect)
+      << " |\n";
+    f << "| Widescreen active | " << (display.ws_active ? "YES" : "NO")
+      << " |\n";
+    // Margin is only computed for aspect "widescreen", so say which reason
+    // 0 has.
+    f << "| Widescreen margin | " << display.ws_margin;
+    if (display.ws_margin == 0) {
+        if (display.aspect != "widescreen")
+            f << "  (0 = widescreen not selected; Aspect is \""
+              << (display.aspect.empty() ? "(unset)" : display.aspect)
+              << "\")";
+        else if (!display.hd)
+            f << "  (0 = widescreen needs enhanced/HD mode)";
+        else
+            f << "  (0 = display not wider than 16:10)";
     }
+    f << " |\n";
+    f << "| Wide native width | " << display.ws_native_w << " |\n";
+    f << "| Upscale threads | " << display.upscale_threads << " |\n\n";
+}
+
+void md_screenshots(std::ostream& f, bool has_presented, bool boss) {
     f << "## Screenshots\n\n";
-    // Presented shot first when it exists — it is what the player actually saw
-    // (HD upscale + widescreen + HUD).  The other three are native 320x200
-    // analytical layers.
+    // The presented shot first (what the player saw); the rest are native
+    // 320x200 analysis layers.
     if (has_presented)
         f << "- ![as seen (HD/widescreen)](screenshot_presented.png)\n";
     f << "- ![game (native)](screenshot.png)\n";
-    if (!boss.supplied) {
+    if (!boss) {
         f << "- ![collision overlay](screenshot_collision.png)\n";
         f << "- ![entity overlay](screenshot_entities.png)\n";
     }
     f << "\n";
+}
+
+void md_description(std::ostream& f, const BugAnnotations& ann) {
     f << "## What happened\n\n";
     if (!ann.description.empty())
         f << ann.description << "\n\n";
@@ -308,6 +286,10 @@ void write_report_md(const fs::path& path,
     f << "- " << box("sometimes") << " Sometimes\n";
     f << "- " << box("once")      << " Once-off\n";
     f << "- " << box("unknown")   << " Unknown\n\n";
+}
+
+void md_suspects(std::ostream& f, const systems::SystemsState& state,
+                 int internal_level) {
     f << "## Suspect EXE function\n\n";
     f << "Suggested: `" << level_main_func(internal_level)
       << "` - the active level main loop.\n\n";
@@ -318,10 +300,14 @@ void write_report_md(const fs::path& path,
         f << "- (secret-area handler - TBD)\n";
     f << "- `FUN_2A04_0003` (Objects_Update - entity dispatcher)\n";
     f << "- `FUN_27f7_093d` (Monster_SharedStateMachine)\n\n";
+}
+
+void md_entities(std::ostream& f,
+                 const std::vector<const core::Entity*>& ents) {
     f << "## Active entities\n\n";
     f << "| obj_type | name | pos | state | visible |\n";
     f << "|----------|------|-----|-------|---------|\n";
-    std::size_t shown = std::min<std::size_t>(ents.size(), 20);
+    const std::size_t shown = std::min<std::size_t>(ents.size(), 20);
     for (std::size_t i = 0; i < shown; ++i) {
         const core::Entity* e = ents[i];
         char hex[8];
@@ -335,6 +321,9 @@ void write_report_md(const fs::path& path,
         f << "| (and " << (ents.size() - 20)
           << " more not shown) |\n";
     }
+}
+
+void md_footer(std::ostream& f) {
     f << "\n## Related findings\n\n";
     f << "(link any related notes or issues)\n\n";
     f << "## Resolution\n\n";
@@ -345,6 +334,21 @@ void write_report_md(const fs::path& path,
     f << "| Root cause | (TBD) |\n";
     f << "| Fix commit | (TBD) |\n";
     f << "| Finding doc | (TBD) |\n";
+}
+
+void write_report_md(const fs::path& path, const BugReport& r,
+                     const std::vector<const core::Entity*>& ents,
+                     const std::string& captured_at) {
+    std::ofstream f(path);
+    if (!f) return;
+    md_summary(f, r.state, ents.size(), r.display_level, r.internal_level,
+               captured_at, r.ann, r.boss);
+    md_display(f, r.display);
+    md_screenshots(f, r.has_presented, r.boss.supplied);
+    md_description(f, r.ann);
+    md_suspects(f, r.state, r.internal_level);
+    md_entities(f, ents);
+    md_footer(f);
 }
 
 std::string g_bug_report_dir;   // set_bug_report_dir(); "" = default
@@ -384,19 +388,14 @@ std::string bug_report_root() {
     return "bug_reports";   // no resolvable home: last-resort cwd-relative
 }
 
-std::string write_bug_report(const systems::SystemsState& state,
-                             const FrameBuffer& base_frame,
-                             const std::vector<formats::Sprite>& entity_sprites,
-                             int display_level, int internal_level,
-                             int overlay_scale, const BugAnnotations& ann,
-                             bool has_presented,
-                             const DisplayInfo& display,
-                             const BossInfo& boss) {
+std::string write_bug_report(const BugReport& r) {
+    const systems::SystemsState& state = r.state;
+    const FrameBuffer& base_frame = r.frame;
     const std::string ts = timestamp_dir();
     const std::string iso = timestamp_iso();
 
     fs::path root = fs::path(bug_report_root()) /
-                    (ts + "_L" + std::to_string(display_level) + "_S" +
+                    (ts + "_L" + std::to_string(r.display_level) + "_S" +
                      std::to_string(state.current_screen));
     std::error_code ec;
     fs::create_directories(root, ec);
@@ -421,20 +420,16 @@ std::string write_bug_report(const systems::SystemsState& state,
 
     const auto ents = sorted_active_entities(state);
 
-    // The debug overlays scale native cell/entity coordinates by `scale`, so
-    // `scale` MUST match the frame's actual resolution — NOT the game's HD
-    // render scale.  base_frame is composed at native 320-wide, so an HD run
-    // (overlay_scale=4) would push every marker off-canvas and the three
-    // screenshots would come out identical (owner-reported).  Derive it.
+    // The overlays scale native coordinates by `scale`, which must match the
+    // frame's resolution (base_frame is 320 wide), not the HD render scale.
     const int shot_scale = std::max(1, base_frame.w / 320);
-    (void)overlay_scale;   // kept for the boss_app caller's signature parity
 
     // 1. Clean gameplay frame.
     save_fb_png(base_frame, (root / "screenshot.png").string());
 
     // 2-3. The collision and entity overlays read the platform level's
     // bitmap and entity table; a boss arena has neither, so they are skipped.
-    if (!boss.supplied) {
+    if (!r.boss.supplied) {
         // 2. Collision overlay (on a copy so the live frame is untouched).
         {
             FrameBuffer copy = base_frame;
@@ -444,17 +439,24 @@ std::string write_bug_report(const systems::SystemsState& state,
         // 3. Entity overlay.
         {
             FrameBuffer copy = base_frame;
-            draw_debug_entities(copy, state, entity_sprites, shot_scale);
+            draw_debug_entities(copy, state, r.entity_sprites, shot_scale);
             save_fb_png(copy, (root / "screenshot_entities.png").string());
         }
     }
 
-    write_report_md(root / "report.md", state, ents, display_level,
-                    internal_level, iso, ann, has_presented, display, boss);
+    write_report_md(root / "report.md", r, ents, iso);
 
     std::printf("bug report: %s\n", root.string().c_str());
     std::fflush(stdout);
     return root.string();
+}
+
+void write_bug_report_as_shown(const BugReport& r, SDL_Renderer* ren,
+                               const std::function<void()>& redraw) {
+    const std::string dir = write_bug_report(r);
+    if (dir.empty() || !r.has_presented) return;
+    redraw();
+    capture_renderer_output(ren, dir + "/screenshot_presented.png");
 }
 
 DisplayInfo read_display_info(SDL_Renderer* ren, SDL_Window* win) {
@@ -462,10 +464,7 @@ DisplayInfo read_display_info(SDL_Renderer* ren, SDL_Window* win) {
     di.supplied = true;
     SDL_GetRendererOutputSize(ren, &di.out_w, &di.out_h);
     SDL_RenderGetLogicalSize(ren, &di.logical_w, &di.logical_h);
-    if (win != nullptr) {
-        di.fullscreen =
-            (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
-    }
+    if (win != nullptr) di.fullscreen = window_fullscreen(win);
     di.upscale_threads = enhance::parallel_row_threads();
     return di;
 }

@@ -20,8 +20,8 @@ constexpr std::size_t kDictSize = 1u << kMaxWidth;
 // reference reader), so up to two bytes of over-read slack can remain at
 // the end of a stream — harmless: the output size terminates decoding.
 struct BitReader {
-    const std::uint8_t* data;
-    std::size_t size;
+    const std::uint8_t* data = nullptr;
+    std::size_t size = 0;
     std::size_t pos = 4;              // past the header
     std::uint32_t bits = 0;
     int bits_left = 0;
@@ -95,13 +95,11 @@ std::vector<std::uint8_t> unsqz(const std::uint8_t* data, std::size_t size) {
         code_size = kCodeWidth;
         next_free = kFirstFree;
         const std::uint16_t code = get_code();
-        // After a reset the stream must send a LITERAL (or reset again).  The
-        // check was missing, so any 9-bit code up to 0x1FF became prev_code;
-        // the next dictionary entry then chained to a stale or never-written
-        // slot, and a crafted stream could build a loop that the unwind below
-        // followed off the end of `stack` (stack-buffer-overflow, found by
-        // fuzz-smoke on 2026-09-22 within a minute of 334cb6a/2a311d8 giving
-        // the fuzzer real coverage).
+        // After a reset the stream must send a LITERAL (or reset again).
+        // Without this check any 9-bit code up to 0x1FF becomes prev_code,
+        // and a crafted stream can build a loop that the unwind below follows
+        // off the end of `stack` (a stack-buffer-overflow the fuzzer reaches
+        // on the ASM-shrink path).
         if (code > 0xFF && code != kResetCode)
             throw SqzError("sqz: non-literal code after reset");
         if (code != kResetCode) {

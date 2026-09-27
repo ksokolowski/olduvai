@@ -1,7 +1,7 @@
 # Building Olduvai from source
 
 Requires **CMake ≥ 3.21** and a **C++17** compiler. **SDL2 2.0.20 or newer** is
-required for the presentation layer — without it the engine core still builds
+required for the presentation layer; without it the engine core still builds
 headless (formats, systems, tests of those layers).
 
 2.0.20 is a tested floor, not a guess: CI builds the whole tree against the real
@@ -11,17 +11,17 @@ partway through the compile rather than up front.
 
 ## SDL policy: SDL2-native, sdl2-compat-clean
 
-The engine targets the **SDL2 API only** (decision 2026-07-18): old hardware
+The engine targets the **SDL2 API only**: old hardware
 and handhelds get real SDL2, while modern systems increasingly provide
-[sdl2-compat](https://github.com/libsdl-org/sdl2-compat) — the SDL2 ABI
+[sdl2-compat](https://github.com/libsdl-org/sdl2-compat), the SDL2 ABI
 implemented on SDL3, which Homebrew now ships as `sdl2`.  Both are supported;
 the test suite runs against whichever is installed.
 
 One discipline keeps the shim happy: **never `SDL_PushEvent` a synthetic
-event of a type SDL normally generates internally** (text input especially —
+event of a type SDL normally generates internally**, text input especially:
 sdl2-compat's `Event2to3` returns NULL for app-pushed `SDL_TEXTINPUT` and
-crashes; 2026-07-17 `report_form` segfault).  Deliver synthetic input by
-calling the consuming handler directly instead.
+crashes.  Deliver synthetic input by calling the consuming handler directly
+instead.
 
 ### On macOS, a dev build and the shipped app use DIFFERENT SDLs
 
@@ -36,12 +36,12 @@ release:
 Linux and Windows builds use real SDL2 in both places, so macOS is the one
 platform where "it passed locally" and "it works in the release" rest on
 different libraries. The test suite passing under the shim is genuine
-information — it just is not information about the artifact.
+information, just not about the artifact.
 
 Treat anything **input- or audio-timing sensitive** as unverified on macOS
 until it has run against the packaged app. The two defects that have actually
 come from this gap were both in that class: the `report_form` segfault above,
-and a macOS-only `IMKCFRunLoopWakeUpReliable` line on stderr — text input is
+and a macOS-only `IMKCFRunLoopWakeUpReliable` line on stderr.  Text input is
 precisely where SDL3 changed its defaults (on-by-default became
 off-by-default), so it is where the shim does the most emulating.
 
@@ -62,39 +62,39 @@ own tree.  The generated build is plain Makefiles, so
 `make -C build/release` works too.
 
 The default build produces only the game binary; everything else is walled
-behind explicit targets:
+behind explicit targets.  Build them together: several test binaries are
+excluded from `all`, and `ctest` runs whatever is on disk:
 
 ```sh
-cmake --build --preset release --target tests   # then: ctest --preset release
-cmake --build --preset release --target tools   # dev utilities (dumps, shots, trace)
+cmake --build --preset release --target all tests tools
+ctest --preset release          # release-full adds the slow ones
 ```
 
 Test binaries land in `build/release/tests/`, tools in `build/release/tools/`.
 
 ### Which tests actually run
 
-Most of the suite replays your own game files, so it skips without them — and
-`ctest` counts a skip as a pass, printing "100% tests passed out of 31" on a
-machine where 20 of them never executed.  The two audiences are labelled:
+Most of the suite replays your own game files, so it skips without them, and
+`ctest` counts a skip as a pass.  The two audiences are labelled, and
+configuring prints the split:
 
 ```sh
-ctest --preset release -LE assets   # the 11 that run anywhere — what CI sees
-ctest --preset release -L assets    # the 20 that need your game files
+ctest --preset release -LE assets   # runs anywhere
+ctest --preset release -L assets    # needs your game files
 ```
 
-Configuring prints the split (`31 registered, 20 need game files, 11 run
-anywhere`), and the count is ratcheted: adding a test that needs game files
-fails the configure until you say so deliberately.
+The count is ratcheted: adding a test that needs game files fails the
+configure until you say so deliberately.
 
-On a machine that *has* the game files, a skip is a failure — that machine is
-the only place those 20 can run at all:
+On a machine that *has* the game files, a skip is a failure: that machine is
+the only place those tests can run at all:
 
 ```sh
 scripts/gate_local.sh
 ```
 
 It runs release **and** asan to completion and fails on any silent skip.  If
-your game copy genuinely lacks an asset, acknowledge it rather than ignore it —
+your game copy genuinely lacks an asset, acknowledge it rather than ignore it:
 `OLDUVAI_GATE_ALLOW_SKIP="sqz_parity" scripts/gate_local.sh` (that one needs
 `PREH.SQZ`, which unpacked distributions do not carry).  Acknowledged skips are
 still printed on every run.
@@ -109,7 +109,8 @@ launch otherwise gets the text report; `OLDUVAI_NO_GUI=1` forces that).
 
 The test suite is data-gated: suites that need game files skip cleanly
 (exit 77) when none are present. To run them, symlink your game files as
-`game_data/` in the repo root (or set `OLDUVAI_GAME_DATA`).
+`game_data/` in the repo root (or set `OLDUVAI_GAME_DATA`).  What the suite
+actually executes, per layer: `scripts/metrics/coverage_layers.sh`.
 
 ## Linux
 
@@ -136,7 +137,7 @@ cmake --preset release && cmake --build --preset release
 ```
 
 MT-32 emulation is built in (vendored libmt32emu) and needs only your own
-Roland ROM images at runtime. General MIDI still loads at runtime if present —
+Roland ROM images at runtime. General MIDI still loads at runtime if present:
 `brew install fluid-synth` (a SoundFont is auto-discovered or passed with
 `--soundfont`).
 
@@ -160,9 +161,9 @@ cmake --build --preset release
 ```
 
 The MinGW shape is a **self-contained `olduvai.exe`** (static runtime +
-static SDL2 — no DLLs).
+static SDL2, no DLLs).
 
-### Windows (MSVC — the shipped toolchain)
+### Windows (MSVC, the shipped toolchain)
 
 From a **Developer Command Prompt for VS 2022** (or after `vcvars64.bat`),
 with the official [SDL2 VC development package](https://github.com/libsdl-org/SDL/releases)
@@ -188,9 +189,9 @@ sh packaging/package_windows.sh        # → olduvai-<version>-windows-x86_64.zi
 
 ## Audio backends at a glance
 
-OPL/AdLib FM music and sound effects are **built in** (vendored Nuked-OPL3 —
-the authentic 1991 sound; no external dependency), as is MT-32 emulation
-(vendored libmt32emu — supply your own Roland ROMs). General MIDI
+OPL/AdLib FM music and sound effects are **built in** (vendored Nuked-OPL3,
+the authentic 1991 sound, no external dependency), as is MT-32 emulation
+(vendored libmt32emu; supply your own Roland ROMs). General MIDI
 (FluidSynth) is loaded at runtime when installed. On Linux,
 `apt install scummvm-data` provides a Roland Sound Canvas SoundFont that is
 auto-selected for the most faithful GM sound. The full music-device ×

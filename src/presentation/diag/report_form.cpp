@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "presentation/diag/report_form.hpp"
 
-
 #include <cstdio>
 #include <vector>
 
@@ -30,8 +29,8 @@ void ReportFormService::retemplate_if_untouched_() {
 void ReportFormService::open_confirm_() {
     const std::string desc = bind_.get("report.description");
     int nlines = 1;
-    for (char c : desc) if (c == '\n') ++nlines;
-    std::vector<StagedChange> rows = {
+    for (const char c : desc) if (c == '\n') ++nlines;
+    const std::vector<StagedChange> rows = {
         {"report.tag", "Tag", "", bind_.get("report.tag")},
         {"report.repro", "Reproducibility", "", bind_.get("report.repro")},
         {"report.description", "Description", "",
@@ -55,51 +54,42 @@ void ReportFormService::inject_text(const std::string& txt) {
     edit_handle_event(edit_, te);
 }
 
-void ReportFormService::handle_event(const SDL_Event& ev) {
-    if (edit_open_) {
-        const EditResult er = edit_handle_event(edit_, ev);
-        if (er == EditResult::kSave) {
-            bind_.set("report.description", edit_.editor.text());
-            SDL_StopTextInput();
-            edit_open_ = false;
-        } else if (er == EditResult::kCancel) {
-            SDL_StopTextInput();
-            edit_open_ = false;
-        }
-        return;
+void ReportFormService::on_edit_event_(const SDL_Event& ev) {
+    const EditResult er = edit_handle_event(edit_, ev);
+    if (er == EditResult::kSave)
+        bind_.set("report.description", edit_.editor.text());
+    if (er == EditResult::kSave || er == EditResult::kCancel) {
+        SDL_StopTextInput();
+        edit_open_ = false;
     }
-    if (ev.type != SDL_KEYDOWN) return;
-    const auto rsym = ev.key.keysym.sym;
-    if (confirm_.is_open()) {
-        if (rsym == SDLK_LEFT || rsym == SDLK_RIGHT ||
-            rsym == SDLK_UP || rsym == SDLK_DOWN ||
-            rsym == SDLK_a || rsym == SDLK_d)
-            confirm_.move(1);
-        else if (rsym == SDLK_ESCAPE)
-            confirm_.close();                    // back to the form
-        else if (rsym == SDLK_RETURN || rsym == SDLK_SPACE) {
-            if (confirm_.apply_selected())
-                save_pending_ = true;            // freeze block writes
-            else
-                open_ = false;                   // Discard
-            confirm_.close();
-        }
-        return;
+}
+
+void ReportFormService::on_confirm_key_(SDL_Keycode sym) {
+    if (sym == SDLK_LEFT || sym == SDLK_RIGHT || sym == SDLK_UP ||
+        sym == SDLK_DOWN || sym == SDLK_a || sym == SDLK_d) {
+        confirm_.move(1);
+    } else if (sym == SDLK_ESCAPE) {
+        confirm_.close();                        // back to the form
+    } else if (sym == SDLK_RETURN || sym == SDLK_SPACE) {
+        if (confirm_.apply_selected())
+            save_pending_ = true;                // freeze block writes
+        else
+            open_ = false;                       // Discard
+        confirm_.close();
     }
-    if (rsym == SDLK_UP || rsym == SDLK_w) menu_.move(-1);
-    else if (rsym == SDLK_DOWN || rsym == SDLK_s) menu_.move(+1);
-    else if (rsym == SDLK_LEFT || rsym == SDLK_a) {
-        const std::string tb = bind_.get("report.tag");
+}
+
+void ReportFormService::on_form_key_(SDL_Keycode sym) {
+    if (sym == SDLK_UP || sym == SDLK_w) {
+        menu_.move(-1);
+    } else if (sym == SDLK_DOWN || sym == SDLK_s) {
+        menu_.move(+1);
+    } else if (sym == SDLK_LEFT || sym == SDLK_a) {
         menu_.adjust(-1);
-        if (bind_.get("report.tag") != tb) retemplate_if_untouched_();
-    } else if (rsym == SDLK_RIGHT || rsym == SDLK_d) {
-        const std::string tb = bind_.get("report.tag");
+    } else if (sym == SDLK_RIGHT || sym == SDLK_d) {
         menu_.adjust(+1);
-        if (bind_.get("report.tag") != tb) retemplate_if_untouched_();
-    } else if (rsym == SDLK_RETURN || rsym == SDLK_SPACE) {
-        const std::string tb = bind_.get("report.tag");
-        const std::string a = menu_.activate();
-        if (a.rfind("__edit_text:", 0) == 0) {
+    } else if (sym == SDLK_RETURN || sym == SDLK_SPACE) {
+        if (menu_.activate().rfind("__edit_text:", 0) == 0) {
             edit_.editor.set_text(bind_.get("report.description"));
             edit_.title = "Description";
             edit_.focus = EditFocus::kText;
@@ -107,12 +97,27 @@ void ReportFormService::handle_event(const SDL_Event& ev) {
             edit_open_ = true;
         } else if (!menu_.is_open()) {
             open_confirm_();                     // 'Back' left the form
-        } else if (bind_.get("report.tag") != tb) {
-            retemplate_if_untouched_();
         }
-    } else if (rsym == SDLK_ESCAPE) {
+    } else if (sym == SDLK_ESCAPE) {
         open_confirm_();
     }
+}
+
+void ReportFormService::handle_event(const SDL_Event& ev) {
+    if (edit_open_) {
+        on_edit_event_(ev);
+        return;
+    }
+    if (ev.type != SDL_KEYDOWN) return;
+    const SDL_Keycode sym = ev.key.keysym.sym;
+    if (confirm_.is_open()) {
+        on_confirm_key_(sym);
+        return;
+    }
+    // A tag changed by any key re-fills an untouched description.
+    const std::string tag = bind_.get("report.tag");
+    on_form_key_(sym);
+    if (bind_.get("report.tag") != tag) retemplate_if_untouched_();
 }
 
 bool ReportFormService::service_freeze(const FreezeDeps& d) {

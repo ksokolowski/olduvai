@@ -155,7 +155,7 @@ struct FlowRig {
     PersistRecorder rec;
     SettingsSession session;
     ConfirmDialog confirm;
-    PendingReinit reinit_req;
+    DisplaySettings reinit_req;
     bool want_reinit = false;
     PauseFlowDeps deps;
     std::optional<SettingsFlow> flow;
@@ -236,19 +236,25 @@ TEST_CASE("configure_pause_bind seeds the enhanced master baseline") {
     GameOptions opts;
     opts.enhanced = true;
     ScaledWindow sw;   // null win/ren: SDL_GetWindowFlags(nullptr) is safe
-    bool god = false, want_reinit = false;
-    PendingReinit rr;
-    LogicalSize lsz(/*ren=*/nullptr, 0, 0);
+    bool god = false;
     PauseBindWireDeps d{&god, /*audio=*/nullptr, &sw,  &opts, &session,
-                        &want_reinit, &rr, &lsz, /*hd_scale=*/2,
-                        /*display_level=*/1,
-                        // No widescreen presenter in this rig; apply_aspect
-                        // null-checks it.  Named rather than left to default
-                        // because CI builds -Werror and
-                        // -Wmissing-field-initializers is in -Wextra.
-                        /*on_aspect_changed=*/nullptr};
+                        /*display_level=*/1};
     configure_pause_bind(bind, d);
     CHECK(bind.mem["enhanced"] == "true");
+}
+
+TEST_CASE("configure_pause_bind: a live Aspect edit writes the setting only") {
+    PauseBindings bind;
+    SettingsSession session;
+    GameOptions opts;
+    opts.aspect = "keep";
+    ScaledWindow sw;
+    bool god = false;
+    configure_pause_bind(bind, {&god, /*audio=*/nullptr, &sw, &opts, &session,
+                                /*display_level=*/1});
+    REQUIRE(bind.apply_aspect);
+    bind.apply_aspect("4:3");
+    CHECK(opts.aspect == "4:3");   // the presentation follows it per present
 }
 
 TEST_CASE("pause Apply persists the granular list once without master clobber") {
@@ -318,4 +324,75 @@ TEST_CASE("cheat.god reads back the live flag") {
     CHECK(r.bind.get("cheat.god") == "0");
     r.god_active = true;
     CHECK(r.bind.get("cheat.god") == "1");
+}
+
+// ── the shared live preview (StagingBindings) ───────────────────────────────
+TEST_CASE("same-scale hd_profile and aspect preview live; Discard restores") {
+    PauseBindings bind;
+    SettingsSession session;
+    bind.session = &session;
+    seed_hd(bind);
+    std::string live_profile = "omniscale";
+    std::string aspect = "widescreen";
+    bind.live_hd_profile = &live_profile;
+    bind.apply_aspect = [&aspect](const std::string& v) { aspect = v; };
+
+    bind.set("hd_profile", "mmpx");   // scale 4 either way: Live
+    bind.set("aspect", "4:3");
+    CHECK(live_profile == "mmpx");
+    CHECK(aspect == "4:3");
+
+    for (const auto& ch : session.changes()) bind.revert(ch);
+    CHECK(live_profile == "omniscale");
+    CHECK(aspect == "widescreen");
+    CHECK(bind.get("hd_profile") == "omniscale");
+}
+
+TEST_CASE("a scale-changing hd_profile stages without a live swap") {
+    PauseBindings bind;
+    SettingsSession session;
+    bind.session = &session;
+    seed_classic(bind);
+    std::string live_profile = "native";
+    bind.live_hd_profile = &live_profile;
+
+    bind.set("hd_profile", "omniscale");   // x1 -> x2: Reinit
+    CHECK(live_profile == "native");
+    CHECK(session.changes().size() == 1);
+}
+
+TEST_CASE("no live targets (boss): preview and revert only touch mem") {
+    PauseBindings bind;
+    SettingsSession session;
+    bind.session = &session;
+    seed_hd(bind);
+
+    bind.set("hd_profile", "mmpx");
+    bind.set("aspect", "4:3");
+    for (const auto& ch : session.changes()) bind.revert(ch);
+    CHECK(bind.get("hd_profile") == "omniscale");
+    CHECK(bind.get("aspect") == "widescreen");
+}
+
+TEST_CASE("rebind: the adopted pipeline and baseline, live values kept") {
+    PauseBindings bind;
+    SettingsSession session;
+    bind.session = &session;
+    seed_hd(bind);
+    bind.mem["music_volume"] = "95";   // previewed live, never re-seeded
+    DisplaySettings applied = bind.cur;
+    applied.render_scale = bind.cur.render_scale == 2 ? 4 : 2;
+    applied.enhanced = true;
+    applied.hd_profile.clear();
+    auto* const win = reinterpret_cast<SDL_Window*>(0x1);   // never used
+    bind.rebind(/*a=*/nullptr, win, applied);
+    CHECK(bind.win == win);
+    CHECK(bind.enhanced);
+    CHECK(bind.cur.render_scale == applied.render_scale);
+    CHECK(bind.cur.hd_profile == "native");
+    CHECK(bind.mem["music_volume"] == "95");
+    // The applied scale is the baseline: choosing it again changes nothing.
+    CHECK(classify_change("render_scale",
+                          std::to_string(applied.render_scale), bind.cur) ==
+          ApplyTier::PersistOnly);
 }

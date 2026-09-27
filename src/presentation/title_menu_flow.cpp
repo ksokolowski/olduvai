@@ -1,665 +1,446 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// run_title_menu — the intro/title sequence + interactive main menu, extracted
-// VERBATIM from run_game (CC1, 2026-07-08). See title_menu_flow.hpp for the
-// coverage caveat (compose is gated by mainmenu_shot; Options->apply->rebuild
-// is playtest-only).
+// The intro/title sequence and the interactive main menu.  Coverage caveat:
+// title_menu_flow.hpp.
 
 #include "presentation/title_menu_flow.hpp"
 
 #include <cstdint>
-#include <filesystem>
-#include <iterator>
+#include <cstdio>
+#include <cstdlib>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "presentation/audio/game_music.hpp"
-#include "presentation/input/gamepad.hpp"
-
 #include <SDL.h>
 
-#include "presentation/image_out.hpp"
-
-#include <cstdio>
-#include <cstdlib>
-#include <fstream>
-
-#include "core/rng.hpp"
+#include "enhance/hd_text.hpp"
 #include "formats/cur.hpp"
-#include "prepare/exe_tables.hpp"
+#include "formats/mat.hpp"
+#include "formats/pc1.hpp"
 #include "prepare/game_files.hpp"
-#include "presentation/diag/debug_overlay.hpp"
-#include "presentation/render/game_render.hpp"
-#include "presentation/render/tile_patterns.hpp"
-#include "presentation/render/hud_render.hpp"
+#include "presentation/audio/game_music.hpp"
+#include "presentation/diag/menu_script_util.hpp"
+#include "presentation/image_out.hpp"
+#include "presentation/input/gamepad.hpp"
 #include "presentation/menu/about_info.hpp"
+#include "presentation/menu/confirm_dialog.hpp"
 #include "presentation/menu/dialog_key_map.hpp"
-#include "presentation/sequence/l3_end_level.hpp"
 #include "presentation/menu/menu.hpp"
 #include "presentation/menu/menu_model.hpp"
-#include "presentation/menu/pause_flow.hpp"
-#include "presentation/menu/menu_nav.hpp"
-#include "presentation/render/banner_fx.hpp"
 #include "presentation/menu/menu_render.hpp"
-#include "presentation/level/save_state.hpp"
-#include "presentation/input/replay.hpp"
-#include "presentation/audio/audio.hpp"
-#include "presentation/boss_app.hpp"
-#include "presentation/render/boss_widescreen.hpp"   // boss_ws_margin (shared margin math)
-#include "presentation/diag/bug_capture.hpp"
-#include "presentation/render/screen_tiles.hpp"
-#include "presentation/sequence/screens.hpp"
-#include "presentation/render/smooth_present.hpp"
-#include "presentation/render/text_overlay.hpp"
-#include "presentation/sequence/transition_players.hpp"
-#include "presentation/render/widescreen_presenter.hpp"
-#include "presentation/render/widescreen.hpp"
-#include "presentation/window_util.hpp"
-#include "systems/frame_runner.hpp"
-#include "systems/screen_topology.hpp"
-#include "systems/spawning.hpp"
-#include "core/rng.hpp"
-#include <algorithm>
-#include <cmath>
-#include <cstring>
-#include <array>
-#include <functional>
-#include <map>
-#include <optional>
-
-#include "enhance/enhanced_hud.hpp"
-#include "enhance/hd_text.hpp"
-#include "presentation/menu/confirm_dialog.hpp"
-#include "presentation/enhance_flags.hpp"
-#include "presentation/diag/menu_script_util.hpp"
+#include "presentation/menu/pause_flow.hpp"         // load_menu_model
 #include "presentation/menu/settings_apply.hpp"
-#include "presentation/menu/settings_preview.hpp"
-#include "presentation/menu/settings_seed.hpp"
 #include "presentation/menu/settings_flow.hpp"
-#include "presentation/menu/staging_bindings.hpp"
+#include "presentation/menu/settings_seed.hpp"
 #include "presentation/menu/settings_session.hpp"
-#include "enhance/mmpx.hpp"
-#include "enhance/omniscale.hpp"
-#include "enhance/upscale.hpp"
-#include "formats/mdi.hpp"
-#include "formats/voc.hpp"
-#include "systems/cave_logic.hpp"
-#include "systems/collision_dispatch.hpp"
-#include "systems/fluid_bubbles.hpp"
-#include "systems/monster_ai.hpp"
-#include "systems/secret.hpp"
-#include "systems/transitions.hpp"
+#include "presentation/menu/staging_bindings.hpp"
+#include "presentation/render/boss_widescreen.hpp"  // boss_ws_margin
+#include "presentation/render/game_render.hpp"
+#include "presentation/render/text_overlay.hpp"
+#include "presentation/sequence/screens.hpp"
+#include "presentation/window_util.hpp"
 
 namespace olduvai::presentation {
 namespace {
 
+constexpr Uint32 kFrameMs = 1000 / 18;
+
+// A title frame: 320x200 upscaled into the title texture, then the 18 Hz
+// wait.  A window close quits; ESC skips the intro to the menu.
+struct TitlePresenter {
+    TitleMenuCtx& ctx;
+    SDL_Texture* tex = nullptr;
+    bool to_menu = false;
+
+    bool present(const FrameBuffer& f) {
+        cursor_autohide_frame();
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (handle_fullscreen_toggle(ev, ctx.pipe.sw.win)) continue;
+            if (ev.type == SDL_QUIT) {
+                ctx.quit_requested = true;
+                return false;
+            }
+            if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) {
+                to_menu = true;
+                return false;
+            }
+        }
+        upload_native_frame(tex, f, ctx.hd_scale, ctx.rt.hd_profile);
+        show_texture(ctx.pipe.sw.ren, tex);
+        present_output(ctx.pipe.sw.ren);
+        SDL_Delay(kFrameMs);
+        return true;
+    }
+    bool stopped() const { return ctx.quit_requested || to_menu; }
+};
+
+bool fire_held() {
+    const Uint8* k = SDL_GetKeyboardState(nullptr);
+    return k[SDL_SCANCODE_SPACE] != 0 ||
+           (k[SDL_SCANCODE_RETURN] != 0 && enter_skip_allowed()) ||
+           k[SDL_SCANCODE_LCTRL] != 0 || gamepad::fire_held();
+}
+
+// The publisher logo, the title cards and the BULLE dream hold.  The hold
+// waits for fire (edge-gated: the key that skipped TITRE2 must be released
+// first) with one fade-in and no fade-out, since the menu draws over the same
+// backdrop.  `headless` skips every hold; the intro music still starts.
+void play_intro(TitlePresenter& p, const formats::CurArchive& vga,
+                SdlAudio* audio, const std::vector<std::uint8_t>* intro_mdi,
+                bool headless) {
+    const PresentFn present = [&p](const FrameBuffer& f) {
+        return p.present(f);
+    };
+    const auto show = [&](const char* name, int hold_frames) {
+        if (p.stopped() || headless || !vga.contains(name)) return;
+        show_pc1_screen(formats::parse_pc1(vga.get(name).data), hold_frames,
+                        present, fire_held);
+    };
+    show("TITUS.PC1", 3 * 18);
+    play_mdi(audio, intro_mdi, "INTRO.MDI");
+    show("TITRE1.PC1", 20 * 18);
+    show("TITRE2.PC1", 10 * 18);
+    if (p.stopped() || headless || !vga.contains("BULLE.PC1")) return;
+    const formats::Pc1Image bulle = formats::parse_pc1(vga.get("BULLE.PC1").data);
+    const SkipFn never = [] { return false; };
+    show_pc1_screen(bulle, 1, present, never, /*fade_in=*/true,
+                    /*fade_out=*/false);
+    while (!p.stopped() && fire_held())
+        show_pc1_screen(bulle, 1, present, never, false, false);
+    if (!p.stopped())
+        show_pc1_screen(bulle, 1 << 28, present, fire_held, false, false);
+}
+
+// The menu's art: the BULLE backdrop, the charset, and the score bone
+// (L1SPR[33], 32x13) as the pointer, in FOND1's palette.
+struct MenuArt {
+    FrameBuffer bg;
+    std::vector<formats::Sprite> charset;
+    std::vector<formats::Sprite> bone_atlas;
+    std::vector<formats::Rgb> bone_palette;
+
+    const formats::Sprite* bone() const {
+        return bone_atlas.size() > 33 ? &bone_atlas[33] : nullptr;
+    }
+};
+
+std::optional<MenuArt> load_menu_art(const formats::CurArchive& cur,
+                                     const formats::CurArchive& vga) {
+    const formats::CurArchive* cs = cur.contains("CHARSET1.MAT")   ? &cur
+                                    : vga.contains("CHARSET1.MAT") ? &vga
+                                                                   : nullptr;
+    if (cs == nullptr || !vga.contains("BULLE.PC1")) return std::nullopt;
+    MenuArt art;
+    art.bg = pc1_frame(formats::parse_pc1(vga.get("BULLE.PC1").data));
+    art.charset = formats::load_mat_sprites(&cs->get("CHARSET1.MAT").data,
+                                            "CHARSET1.MAT");
+    for (const formats::CurArchive* ar : {&cur, &vga})
+        if (ar->contains("L1SPR.MAT")) {
+            art.bone_atlas = formats::load_mat_sprites(
+                &ar->get("L1SPR.MAT").data, "L1SPR.MAT");
+            break;
+        }
+    for (const formats::CurArchive* ar : {&vga, &cur})
+        if (ar->contains("FOND1.PC1")) {
+            art.bone_palette = formats::parse_pc1(ar->get("FOND1.PC1").data).palette;
+            break;
+        }
+    return art;
+}
+
+// OLDUVAI_MENU_SCRIPT: a headless walk, one token per frame (the
+// menu_script_util keys plus wait | shot | quit; `shot` writes
+// OLDUVAI_MENU_SCRIPT_DIR/NNN.png; the walk quits when the script ends).
+struct TitleScript {
+    std::vector<std::string> tokens =
+        parse_menu_script(std::getenv("OLDUVAI_MENU_SCRIPT"));
+    std::size_t next = 0;
+    int shots = 0;
+    std::string dir = std::getenv("OLDUVAI_MENU_SCRIPT_DIR") != nullptr
+                          ? std::getenv("OLDUVAI_MENU_SCRIPT_DIR")
+                          : ".";
+
+    bool active() const { return !tokens.empty(); }
+    bool done() const { return next >= tokens.size(); }
+
+    // Consume one token before the poll, so this frame's events see it.
+    void step(bool& want_quit, std::string& shot_path) {
+        if (done()) {
+            want_quit = true;
+            return;
+        }
+        const std::string& tok = tokens[next++];
+        if (tok == "quit") {
+            want_quit = true;
+        } else if (tok == "shot") {
+            char name[32];
+            std::snprintf(name, sizeof name, "%03d.png", shots++);
+            shot_path = dir + "/" + name;
+        } else if (tok != "wait") {
+            const SDL_Keycode sym = menu_token_sym(tok);
+            if (sym != SDLK_UNKNOWN) push_menu_key(sym);
+        }
+    }
+};
+
+// The main menu over the BULLE backdrop: Start / Continue / Options / Quit.
+// Options apply in place: the pipeline through run_game's adopt_pipeline
+// (window and audio rebuilt as needed), then the title's own texture, font
+// and music follow.
+class MainMenu {
+public:
+    MainMenu(TitleMenuCtx& ctx, TitlePresenter& p, MenuModel& model,
+             const MenuArt& art, const std::vector<std::uint8_t>* intro_mdi,
+             TitleScript& script, bool frozen_pointer)
+        : ctx_(ctx), p_(p), model_(model), art_(art), intro_mdi_(intro_mdi),
+          script_(script), frozen_pointer_(frozen_pointer),
+          menu_(model_, bind_, actions()),
+          flow_(model_, session_, confirm_, hooks()) {
+        GameOptions& rt = ctx_.rt;
+        bind_.attach(ctx_.pipe.audio.get(), ctx_.pipe.sw.win, &session_, rt);
+        bind_.live_hd_profile = &rt.hd_profile;
+        // Live Aspect: rt.aspect (the frame reads it) and the logical size.
+        bind_.apply_aspect = [this](const std::string& v) {
+            ctx_.rt.aspect = v;
+            set_aspect_logical(ctx_.pipe.sw.ren, ctx_.hd_scale, v);
+        };
+        // Start Game's level select: session-only, Level 1 every boot.
+        bind_.mem["menu.start_level"] = "1";
+        SDL_version sv;
+        SDL_GetVersion(&sv);
+        const std::string sdl = "SDL " + std::to_string(sv.major) + "." +
+                                std::to_string(sv.minor) + "." +
+                                std::to_string(sv.patch);
+        fill_about_screen(model_, about_lines(about_build(sdl), kAboutChars));
+        menu_.open("main");
+        if (ctx_.hd) font_.load(fbase_, ctx_.hd_scale, rt.hd_font);
+    }
+    ~MainMenu() = default;
+    MainMenu(const MainMenu&) = delete;
+    MainMenu& operator=(const MainMenu&) = delete;
+
+    void run() {
+        const char* mainmenu_shot = std::getenv("OLDUVAI_MAINMENU_SHOT");
+        std::string shot_path;   // set for one frame by a `shot` token
+        while (!ctx_.quit_requested) {
+            if (script_.active()) script_.step(want_quit_, shot_path);
+            poll();
+            if (menu_.is_open() && !confirm_.is_open())
+                flow_.track_screen(menu_.current_screen());
+            // Start Game / Quit with unconfirmed changes discards them.
+            if ((want_start_ || want_quit_) && !session_.empty())
+                flow_.discard();
+            if (ctx_.quit_requested) break;   // an apply's rebuild failed
+            draw();
+            if (!shot_path.empty()) {
+                capture_renderer_output(ctx_.pipe.sw.ren, shot_path);
+                shot_path.clear();
+            } else if (mainmenu_shot != nullptr && script_.done()) {
+                // OLDUVAI_MAINMENU_SHOT: one frame, then exit.
+                capture_renderer_output(ctx_.pipe.sw.ren, mainmenu_shot);
+                want_quit_ = true;
+            }
+            present_output(ctx_.pipe.sw.ren);
+            SDL_Delay(kFrameMs);
+            if (want_start_ || want_quit_) break;
+        }
+        if (want_quit_) ctx_.quit_requested = true;
+    }
+
+private:
+    MenuActionTable actions() {
+        return {
+            {"start_game", [this] {
+                // Level 1 leaves `display` alone (the normal title -> game
+                // flow); 2-7 jump there, like --level.  atoi is safe:
+                // menus.json declares a choice over [1..7].
+                const std::string lv = bind_.get("menu.start_level");
+                if (!lv.empty() && lv != "1")
+                    // NOLINTNEXTLINE(bugprone-unchecked-string-to-number-conversion)
+                    ctx_.display = std::atoi(lv.c_str());
+                want_start_ = true;
+            }},
+            {"continue", [this] {
+                if (ctx_.opts.save_path.empty()) return;
+                if (auto s = load_from_file(ctx_.opts.save_path)) {
+                    ctx_.menu_continue = s;
+                    ctx_.display = s->hdr.level;
+                    want_start_ = true;
+                }
+            }},
+            {"quit_desktop", [this] {
+                confirm_.ask("Exit game?", [this] { want_quit_ = true; });
+            }},
+        };
+    }
+
+    SettingsFlow::Hooks hooks() {
+        SettingsFlow::Hooks h = staging_flow_hooks(bind_, session_, &menu_);
+        h.apply_begin = [this] { target_ = display_settings_of(ctx_.rt); };
+        // Volume and fullscreen were previewed live, as was aspect (rt).
+        h.apply_change = [this](const StagedChange& ch, ApplyTier) {
+            set_display_key(target_, ch.key, ch.new_value);
+        };
+        h.apply_done = [this](bool) { apply(); };
+        h.confirm_note = [](bool any_reinit, bool any_persist) {
+            if (any_reinit || !any_persist)
+                return std::string("Apply settings now.");
+            return std::string("Saved - takes effect on next launch.");
+        };
+        return h;
+    }
+
+    void apply() {
+        const GameOptions& rt = ctx_.rt;
+        const int old_scale = ctx_.hd_scale;
+        const bool audio_changed = target_.music_device != rt.music_device ||
+                                   target_.sfx_backend != rt.sfx_backend;
+        if (!ctx_.pipe.adopt(target_, nullptr)) {
+            ctx_.quit_requested = true;
+            return;
+        }
+        bind_.rebind(ctx_.pipe.audio.get(), ctx_.pipe.sw.win,
+                     display_settings_of(rt));
+        if (ctx_.hd_scale != old_scale) {
+            SDL_DestroyTexture(p_.tex);
+            p_.tex = create_stream_tex(ctx_.pipe.sw.ren, 320 * ctx_.hd_scale,
+                                       200 * ctx_.hd_scale);
+            if (p_.tex == nullptr) {
+                std::fprintf(stderr,
+                             "settings: title texture recreate failed: %s\n",
+                             SDL_GetError());
+                ctx_.quit_requested = true;
+                return;
+            }
+            if (ctx_.hd) font_.load(fbase_, ctx_.hd_scale, rt.hd_font);
+        }
+        if (audio_changed)
+            play_mdi(ctx_.pipe.audio.get(), intro_mdi_, "INTRO.MDI");
+    }
+
+    void poll() {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (handle_fullscreen_toggle(ev, ctx_.pipe.sw.win)) continue;
+            if (ev.type == SDL_QUIT) {
+                want_quit_ = true;
+            } else if (ev.type == SDL_KEYDOWN) {
+                // ESC at the root reopens "main": nothing is behind it.
+                const bool dialog_took = menu_dialog_keydown(
+                    ev.key.keysym.sym, confirm_, flow_, menu_,
+                    [this] { menu_.open("main"); });
+                if (dialog_took && ctx_.quit_requested) return;
+            }
+        }
+    }
+
+    // Widescreen: the game's margin (boss_ws_margin) around the 320 menu.
+    // Classic has no wide framebuffer: "widescreen" means keep there.
+    int wide_margin() const {
+        if (ctx_.rt.aspect != "widescreen" || ctx_.hd_scale <= 1) return 0;
+        int ww = 0, wh = 0;
+        SDL_GetRendererOutputSize(ctx_.pipe.sw.ren, &ww, &wh);
+        return boss_ws_margin(ww, wh, std::getenv("OLDUVAI_WS_FORCE_MARGIN"));
+    }
+
+    void draw() {
+        SDL_Renderer* const ren = ctx_.pipe.sw.ren;
+        const int s = ctx_.hd_scale;
+        // Decided per frame: a Style apply rebuilds hd and the font mid-loop
+        // (tests/title_style_apply.sh).
+        const bool vector_text = ctx_.hd && font_.ok();
+        // Enhanced: slab and accent bar here, glyphs from the vector overlay.
+        // No dim: the backdrop is already dark.
+        FrameBuffer pf = art_.bg;
+        if (confirm_.is_open())
+            draw_confirm(pf, confirm_, art_.charset, /*dim=*/false,
+                         /*draw_text=*/!vector_text);
+        else
+            draw_menu(pf, menu_, art_.charset, /*dim=*/false,
+                      /*draw_text=*/!vector_text, art_.bone(),
+                      &art_.bone_palette);
+        upload_native_frame(p_.tex, pf, s, ctx_.rt.hd_profile);
+
+        const int margin = wide_margin() * s;
+        const LogicalDims ld =
+            margin > 0 ? LogicalDims{320 * s + 2 * margin, 200 * s}
+                       : aspect_logical(s, ctx_.rt.aspect);
+        SDL_RenderSetLogicalSize(ren, ld.w, ld.h);
+        const SDL_Rect centre{margin, 0, 320 * s, 200 * s};
+        show_texture(ren, p_.tex, margin > 0 ? &centre : nullptr);
+        if (vector_text) draw_vector_text(ld, margin);
+    }
+
+    void draw_vector_text(const LogicalDims& ld, int margin) {
+        overlay_.pass(ctx_.pipe.sw.ren, font_, ld.w, ld.h,
+                      [&](const enhance::Canvas& cv) {
+            const MenuFrame pic =
+                margin > 0 ? MenuFrame::picture(cv.w, cv.h, ld.w, ld.h, margin,
+                                                320 * ctx_.hd_scale)
+                           : MenuFrame::picture(cv.w, cv.h, ld.w, ld.h);
+            if (confirm_.is_open())
+                draw_confirm_vector(cv, font_, confirm_, pic);
+            else
+                draw_menu_vector(cv, font_, menu_,
+                                 // Frozen for a reproducible shot.
+                                 frozen_pointer_ ? 0.0f
+                                                 : SDL_GetTicks() / 1000.0f,
+                                 pic);
+        });
+    }
+
+    TitleMenuCtx& ctx_;
+    TitlePresenter& p_;
+    MenuModel& model_;
+    const MenuArt& art_;
+    const std::vector<std::uint8_t>* intro_mdi_;
+    TitleScript& script_;
+    bool frozen_pointer_;
+    SettingsSession session_;
+    ConfirmDialog confirm_;
+    StagingBindings bind_;
+    bool want_start_ = false;
+    bool want_quit_ = false;
+    Menu menu_;
+    DisplaySettings target_;   // the pipeline an Apply builds
+    SettingsFlow flow_;
+    const std::string fbase_ = sdl_base_dir();
+    enhance::HdText font_;
+    TextOverlay overlay_;
+};
 
 }  // namespace
 
 void run_title_menu(TitleMenuCtx& ctx) {
-    // Alias ctx members so the moved body reads verbatim.
-    auto& sw = ctx.sw;
-    auto& rt = ctx.rt;
-    auto& audio_opt = ctx.audio_opt;
-    const auto& opts = ctx.opts;
-    auto& hd = ctx.hd;
-    auto& hd_scale = ctx.hd_scale;
-    auto& display = ctx.display;
-    auto& quit_requested = ctx.quit_requested;
-    auto& menu_continue = ctx.menu_continue;
-    const bool autoloaded = ctx.autoloaded;
-    auto& rebuild_window = ctx.rebuild_window;
-    auto& load_all_sfx = ctx.load_all_sfx;
+    TitlePresenter p{ctx, create_stream_tex(ctx.pipe.sw.ren, 320 * ctx.hd_scale,
+                                            200 * ctx.hd_scale)};
+    // OLDUVAI_MAINMENU_SHOT and OLDUVAI_MENU_SCRIPT skip the intro holds
+    // (~30 s) and freeze the pointer animation (tests/mainmenu_shot.sh,
+    // tests/menu_script.sh).
+    TitleScript script;
+    const bool headless =
+        std::getenv("OLDUVAI_MAINMENU_SHOT") != nullptr || script.active();
+    const formats::CurArchive vga(
+        prepare::slurp_file(ctx.opts.game_dir / "FILESA.VGA"));
+    const formats::CurArchive cur(
+        prepare::slurp_file(ctx.opts.game_dir / "FILESA.CUR"));
+    const std::vector<std::uint8_t>* const intro_mdi =
+        cur.contains("INTRO.MDI") ? &cur.get("INTRO.MDI").data : nullptr;
 
-        SDL_Texture* itex =
-            create_stream_tex(sw.ren, 320 * hd_scale, 200 * hd_scale);
-        // Owner UX 2026-07-05: ESC during the intro is the QUICK PATH to
-        // the main menu (it used to quit).  Window-close still quits;
-        // quitting now lives in the menu (Exit Game).
-        bool intro_to_menu = false;
-        // Headless menu-shot hook: skip straight past the title cards to the
-        // menu (they hold for ~30 s with no keyboard to skip them, and the
-        // shot only verifies the menu compose — see tests/mainmenu_shot.sh).
-        const bool shot_mode = std::getenv("OLDUVAI_MAINMENU_SHOT") != nullptr;
-        // OLDUVAI_MENU_SCRIPT (title-menu walk): drive the MAIN menu headlessly
-        // with synthetic key events, one token per frame — the title-screen
-        // counterpart of run_platform_level's pause/menu walk.  Tokens: the
-        // plain keys from menu_script_util plus wait | shot | quit (`shot`
-        // dumps the composed frame to OLDUVAI_MENU_SCRIPT_DIR/NNN.png; the
-        // walk auto-quits when the script runs out).  Script mode skips the
-        // intro cards and the dream hold exactly like shot mode, and freezes
-        // the pointer animation for reproducible shots.  NB: pause-menu walks
-        // (tests/menu_script.sh) pass --level and never enter this loop; a
-        // title walk that starts a game would replay the script in-level.
-        const std::vector<std::string> menu_script =
-            parse_menu_script(std::getenv("OLDUVAI_MENU_SCRIPT"));
-        const bool script_mode = !menu_script.empty();
-        std::size_t menu_script_idx = 0;
-        int menu_shot_ctr = 0;
-        std::string menu_script_dir = ".";
-        if (const char* d = std::getenv("OLDUVAI_MENU_SCRIPT_DIR"))
-            menu_script_dir = d;
-        auto ipresent = [&](const FrameBuffer& f) -> bool {
-            cursor_autohide_frame();   // title/menu frames too
-            SDL_Event ev;
-            while (SDL_PollEvent(&ev)) {
-                if (handle_fullscreen_toggle(ev, sw.win)) continue;
-                if (ev.type == SDL_QUIT) {
-                    quit_requested = true;
-                    return false;
-                }
-                if (ev.type == SDL_KEYDOWN &&
-                    ev.key.keysym.sym == SDLK_ESCAPE) {
-                    intro_to_menu = true;
-                    return false;
-                }
-            }
-            upload_native_frame(itex, f, hd_scale, rt.hd_profile);
-            SDL_RenderClear(sw.ren);
-            SDL_RenderCopy(sw.ren, itex, nullptr, nullptr);
-            SDL_RenderPresent(sw.ren);
-            SDL_Delay(1000 / 18);
-            return true;
-        };
-        auto iskip = []() -> bool {
-            const Uint8* k = SDL_GetKeyboardState(nullptr);
-            return k[SDL_SCANCODE_SPACE] != 0 ||
-                   (k[SDL_SCANCODE_RETURN] != 0 && enter_skip_allowed()) ||
-                   k[SDL_SCANCODE_LCTRL] != 0 || gamepad::fire_held();
-        };
-        formats::CurArchive iva(prepare::slurp_file(opts.game_dir / "FILESA.VGA"));
-        formats::CurArchive ifa(prepare::slurp_file(opts.game_dir / "FILESA.CUR"));
-        const std::vector<std::uint8_t>* const intro_mdi =
-            ifa.contains("INTRO.MDI") ? &ifa.get("INTRO.MDI").data : nullptr;
-        auto show = [&](const char* name, int hold_frames) {
-            if (quit_requested || intro_to_menu || shot_mode || script_mode ||
-                !iva.contains(name))
-                return;
-            show_pc1_screen(formats::parse_pc1(iva.get(name).data),
-                            hold_frames, ipresent, iskip);
-        };
-        show("TITUS.PC1", 3 * 18);              // publisher logo
-        play_mdi(&*audio_opt, intro_mdi, "INTRO.MDI");
-        show("TITRE1.PC1", 20 * 18);            // title card (skippable)
-        show("TITRE2.PC1", 10 * 18);
-        // ── BULLE "dreaming caveman" attract hold (owner UX 2026-07-05):
-        // the original press-fire wait is RESTORED — the full dream screen
-        // sits uncovered until fire (SPACE / LCTRL / RETURN) opens the
-        // menu, or ESC (handled in ipresent) jumps there.  Edge-gated:
-        // the keypress that skipped TITRE2 must be RELEASED first, so
-        // skipping the cards lands on the dream screen instead of
-        // falling straight through into the menu.
-        // (OLDUVAI_MAINMENU_SHOT and script walks skip the hold — the
-        // headless hooks have no keyboard to press fire with.)
-        if (!quit_requested && !intro_to_menu && iva.contains("BULLE.PC1") &&
-            !shot_mode && !script_mode) {
-            const formats::Pc1Image bulle_hold =
-                formats::parse_pc1(iva.get("BULLE.PC1").data);
-            auto no_skip = []() -> bool { return false; };
-            // One fade-in onto the dream screen, then raw frames only —
-            // NO fade-out on fire: the menu draws straight over the same
-            // BULLE backdrop (owner UX: no black dip between "dream
-            // uncovered" and "dream + menu").
-            show_pc1_screen(bulle_hold, 1, ipresent, no_skip,
-                            /*fade_in=*/true, /*fade_out=*/false);
-            while (!quit_requested && !intro_to_menu && iskip())
-                show_pc1_screen(bulle_hold, 1, ipresent, no_skip,
-                                /*fade_in=*/false, /*fade_out=*/false);
-            if (!quit_requested && !intro_to_menu)
-                show_pc1_screen(bulle_hold, 1 << 28, ipresent, iskip,
-                                /*fade_in=*/false, /*fade_out=*/false);
+    play_intro(p, vga, ctx.pipe.audio.get(), intro_mdi, headless);
+
+    if (!ctx.quit_requested && !ctx.autoloaded) {
+        std::optional<MenuModel> model = load_menu_model(ctx.rt.profile_family);
+        const std::optional<MenuArt> art = load_menu_art(cur, vga);
+        if (art && model) {
+            MainMenu menu(ctx, p, *model, *art, intro_mdi, script, headless);
+            menu.run();
         }
-        // ── Main menu over the BULLE backdrop (Start / Continue / Options /
-        // Quit) — reached only via fire/SPACE from the dream hold or ESC. ──
-        const formats::CurArchive* cs_ar =
-            ifa.contains("CHARSET1.MAT") ? &ifa
-            : iva.contains("CHARSET1.MAT") ? &iva : nullptr;
-        if (!quit_requested && iva.contains("BULLE.PC1") && cs_ar && !autoloaded) {
-            const formats::Pc1Image bulle =
-                formats::parse_pc1(iva.get("BULLE.PC1").data);
-            FrameBuffer bg;
-            for (std::size_t i = 0;
-                 i < bulle.pixels.size() && i < 320u * 200u; ++i) {
-                const std::uint8_t idx = bulle.pixels[i];
-                const auto c = idx < bulle.palette.size() ? bulle.palette[idx]
-                                                          : formats::Rgb{};
-                bg.px[i * 4] = c.r; bg.px[i * 4 + 1] = c.g;
-                bg.px[i * 4 + 2] = c.b; bg.px[i * 4 + 3] = 255;
-            }
-            const auto mcharset = formats::MatFile(
-                cs_ar->get("CHARSET1.MAT").data, "CHARSET1.MAT").sprites();
-            // Score-bone sprite (L1SPR[33], 32x13) for the white selection
-            // pointer — same art on every level, so L1's atlas serves the
-            // pre-level main menu.
-            std::vector<formats::Sprite> menu_bone_atlas;
-            const formats::Sprite* menu_bone = nullptr;
-            std::vector<formats::Rgb> menu_bone_pal;
-            for (const formats::CurArchive* ar : {&ifa, &iva})
-                if (ar->contains("L1SPR.MAT")) {
-                    menu_bone_atlas = formats::MatFile(
-                        ar->get("L1SPR.MAT").data, "L1SPR.MAT").sprites();
-                    if (menu_bone_atlas.size() > 33)
-                        menu_bone = &menu_bone_atlas[33];
-                    break;
-                }
-            for (const formats::CurArchive* ar : {&iva, &ifa})
-                if (ar->contains("FOND1.PC1")) {
-                    menu_bone_pal =
-                        formats::parse_pc1(ar->get("FOND1.PC1").data).palette;
-                    break;
-                }
-            std::optional<MenuModel> mm = load_menu_model();
-            if (mm) {
-                // SettingsSession + ConfirmDialog for the main-menu Options batch
-                // staging flow (§8.6).  Mirrors the in-game Pause wiring exactly.
-                SettingsSession main_session;
-                ConfirmDialog   main_confirm;
-
-                // Main-menu Options: writes the edited value back to `rt` so
-                // Start Game uses it this session, and takes the Tier-1 live
-                // path for same-scale hd_profile + aspect.  The rest is the
-                // shared skeleton (no live cheat.god / autofire on this menu).
-                struct MBind : StagingBindings {
-                    GameOptions* rt = nullptr;   // write back so Start Game uses the edited value this session
-                    // Tier-1 live Aspect: sets rt.aspect + SDL_RenderSetLogicalSize.
-                    // The main-menu flush dims are recomputed per-frame from
-                    // rt.aspect, so this just gives immediate effect.
-                    std::function<void(const std::string&)> apply_aspect;
-
-                  protected:
-                    void apply_live_preview(const std::string& k,
-                                            const std::string& v) override {
-                        if (k == "hd_profile") {
-                            // Same-scale hd_profile: live-swap the rt field the upscaler reads.
-                            const ApplyTier tier = classify_change(k, v, cur);
-                            if (tier == ApplyTier::Live && rt)
-                                rt->hd_profile = v;
-                        } else if (k == "aspect" && apply_aspect) {
-                            apply_aspect(v);   // Tier-1 live: logical-size only
-                        }
-                    }
-                } mbind;
-                mbind.audio = &*audio_opt; mbind.win = sw.win;
-                mbind.enhanced = rt.enhanced; mbind.persist = &opts.persist;
-                mbind.rt = &rt;
-                mbind.session = &main_session;
-                mbind.sound_avail = probe_sound_cards(rt.rom_dir, rt.soundfont);
-                SettingsSeed seed;
-                seed.enhanced = rt.enhanced;
-                seed.hd_profile = rt.hd_profile;
-                seed.render_scale = rt.render_scale;
-                seed.music_device = rt.music_device;
-                seed.sfx_backend = rt.sfx_backend;
-                seed.aspect = rt.aspect;
-                seed.fullscreen =
-                    (SDL_GetWindowFlags(sw.win) &
-                     SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
-                seed.flags = rt.enhance;
-                seed.profile_family = rt.profile_family;
-                seed_settings_mem(mbind, seed);
-                // Tier-1 live Aspect on the title: set rt.aspect (the per-frame
-                // flush dims read it) + SDL_RenderSetLogicalSize for immediacy.
-                mbind.apply_aspect = [&](const std::string& v) {
-                    rt.aspect = v;
-                    const LogicalDims ld = aspect_logical(hd_scale, v);
-                    SDL_RenderSetLogicalSize(sw.ren, ld.w, ld.h);
-                };
-
-                // Start Game level select (left/right on the Start row) —
-                // session-only, defaults to Level 1 every boot.
-                mbind.mem["menu.start_level"] = "1";
-
-                bool want_start = false, want_quit = false;
-                MenuActionTable acts = {
-                    {"start_game", [&] {
-                        // Level 1 leaves `display` untouched so the classic
-                        // title→game flow stays exactly as before; 2-7 jump
-                        // straight into the chosen level (the CLI --level
-                        // semantics), mirroring the Continue handler below.
-                        const std::string lv = mbind.get("menu.start_level");
-                        // atoi is safe HERE for the same reason as
-                        // pause_flow's cheat.start_level: menus.json declares
-                        // menu.start_level as type "choice" over [1..7], and
-                        // this engine seeds it at :306. Nothing types into it.
-                        if (!lv.empty() && lv != "1")
-                            // NOLINTNEXTLINE(bugprone-unchecked-string-to-number-conversion)
-                            display = std::atoi(lv.c_str());
-                        want_start = true;
-                    }},
-                    {"continue", [&] {
-                        if (!opts.save_path.empty())
-                            if (auto s = load_from_file(opts.save_path)) {
-                                menu_continue = s;
-                                display = s->hdr.level;
-                                want_start = true;
-                            }
-                    }},
-                    {"quit_desktop", [&] {
-                        main_confirm.ask("Exit game?", [&] { want_quit = true; });
-                    }},
-                };
-                // About: the build's own facts, written into the model's
-                // readout rows before the Menu reads it.
-                {
-                    SDL_version sv;
-                    SDL_GetVersion(&sv);
-                    const std::string sdl = "SDL " + std::to_string(sv.major) +
-                                            "." + std::to_string(sv.minor) +
-                                            "." + std::to_string(sv.patch);
-                    fill_about_screen(*mm, about_lines(about_build(sdl),
-                                                       kAboutChars));
-                }
-                Menu menu(*mm, mbind, acts);
-                menu.open("main");
-                // Enhanced mode: render the menu text with the SAME cartoony
-                // vector font the in-game Pause overlay + HUD use, so the title
-                // menu matches.  Classic mode keeps the bitmap glyphs (drawn by
-                // draw_menu).  Mirrors run_platform_level's use_hd_text gate.
-                // fbase is hoisted out of the if(hd) block so the apply block
-                // can re-call menu_font.load() without re-querying SDL.
-                const std::string fbase = sdl_base_dir();
-                enhance::HdText menu_font;
-                if (hd) {
-                    menu_font.load(fbase, hd_scale, rt.hd_font);
-                }
-                TextOverlay menu_overlay;
-                // SettingsFlow: the SAME controller the in-game Pause path
-                // uses (OL-B1) — subtree membership from *mm, staging via
-                // main_session, confirm lifecycle on main_confirm.  Only the
-                // hooks differ: this environment writes rt.* and rebuilds
-                // window/audio IN PLACE (no PendingReinit — there is no level
-                // to snapshot on the title screen).
-                SettingsFlow::Hooks main_hooks;
-                main_hooks.persist = [&](const std::string& k,
-                                         const std::string& v) {
-                    mbind.save(k, v);
-                };
-                main_hooks.classify = [&](const std::string& k,
-                                          const std::string& v) {
-                    // mbind.cur is the baseline snapshot — untouched while the
-                    // apply loop runs (refreshed in apply_done below).
-                    // Set-aware: the Style preset's keys only cross the
-                    // classic<->HD boundary together.
-                    std::vector<std::pair<std::string, std::string>> staged;
-                    for (const auto& ch : main_session.changes())
-                        staged.emplace_back(ch.key, ch.new_value);
-                    return classify_change_in_set(k, v, mbind.cur, staged);
-                };
-                main_hooks.apply_change = [&](const StagedChange& ch,
-                                              ApplyTier tier) {
-                    // APPLY: write rt so Start Game uses the edited values.
-                    (void)tier;   // Live hd_profile already previewed via rt
-                    if (ch.key == "render_scale" &&
-                        rt.render_scale != parse_i(ch.new_value,
-                                                   rt.render_scale)) {
-                        rt.render_scale = parse_i(ch.new_value,
-                                                  rt.render_scale);
-                    } else if (ch.key == "hd_profile") {
-                        rt.hd_profile = ch.new_value;
-                    } else if (ch.key == "music_device") {
-                        rt.music_device = ch.new_value;
-                    } else if (ch.key == "sfx_backend") {
-                        rt.sfx_backend = ch.new_value;
-                    } else if (ch.key == "enhanced") {
-                        // Preset row: crossing the classic<->HD boundary.
-                        rt.enhanced = ch.new_value == "true" ||
-                                      ch.new_value == "1";
-                    } else if (ch.key == "aspect") {
-                        rt.aspect = ch.new_value;   // live-previewed; keep rt
-                    }
-                    // volume/fullscreen already live-previewed; no rt field.
-                };
-                main_hooks.apply_done = [&](bool needs_reinit) {
-                    // Baseline BEFORE the apply (mbind.cur is refreshed below;
-                    // it was untouched during the loop, so this equals the
-                    // pre-loop snapshot the old inline block captured).
-                    const DisplaySettings base = mbind.cur;
-                    // Update baseline snapshot for subsequent edits.
-                    mbind.cur = {rt.enhanced,
-                                 rt.hd_profile.empty() ? "native" : rt.hd_profile,
-                                 rt.render_scale,
-                                 rt.music_device,
-                                 rt.sfx_backend};
-                    // In-place rebuild (display + audio) if any Reinit-class
-                    // key was applied.
-                    if (!needs_reinit) return;
-                    const int new_scale =
-                        hd_scale_for(rt.enhanced, rt.hd_profile, rt.render_scale);
-                    if (new_scale != hd_scale) {
-                        hd = hd_active(rt.enhanced, rt.hd_profile);
-                        hd_scale = new_scale;
-                        if (!rebuild_window(hd_scale)) {
-                            std::fprintf(stderr,
-                                "settings: aborting after failed window rebuild\n");
-                            quit_requested = true;
-                            return;
-                        }
-                        SDL_DestroyTexture(itex);
-                        itex = create_stream_tex(sw.ren, 320 * hd_scale,
-                                                 200 * hd_scale);
-                        if (!itex) {
-                            std::fprintf(stderr,
-                                "settings: title texture recreate failed: %s\n",
-                                SDL_GetError());
-                            quit_requested = true;
-                            return;
-                        }
-                        if (hd)
-                            menu_font.load(fbase, hd_scale, rt.hd_font);
-                    }
-                    // Rebuild audio if device/backend changed.
-                    const bool audio_changed =
-                        (rt.music_device != base.music_device ||
-                         rt.sfx_backend  != base.sfx_backend);
-                    if (audio_changed) {
-                        audio_opt.reset();
-                        audio_opt.emplace(rt.music_device, rt.rom_dir, rt.soundfont,
-                                          rt.sfx_backend, rt.audio_rate,
-                                          rt.audio_buffer, rt.midi_port);
-                        load_all_sfx(*audio_opt);
-                        mbind.audio = &*audio_opt;
-                        play_mdi(&*audio_opt, intro_mdi, "INTRO.MDI");
-                    }
-                };
-                // Discard: revert staged changes, undo live previews.
-                main_hooks.revert_change = [&](const StagedChange& ch) {
-                    mbind.mem[ch.key] = ch.old_value;
-                    // Cheap live preview at baseline (shared:
-                    // settings_preview.hpp); site-specific live keys follow.
-                    if (preview_cheap_key(ch.key, ch.old_value, mbind.audio,
-                                          mbind.win, mbind.enhanced)) {
-                        // handled
-                    } else if (ch.key == "hd_profile" && mbind.rt) {
-                        mbind.rt->hd_profile = ch.old_value;
-                    } else if (ch.key == "aspect" && mbind.apply_aspect) {
-                        mbind.apply_aspect(ch.old_value);
-                    }
-                };
-                main_hooks.reopen_options = [&]() { menu.open("options"); };
-                main_hooks.value_of = [&mbind](const std::string& k) {
-                    return mbind.get(k);
-                };
-                main_hooks.confirm_note = [](bool any_reinit, bool any_persist) {
-                    if (any_reinit || !any_persist)
-                        return std::string("Apply settings now.");
-                    return std::string(
-                        "Saved - takes effect on next launch.");
-                };
-                SettingsFlow main_flow(*mm, main_session, main_confirm,
-                                       std::move(main_hooks));
-                const char* mainmenu_shot = std::getenv("OLDUVAI_MAINMENU_SHOT");
-                std::string pending_shot;   // set for one frame by a `shot` token
-                bool done = false;
-                while (!done && !quit_requested) {
-                    // OLDUVAI_MENU_SCRIPT: consume one token before the poll so
-                    // the synthetic key is processed by this frame's event loop
-                    // (mirrors run_platform_level's consumer).
-                    if (script_mode) {
-                        if (menu_script_idx >= menu_script.size()) {
-                            want_quit = true;   // auto-exit at end of script
-                        } else {
-                            const std::string& tok =
-                                menu_script[menu_script_idx++];
-                            if (tok == "quit") want_quit = true;
-                            else if (tok == "wait") { /* idle one frame */ }
-                            else if (tok == "shot") {
-                                char nm[32];
-                                std::snprintf(nm, sizeof nm, "%03d.png",
-                                              menu_shot_ctr++);
-                                pending_shot = menu_script_dir + "/" + nm;
-                            } else {
-                                const SDL_Keycode sym = menu_token_sym(tok);
-                                if (sym != SDLK_UNKNOWN) push_menu_key(sym);
-                            }
-                        }
-                    }
-                    SDL_Event ev;
-                    while (SDL_PollEvent(&ev)) {
-                        if (handle_fullscreen_toggle(ev, sw.win)) continue;
-                        if (ev.type == SDL_QUIT) want_quit = true;
-                        else if (ev.type == SDL_KEYDOWN) {
-                            const auto sym = ev.key.keysym.sym;
-                            // Same routing as both pause menus
-                            // (dialog_key_map.hpp); ESC at the ROOT re-opens
-                            // "main" instead of closing — there is nothing
-                            // behind the title menu.
-                            const bool dialog_took =
-                                menu_dialog_keydown(sym, main_confirm,
-                                                    main_flow, menu,
-                                                    [&] { menu.open("main"); });
-                            // Failed window/texture rebuild during an apply:
-                            // stop draining events against a torn-down
-                            // renderer (matches the old inline break).
-                            if (dialog_took && quit_requested) break;
-                        }
-                    }
-                    // ── Options-subtree exit detection (§8.6) ──────────────
-                    // When the user backs out from Options to "main" and there
-                    // are staged changes, open the Save & Apply / Discard dialog.
-                    // is_open() as well: both pause sites check it, this one
-                    // did not, and a closed menu's current_screen() used to
-                    // be undefined behaviour (menu.hpp).
-                    if (menu.is_open() && !main_confirm.is_open())
-                        main_flow.track_screen(menu.current_screen());
-                    // ── Close-without-apply revert ──────────────────────────
-                    // If Start Game / Quit fires with unconfirmed staged changes,
-                    // discard them so previews don't leak into the game.
-                    if ((want_start || want_quit) && !main_session.empty())
-                        main_flow.discard();
-                    if (quit_requested) break;   // window/texture rebuild failed — don't render against a torn-down renderer
-                    // ── Render ──────────────────────────────────────────────
-                    // Vector-vs-bitmap glyph gate, recomputed EVERY frame
-                    // (mirrors the boss pause): a Style preset Apply at the
-                    // title is reinit-class (classify_change_in_set), and
-                    // apply_done/apply_change rebuild hd + menu_font and adopt
-                    // enhance.* into rt mid-loop — a pre-loop latch kept the
-                    // classic bitmap glyphs after applying Enhanced HD (see
-                    // tests/title_style_apply.sh).
-                    const bool menu_use_vector = hd && menu_font.ok();
-                    FrameBuffer pf = bg;
-                    // In enhanced mode the slab + accent bar come from draw_menu
-                    // (native, upscaled) and the glyphs from the vector overlay;
-                    // classic mode draws the bitmap glyphs here.  No full-frame
-                    // dim here (unlike the in-game Pause overlay): the BULLE
-                    // intro backdrop is already near-black, so the slab alone
-                    // gives enough separation — dimming would just muddy it.
-                    if (main_confirm.is_open()) {
-                        draw_confirm(pf, main_confirm, mcharset, /*dim=*/false,
-                                     /*draw_text=*/!menu_use_vector);
-                    } else {
-                        draw_menu(pf, menu, mcharset, /*dim=*/false,
-                                  /*draw_text=*/!menu_use_vector, menu_bone,
-                                  &menu_bone_pal);
-                    }
-                    upload_native_frame(itex, pf, hd_scale, rt.hd_profile);
-                    SDL_RenderClear(sw.ren);
-                    // Widescreen: OWN the geometry — compute the wide margin
-                    // from the window aspect (same math as the in-game path:
-                    // boss_ws_margin), set the WIDE logical size, and
-                    // PILLARBOX the 320 menu frame at its centre, mapping the
-                    // glyph overlay into the same frame rect.  Before this
-                    // the menu rendered under a stale 4:3 logical while the
-                    // flush used other dims — the misaligned main menu.
-                    // (aspect_logical returns the 4:3 fallback for
-                    // "widescreen"; only the game loop derives wide dims.)
-                    LogicalDims mld = aspect_logical(hd_scale, rt.aspect);
-                    int menu_ws_m = 0;
-                    // hd_scale > 1: classic mode has no wide framebuffer —
-                    // aspect_logical's "widescreen" falls back to keep there,
-                    // and the menu must match (no pillarbox, no wide logical).
-                    if (rt.aspect == "widescreen" && hd_scale > 1) {
-                        int ww = 0, wh = 0;
-                        SDL_GetRendererOutputSize(sw.ren, &ww, &wh);
-                        menu_ws_m = boss_ws_margin(
-                            ww, wh, std::getenv("OLDUVAI_WS_FORCE_MARGIN"));
-                    }
-                    if (menu_ws_m > 0) {
-                        mld.w = (320 + 2 * menu_ws_m) * hd_scale;
-                        mld.h = 200 * hd_scale;
-                    }
-                    SDL_RenderSetLogicalSize(sw.ren, mld.w, mld.h);
-                    const int mm_margin = menu_ws_m * hd_scale;
-                    if (mm_margin > 0) {
-                        SDL_SetRenderDrawColor(sw.ren, 0, 0, 0, 255);
-                        SDL_RenderFillRect(sw.ren, nullptr);
-                        SDL_Rect mdst{mm_margin, 0, 320 * hd_scale,
-                                      200 * hd_scale};
-                        SDL_RenderCopy(sw.ren, itex, nullptr, &mdst);
-                    } else {
-                        SDL_RenderCopy(sw.ren, itex, nullptr, nullptr);
-                    }
-                    if (menu_use_vector) {
-                        int ow = 0, oh = 0;
-                        if (menu_overlay.begin(sw.ren, menu_font, ow, oh)) {
-                            // The picture's rect in the output (§3.23); in
-                            // widescreen the centre 320 at mm_margin.
-                            const MenuFrame pic =
-                                mm_margin > 0
-                                    ? MenuFrame::picture(ow, oh, mld.w, mld.h,
-                                                         mm_margin,
-                                                         320 * hd_scale)
-                                    : MenuFrame::picture(ow, oh, mld.w, mld.h);
-                            if (main_confirm.is_open())
-                                draw_confirm_vector(menu_overlay.buffer(), ow, oh,
-                                                    menu_font, main_confirm, pic);
-                            else
-                                draw_menu_vector(menu_overlay.buffer(), ow, oh,
-                                                 menu_font, menu,
-                                                 // Freeze the pointer animation
-                                                 // for a reproducible shot.
-                                                 (shot_mode || script_mode)
-                                                     ? 0.0f
-                                                     : SDL_GetTicks() / 1000.0f,
-                                                 pic);
-                            menu_overlay.flush(sw.ren, mld.w, mld.h);
-                        }
-                    }
-                    // Headless verify: read back the composited frame (slab +
-                    // vector text) before present.
-                    const auto dump_frame = [&](const std::string& path) {
-                        capture_renderer_output(sw.ren, path);
-                    };
-                    if (!pending_shot.empty()) {
-                        // `shot` token: dump and keep walking.
-                        dump_frame(pending_shot);
-                        pending_shot.clear();
-                    } else if (mainmenu_shot &&
-                               menu_script_idx >= menu_script.size()) {
-                        // OLDUVAI_MAINMENU_SHOT: one frame, then exit the loop.
-                        // No script → the first frame (the classic hook); with
-                        // a walk, the shot waits until the script has run out.
-                        dump_frame(mainmenu_shot);
-                        want_quit = true;
-                    }
-                    SDL_RenderPresent(sw.ren);
-                    SDL_Delay(1000 / 18);
-                    if (want_start || want_quit) done = true;
-                }
-                if (want_quit) quit_requested = true;
-            }
-        }
-        audio_opt->stop_music();
-        SDL_DestroyTexture(itex);
+    }
+    ctx.pipe.audio->stop_music();
+    SDL_DestroyTexture(p.tex);
 }
 
 }  // namespace olduvai::presentation

@@ -5,6 +5,7 @@
 
 #include "formats/unsqz.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <cstddef>
@@ -92,7 +93,7 @@ std::uint64_t fnv1a64_file(const fs::path& path, bool& ok,
     std::ifstream in(path, std::ios::binary);
     if (!in) return 0;
     formats::Hash64 h;
-    std::array<char, 1 << 16> buf;
+    std::array<char, 1 << 16> buf{};
     while (in) {
         in.read(buf.data(), static_cast<std::streamsize>(buf.size()));
         const std::streamsize n = in.gcount();
@@ -189,10 +190,9 @@ GameFiles detect_game_files(const fs::path& game_dir) {
 
 bool GameFiles::complete() const {
     if (files.size() != required_game_files().size()) return false;
-    for (const auto& f : files) {
-        if (!f.present || f.zero_byte) return false;
-    }
-    return true;
+    return std::all_of(files.begin(), files.end(), [](const auto& f) {
+        return f.present && !f.zero_byte;
+    });
 }
 
 std::string GameFiles::problems() const {

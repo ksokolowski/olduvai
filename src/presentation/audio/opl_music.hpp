@@ -1,20 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Authentic AdLib music driver — C++ port of the reference EXE-faithful OPL
-// renderer, streaming through the
-// vendored Nuked-OPL3 core.  Music MUST use the same emulator as the OPL SFX
-// path (opl_sfx.cpp) so the music-vs-SFX volume balance matches what the
-// EXE/DOSBox-X produces — DBOPL pumps music to clipping where Nuked sits at
-// ~70% peak.
-//
-// The driver consumes the RAW music container (formats::parse_mdi_events) so
-// the FF 7F voice patches reach the chip — the GM converter strips them.
-// Key EXE mirrors (evidence cited at the implementation sites):
-//   * velocity→TL scaling        AdLib_ChangeVolume   FUN_1fe0_0234
-//   * note-set semantics         MDI_ChannelNoteSet   FUN_1ecd_045a
-//   * carrier/modulator gating   flag table           DS:0x1ba3
-//   * loop = stream-pointer reset without chip reset (gapless, ringing notes
-//     carry into the next iteration — MDI dispatcher resets to DS:0x8834).
+// AdLib music driver (EXE-faithful OPL) on the vendored Nuked-OPL3 core, the
+// same emulator as the OPL SFX so the music/SFX balance matches the EXE (DBOPL
+// drives music to clipping).  Consumes the raw music container
+// (parse_mdi_events), so the FF 7F voice patches reach the chip.  EXE mirrors:
+//   * velocity -> TL scaling       AdLib_ChangeVolume   FUN_1fe0_0234
+//   * note-set semantics           MDI_ChannelNoteSet   FUN_1ecd_045a
+//   * carrier/modulator gating     flag table           DS:0x1ba3
+//   * loop = stream pointer reset (DS:0x8834) without a chip reset: gapless,
+//     ringing notes carry into the next pass.
 
 #pragma once
 
@@ -26,10 +20,8 @@
 
 #include "formats/mdi.hpp"
 
-// Name inherited from the vendored Nuked-OPL3 (third_party/nuked_opl3/opl3.h
-// declares struct `_opl3_chip` as the tag behind its `opl3_chip` typedef); we
-// forward-declare it verbatim so the opaque pointer stays the same type as
-// the vendor's.
+// Nuked-OPL3's struct tag behind its `opl3_chip` typedef, forward-declared so
+// the opaque pointer is the vendor's type.
 // NOLINTNEXTLINE(bugprone-reserved-identifier)
 struct _opl3_chip;
 
@@ -50,10 +42,8 @@ public:
     void stop();
     bool active() const { return active_; }
 
-    // Render exactly `frames` stereo int16 frames (interleaved, 2*frames
-    // shorts).  Zero-fills past the end of a non-looping track; returns the
-    // number of frames actually generated before the fill (== frames while
-    // the track plays) so one-shot renders can trim to the exact length.
+    // Render exactly `frames` stereo int16 frames.  Zero-fills past the end of
+    // a non-looping track; returns the frames generated before the fill.
     int render(int frames, std::int16_t* out);
 
     // Test observer: sees every OPL register write (reg, value).

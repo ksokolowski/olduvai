@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Core gameplay data types — no SDL, no I/O.
-//
-// Field naming: semantic primary names; data-table fields keep their
+// Core gameplay types, no SDL, no I/O.  Semantic names; data-table fields keep
 // register-style suffixes where the evidence is keyed to them.
 
 #pragma once
@@ -73,14 +71,11 @@ struct Entity {
     // Smooth-motion enhancement only (render interpolation; never read by
     // game logic).
     int prev_x = 0, prev_y = 0;
-    // Sub-pixel render position written by the smooth-motion lerp and read by
-    // draw_entities ONLY when RenderTarget::use_float_pos is set (HD path) —
-    // gives Python's 1-HD-pixel motion granularity instead of the integer
-    // lerp's 4-HD-pixel snap.  Untouched (and unread) on every other path.
+    // Sub-pixel render position from the smooth-motion lerp, read only when
+    // RenderTarget::use_float_pos (the HD path).
     float fx = 0.0f, fy = 0.0f;
-    // Float render shadows for the other interpolated per-entity fields
-    // (moving-platform current_y, chimp throw, spider/snowman bob) — same HD
-    // smooth-motion path, same use_float_pos gate.
+    // Float shadows for the other interpolated fields (platform current_y,
+    // chimp throw, spider/snowman bob); same gate.
     float f_current_y = 0.0f;
     float f_throw_x = 0.0f, f_throw_y = 0.0f;
     float f_draw_dy = 0.0f;
@@ -133,16 +128,11 @@ struct Entity {
     std::array<int, 4> bird_heights{};
     int bird_height_idx = 0;
     int bird_anim = 0;
-    // Off-screen-left despawn bound for the bird (EXE: x < -50 = off the 320
-    // screen).  Default keeps that faithful value; the WIDESCREEN render path
-    // lowers it to the wide-margin edge so the bird flies fully off the strip
-    // instead of vanishing inside it.  Render-coupled (set only when widescreen
-    // is active) — classic stays byte-identical.
+    // Bird despawn bound on the left (EXE: x < -50).  Widescreen moves it to
+    // the wide edge so the bird leaves the strip; classic unchanged.
     int off_screen_left = -50;
-    // Off-screen-RIGHT spawn x for the bird (EXE: 355 = off the 320 screen, so
-    // it flies IN).  In widescreen x=355 lands inside the right margin → it pops
-    // in; the WIDESCREEN render path raises it past the wide edge so it flies in
-    // continuously.  Same gating as off_screen_left (classic byte-identical).
+    // Bird spawn x on the right (EXE: 355, off the 320 screen).  Widescreen
+    // moves it past the wide edge so the bird flies in; classic unchanged.
     int bird_spawn_x = 355;
     // Spider
     int draw_dy = 0;

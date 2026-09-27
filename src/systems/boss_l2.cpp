@@ -13,11 +13,9 @@ namespace {
 
 int lcg() { return static_cast<int>(core::global_rng().next()); }
 
-// Diagnostic: with OLDUVAI_LOG_L2_SPAWN set, log each dino spawn side + the
-// running right/left tally to stderr.  Lets a real playthrough report the
-// actual distribution (the spawn-side decision is rand%100>50, EXE-faithful
-// per FUN_23cf_06ec 0x0731-0x073a idiv-100; measured ~48% right over 200k
-// frames — see Finding l2_dino_spawn_side_balanced.md).
+// OLDUVAI_LOG_L2_SPAWN: log each dino spawn side and the right/left tally.  The
+// side is rand%100>50 (FUN_23cf_06ec 0x0731-0x073a, idiv 100; measured ~48%
+// right over 200k frames).
 void log_spawn_side(int direction) {
     static const bool on = std::getenv("OLDUVAI_LOG_L2_SPAWN") != nullptr;
     if (!on) return;
@@ -52,24 +50,15 @@ void check_knockback(BossPlayerState& p) {
     }
 }
 
-// One projectile slot, per state.  The three used to be if-blocks inside
-// update_projectiles' loop; they are the same code, and the same order of LCG
-// draws, in a function each.
-//
-// The shape is the EXE's own: FUN_23cf_06ec dispatches on ptype through a JUMP
-// TABLE (indirect jump at +0x0717, table at +0x071c), after
-// rejecting ptype > 2 at +0x070b.  One function per state is what the original
-// does, not a reading imposed on it.
-//
-// RNG-critical, and checked against the EXE rather than against the trace (a
-// trace diff proves the two ENGINES agree, which is a different claim): the
-// whole function has exactly three Rand_LCG16 call sites, all in the spawn
-// state — +0x072c, +0x0778, +0x078e.  Flight and deflect draw nothing.
+// One projectile slot, one function per state, as the EXE's jump table
+// (FUN_23cf_06ec: ptype > 2 rejected at +0x070b, indirect jump at +0x0717,
+// table at +0x071c).  RNG-critical: the only Rand_LCG16 calls are in the spawn
+// state (+0x072c, +0x0778, +0x078e); flight and deflect draw nothing.
 
-// Idle: wait out the boss's cooldown, then throw from one side or the other.
-// FUN_23cf_06ec +0x0722 (cooldown gate), +0x072c idiv-100 / cmp 0x32 (side),
-// +0x074e / +0x0768 the two spawn x (0x168 = 360, 0xffd8 = -40), +0x0772
-// ptype = 1, +0x0778 idiv-4 (frame), +0x078e idiv-10 + 30 (cooldown).
+// Idle: wait out the cooldown, then throw from one side.  FUN_23cf_06ec
+// +0x0722 (cooldown gate), +0x072c idiv-100 / cmp 0x32 (side), +0x074e /
+// +0x0768 the spawn x (0x168 = 360, 0xffd8 = -40), +0x0772 ptype = 1, +0x0778
+// idiv-4 (frame), +0x078e idiv-10 + 30 (cooldown).
 void spawn_projectile(L2ProjectileSlot& slot, L2BossState& boss) {
     if (boss.cooldown != 0) return;
     if (lcg() % 100 > 50) {
@@ -85,11 +74,10 @@ void spawn_projectile(L2ProjectileSlot& slot, L2BossState& boss) {
     boss.cooldown = 30 + lcg() % 10;
 }
 
-// In flight: advance, animate, and let the player's club deflect it.
-// FUN_23cf_06ec +0x07aa/+0x07b5 (frame inc, and-3), +0x07d7 / +0x07e6 the
-// 4 px step per direction, +0x07da / +0x07e9 the -100 / 400 bounds that
-// return the slot to idle, +0x082e/+0x0835 the deflection's facing_left == 0
-// && club_flag == 1 gate, +0x083f the player_x + 0x28 reach.
+// In flight: advance, animate, club deflection.  FUN_23cf_06ec +0x07aa/+0x07b5
+// (frame inc, and 3), +0x07d7 / +0x07e6 the 4 px step, +0x07da / +0x07e9 the
+// -100 / 400 bounds back to idle, +0x082e/+0x0835 the facing_left == 0 &&
+// club_flag == 1 gate, +0x083f the player_x + 0x28 reach.
 void fly_projectile(L2ProjectileSlot& slot, BossPlayerState& p,
                     L2BossState& boss) {
     slot.frame = (slot.frame + 1) & 3;

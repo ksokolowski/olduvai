@@ -15,6 +15,10 @@
 # So stop typing it.
 #
 #   scripts/metrics/kpi_row.sh            # print the current figures
+#
+# The comment ratio (full-line comment lines per code line under src/, as
+# comment_rot.py counts them) rides along: owner 2026-09-27, a creep back
+# from 0.44 must show as a number at every cut.
 #   scripts/metrics/kpi_row.sh --check    # exit 1 if BACKLOG §5 disagrees
 #   scripts/metrics/kpi_row.sh --tail     # print the §3.12 tail rows too
 #
@@ -63,7 +67,7 @@ SYSROOT=""
 
 # function:file — the four complexity rows §5 tracks.
 TRACKED="run_platform_level:src/presentation/game_app.cpp
-run_game:src/presentation/game_app.cpp
+run:src/presentation/game_session.cpp
 run_boss_level:src/presentation/boss_app.cpp
 run_title_menu:src/presentation/title_menu_flow.cpp"
 
@@ -98,6 +102,12 @@ measure() {   # measure <fn> <file> -> complexity, or "?" if not reported
         "${ROOT}/$2" 2>/dev/null |
       sed -n "s/.*warning: function '$1' has cognitive complexity of \([0-9]*\).*/\1/p" |
       head -1
+}
+
+# Full-line comment lines per code line, from comment_rot.py's own count.
+comment_ratio() {
+    python3 "${ROOT}/scripts/metrics/comment_rot.py" --root "${ROOT}/src" |
+      sed -n 's/.*(ratio \([0-9.]*\)).*/\1/p' | head -1
 }
 
 FAIL=0
@@ -145,6 +155,15 @@ if [ "$1" = "--check" ]; then
             echo "DRIFT" >> /tmp/kpi_row_drift.$$
         fi
     done
+    ratio="$(comment_ratio)"
+    row="$(awk '/^## 5\. KPIs to watch/{s=1} s&&/^## [0-9]/&&!/^## 5\./{exit} s' \
+            "${BACKLOG}" | grep -m1 '^| comment lines per code line' || true)"
+    claimed="$(printf '%s' "${row}" | awk -F'|' -v c="${NOW_COL}" '{print $c}' |
+               sed -n 's/[^0-9]*\([0-9][0-9.]*\).*/\1/p')"
+    if [ -n "${ratio}" ] && [ "${claimed}" != "${ratio}" ]; then
+        echo "kpi_row: DRIFT — comment ratio: BACKLOG says ${claimed:-nothing}, measured ${ratio}"
+        echo "DRIFT" >> /tmp/kpi_row_drift.$$
+    fi
     if [ -f "/tmp/kpi_row_drift.$$" ]; then
         rm -f "/tmp/kpi_row_drift.$$"
         echo "kpi_row: the §5 table is stale — update it with the figures below."
@@ -172,4 +191,5 @@ echo "── cognitive complexity at $(git -C "${ROOT}" rev-parse --short HEAD) 
 printf '%b' "${OUT}" | while read -r fn n; do
     printf '  %-22s %s\n' "${fn}" "${n}"
 done
+printf '  %-22s %s\n' "comment ratio" "$(comment_ratio)"
 exit ${FAIL}

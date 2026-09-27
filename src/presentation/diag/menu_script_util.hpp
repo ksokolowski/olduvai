@@ -22,7 +22,7 @@ inline std::vector<std::string> parse_menu_script(const char* ms) {
     std::vector<std::string> script;
     if (ms == nullptr) return script;
     std::string t;
-    for (char c : std::string(ms)) {
+    for (const char c : std::string(ms)) {
         if (c == ' ' || c == ',' || c == '\t' || c == '\n') {
             if (!t.empty()) { script.push_back(t); t.clear(); }
         } else { t += c; }
@@ -57,7 +57,7 @@ inline SDL_Keycode menu_token_sym(const std::string& t) {
 // gamepad uses).  KEY events only: sdl2-compat refuses app-pushed TEXTINPUT
 // events (see game_app's type: token for the direct-dispatch workaround).
 inline void push_menu_key(SDL_Keycode sym) {
-    for (bool down : {true, false}) {
+    for (const bool down : {true, false}) {
         SDL_Event e{};
         e.type = down ? SDL_KEYDOWN : SDL_KEYUP;
         e.key.state = down ? SDL_PRESSED : SDL_RELEASED;

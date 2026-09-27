@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-#include "prepare/game_archives.hpp"
-#include "prepare/game_files.hpp"
 #include "presentation/boss_app.hpp"
 
-#include "presentation/input/gamepad.hpp"
+#include "presentation/boss/boss_diag.hpp"
+#include "presentation/boss/boss_ending.hpp"
+#include "presentation/boss/boss_fight.hpp"
+#include "presentation/boss/boss_pause.hpp"
+#include "presentation/boss/boss_view.hpp"
+
 
 #include <SDL.h>
 
@@ -16,56 +19,22 @@
 #include <cstring>
 #include <fstream>
 
-#include "core/rng.hpp"
-#include "formats/cur.hpp"
-#include "enhance/enhanced_hud.hpp"
-#include "enhance/hd_asset_cache.hpp"
-#include "enhance/hd_text.hpp"
-#include "enhance/mmpx.hpp"
-#include "enhance/omniscale.hpp"
-#include "enhance/upscale.hpp"
-#include "formats/mdi.hpp"
 #include "presentation/audio/audio.hpp"
 #include "presentation/audio/game_music.hpp"
-#include "presentation/level/level_setup.hpp"
 #include "presentation/diag/bug_capture.hpp"
 #include "presentation/diag/menu_script.hpp"
 #include "presentation/render/rising_balloons.hpp"
 #include "presentation/diag/report_form.hpp"
 #include "presentation/diag/frame_stats.hpp"
 #include "presentation/render/game_render.hpp"
-#include "presentation/menu/dialog_key_map.hpp"
-#include "presentation/menu/menu.hpp"
-#include "presentation/menu/menu_model.hpp"
-#include "presentation/menu/pause_flow.hpp"
-#include "presentation/menu/settings_apply.hpp"
-#include "presentation/menu/menu_nav.hpp"
-#include "presentation/menu/menu_render.hpp"
-#include "presentation/render/hud_render.hpp"
 #include "presentation/input/replay.hpp"
 #include "presentation/sequence/screens.hpp"
-#include "presentation/menu/parse_util.hpp"
-#include "presentation/menu/settings_flow.hpp"
-#include "presentation/menu/settings_preview.hpp"
-#include "presentation/menu/settings_seed.hpp"
-#include "presentation/menu/staging_bindings.hpp"
 #include "presentation/render/smooth_present.hpp"
-#include "presentation/render/lerp_snapshot.hpp"
 #include "presentation/render/boss_arena.hpp"
 #include "presentation/render/boss_hud.hpp"
-#include "presentation/render/boss_widescreen.hpp"
-#include "presentation/render/widescreen.hpp"
-#include "presentation/render/text_overlay.hpp"
 #include "presentation/window_util.hpp"
 #include "presentation/render/boss_render.hpp"
-#include "systems/boss_l2.hpp"
-#include "systems/boss_l4.hpp"
-#include "systems/boss_l6.hpp"
-#include "presentation/env_num.hpp"
-#include "presentation/sequence/screen_presenter.hpp"
-#include "presentation/sequence/text_screen_present.hpp"
 #include "presentation/render/level_surface.hpp"
-#include "presentation/render/logical_size.hpp"
 
 namespace olduvai::presentation {
 
@@ -76,551 +45,61 @@ using formats::Sprite;
 using namespace olduvai::systems;
 
 
-void erase_pip_column(BossAssets& a, int health) {
-    if (health < 0 || health >= 320) return;
-    for (int y = 0; y < 6; ++y) {
-        const std::size_t off =
-            (static_cast<std::size_t>(y) * 320 + health) * 4;
-        a.bg[off] = 0;
-        a.bg[off + 1] = 0;
-        a.bg[off + 2] = 0;
-        a.bg[off + 3] = 255;
-    }
-}
-
-bool load_boss_assets(const std::filesystem::path& dir, int level,
-                      BossAssets& a) {
-    const prepare::GameArchives archives(dir);
-    auto entry = [&](const std::string& n) -> const std::vector<std::uint8_t>* {
-        return archives.entry(n);
-    };
-    const auto* ring = entry("RING.PC1");
-    const auto* font = entry("CHARSET1.MAT");
-    if (ring == nullptr || font == nullptr) return false;
-    a.charset = formats::MatFile(*font, "CHARSET1.MAT").sprites();
-    if (const auto* l1s = entry("L1SPR.MAT"))
-        a.bone_atlas = formats::MatFile(*l1s, "L1SPR.MAT").sprites();
-    if (const auto* f1 = entry("FOND1.PC1"))
-        a.bone_palette = formats::parse_pc1(*f1).palette;
-    const auto img = formats::parse_pc1(*ring);
-    a.palette = img.palette;
-    if ((level == 2 || level == 4) && a.palette.size() > 5) {
-        // DAC index-5 override → dark red.  L2: FUN_23cf 0x0a4f; L4:
-        // FUN_24cc_02f2 0x031f-0x0329 writes DS:0x91b9=0x20, DS:0x8a6f=0,
-        // DS:0x8e43=8 → RGB 130,0,32 — the triceratops tail-on-hit + entry
-        // balloons.  RING.PC1 ships idx 5 brown; the EXE patches it red.
-        // L6 deliberately stays brown (l6_boss_palette_idx5_brown_not_oversight).
-        a.palette[5] = {130, 0, 32};
-    }
-    a.bg.assign(320 * 200 * 4, 0);
-    for (std::size_t i = 0; i < img.pixels.size() && i < 320 * 200; ++i) {
-        const std::uint8_t idx = img.pixels[i];
-        const Rgb c = (idx < a.palette.size()) ? a.palette[idx] : Rgb{};
-        a.bg[i * 4] = c.r;
-        a.bg[i * 4 + 1] = c.g;
-        a.bg[i * 4 + 2] = c.b;
-        a.bg[i * 4 + 3] = 255;
-    }
-    const char* spr_name = level == 2 ? "L2SPR.MAT"
-                          : level == 4 ? "L4SPR.MAT" : "L6SPR.MAT";
-    if (const auto* s = entry(spr_name)) {
-        a.spr = formats::MatFile(*s, spr_name).sprites();
-    }
-    if (level == 2) {
-        if (const auto* e = entry("ELEML2.MAT")) {
-            a.elem = formats::MatFile(*e, "ELEML2.MAT").sprites();
-        }
-    }
-    if (level == 6) {
-        // Body poses A/B/C are three separate single-sprite MATs (H1/H2/H3),
-        // selected per attack frame; H4 holds the head sheet (3 heads +
-        // shocked).  H2 (mid-swing) was previously not loaded → the whole
-        // club-swing collapsed to the H1 windup pose.
-        if (const auto* h = entry("H1.MAT"))
-            a.h1 = formats::MatFile(*h, "H1.MAT").sprites();
-        if (const auto* h = entry("H2.MAT"))
-            a.h2 = formats::MatFile(*h, "H2.MAT").sprites();
-        if (const auto* h = entry("H3.MAT"))
-            a.h3 = formats::MatFile(*h, "H3.MAT").sprites();
-        if (const auto* h = entry("H4.MAT"))
-            a.h4 = formats::MatFile(*h, "H4.MAT").sprites();
-    }
-    return !a.spr.empty();
-}
-
-// Blit the 320x200 arena background into the render target.
-// At scale 1: direct std::copy (byte-identical to the original).
-// At scale>1: route through the asset cache for per-asset upscaling.
-
-
 }  // namespace
 
-BossRunResult run_boss_level(const std::filesystem::path& game_dir,
-                             int internal_level, int lives, long score,
-                             const ScaledWindow& bsw,
-                             int max_frames, const std::string& shot,
-                             int shot_frame, SdlAudio* audio,
-                             const BossEnhanceOptions& enhance,
-                             const std::string& replay_path,
-                             const std::string& trace_path,
-                             const std::string& record_inputs_path) {
+BossRunResult run_boss_level(GameOptions& opts, int internal_level,
+                             CarriedState& carry, Pipeline& pipe) {
     BossRunResult res;
-    res.lives = lives;
-    res.score = score;
+    // The fight's OLDUVAI_* test hooks (boss/boss_diag.hpp).
+    const BossHooks hooks = BossHooks::from_env();
     RunCapture capture;
-    capture.open(replay_path, trace_path, record_inputs_path);
-    InputReplay& replay = capture.replay;
+    capture.open(opts.replay, opts.trace, opts.record_inputs);
+    const InputReplay& replay = capture.replay;
     TraceWriter& trace = capture.trace;
     InputRecorder& input_rec = capture.input_rec;
     BossAssets assets;
-    if (!load_boss_assets(game_dir, internal_level, assets)) {
+    if (!load_boss_assets(opts.game_dir, internal_level, assets)) {
         std::fprintf(stderr, "boss: could not load arena assets\n");
         return res;
     }
-    // Same diagnostic as the surface path: name the level the capture
-    // photographed.  Boss arenas have no display/internal slot swap, so the
-    // number does double duty here (BACKLOG §6, 2026-09-21).
+    // Name the level the capture shows (no display/internal swap for bosses).
     std::fprintf(stderr, "game: level %d (internal %d)\n", internal_level,
                  internal_level);
 
-    const bool hd = hd_active(enhance.enhanced, enhance.hd_profile);  // HD ⇔ enhanced
-    // The SAME scale the rest of the game composes at, or every boss arena
-    // would differ in scale from the level that led into it (this was a copy
-    // of hd_scale_for that had to be kept in step by hand).
-    const int hd_scale = hd_scale_for(enhance.enhanced, enhance.hd_profile,
-                                      enhance.render_scale);
-    SDL_Window* const win = bsw.win;
-    SDL_Renderer* const ren = bsw.ren;
-    // Loading/tally screens stay on the pillarbox path: start from the
-    // aspect_logical fallback so the 320-wide "Please Wait" image is NOT
-    // stretched across the wide canvas.  The wide fight switches these to the
-    // WIDE dims (see wsb below) — mirroring run_platform_level.
-    const LogicalDims _bld = aspect_logical(hd_scale, enhance.aspect);
+    // The fight's display (boss/boss_view.hpp): the surface starts at the
+    // aspect's pillarboxed logical size, so the loading card is not
+    // stretched; the wide fight switches to the wide canvas below.  It uses
+    // the level's scale, so the arena matches the level before.
+    BossDisplay display(pipe, opts, [](const GameOptions& o) {
+        return aspect_logical(
+            hd_scale_for(o.enhanced, o.hd_profile, o.render_scale), o.aspect);
+    });
 
-    // The level's presentation surface — texture, vector font, overlay, logical
-    // size — owned in one place (§3.7 cluster 1).  The aliases below keep the
-    // body reading as it did; they are the same objects.
-    LevelSurface surface(win, ren, hd, hd_scale, enhance.hd_font,
-                         enhance.hd_profile, _bld);
-    enhance::HdText& hd_text = surface.hd_text();
-
-    // Enhanced boss HUD: the baked HUD strip (labels + bar) comes OUT of
-    // assets.bg so blit_bg produces a clean scene, and the bar's gradient is
-    // captured on the way out so BossHud::draw_into can redraw it in its own
-    // colours.  Both halves are capture_boss_hud_bar (§3.18).
-    BossHudBar hud_bar;
-    if (hd && hd_text.ok()) hud_bar = capture_boss_hud_bar(assets.bg);
-    SDL_Texture* const tex = surface.tex();
-
-    // ── Boss-arena widescreen margins (enhanced-only) ─────────────────────────
-    // When HD + aspect=="widescreen" and the derived margin M>0, every fight (and
-    // victory/KO-flash) frame is presented at (320+2M)x200 native: the HUD-clean
-    // RING.PC1 (assets.bg, already inpainted above) is the mirror SOURCE, the
-    // margins are a PURE reflection of its edge strips (reflect_pure → black arena
-    // walls stay black, no void-scan smear), and the live fight sprites are drawn
-    // over the wide buffer at origin_x = M so edge-crossing sprites overflow into
-    // the margins.  M==0 (16:10 / 4:3) and classic fall through to the unchanged
-    // 320-wide present path below.  Design: boss-arena-widescreen-margins-design.md.
-    // Widescreen boss arena.  Design: boss-arena-widescreen-margins-design.md.
-    // The margin is recomputed on renderer-output-size changes (Alt+Enter /
-    // resize); without that it was locked to the STARTUP window aspect
-    // (created at 320:200 = 16:10 -> margin 0), so going fullscreen on a 16:9
-    // display never activated widescreen and just pillarboxed.
-    //
-    // Loading/tally screens stay on the pillarbox path (out of scope for the
-    // wide work): start from the aspect_logical fallback so the 320-wide
-    // "Please Wait" image is NOT stretched across the wide canvas.  When the
-    // wide fight begins these switch to the WIDE dims so the wide texture
-    // fills the output and the text-overlay flush maps over the full wide
-    // canvas — mirroring run_platform_level (game_app.cpp:901-906).
-    LogicalSize& lsz = surface.lsz();
-    BossWidescreen wsb(ren, hd && enhance.aspect == "widescreen", hd_scale,
-                       _bld, &lsz);
-    TextOverlay& text_overlay = surface.overlay();
-
-    // OLDUVAI_FRAME_STATS — the same counters, the same two report lines and
-    // the same env gate as run_platform_level (diag/frame_stats.hpp).  The
-    // overlay sinks are wired here because the HUD text overlay was the single
-    // biggest present-side cost measured on the platform side (42% of every
-    // present at 1280x720 before the skip landed), and there is no reason to
-    // assume the boss HUD is cheaper until it has been read.
+    // OLDUVAI_FRAME_STATS: same counters and report as run_platform_level.
     FrameStats fstats;
     fstats.begin_run();
-    wire_overlay_stats(fstats, text_overlay);
 
-    // In HD mode the arena framebuffer is sized at the target resolution so
-    // every compose goes through the per-asset cache path (no whole-frame
-    // upscale for fight frames).  Classic stays 320x200.
-    const int fb_w = hd ? 320 * hd_scale : 320;
-    const int fb_h = hd ? 200 * hd_scale : 200;
-
-    // In-memory per-asset HD upscale cache — cleared at end.  In HD mode it
-    // also persists baked blocks under the platform cache dir (stage-2),
-    // shared with the platform-level cache; cosmetic + content-addressed, so
-    // it never affects gameplay or output.
-    enhance::HdAssetCache hd_cache;
-
-    // Disk persistence is OPT-IN, and off by default.
-    //
-    // It exists because upscaling used to be expensive — a Python-port-era
-    // problem that does not survive into this engine.  Measured on a cold
-    // (empty) cache with the most expensive profile, omniscale, at
-    // widescreen: 600 frames, ZERO overruns, worst frame 25 ms against a
-    // 55 ms budget.  Upscaling every asset on first visit does not come close
-    // to costing a frame, and the in-memory map_ already makes it once-per-
-    // session.  A warm run measured no faster.
-    //
-    // What it did cost: (asset x profile x scale) written forever with no cap,
-    // no eviction and no TTL — one machine reached 2680 files and 411 MB
-    // simply by trying the six HD profiles.
-    //
-    // Kept, not deleted, because the trade reverses on memory-constrained
-    // platforms (handhelds), where holding every upscaled asset in RAM is the
-    // expensive side.  No CLI flag reaches it any more — HdAssetCache::
-    // enable_disk() is called only by test_upscale.cpp.  Re-measure both sides
-    // on the target hardware before wiring it back up.
-
-    // Aux pacing sites (the loading card, the tally, the victory fades) — the
-    // main loop is paced by DosTicker, not by this.  Declared here because the
-    // loading screen is the first thing that needs it.
+    // Pacing for the loading card, tally and victory fades; the main loop uses
+    // DosTicker.
     const Uint32 frame_ms = 1000 / 18;
 
-    // Helper: build a RenderTarget over an arena FrameBuffer.  In HD the
-    // target carries the cache and profile so blit_sprite uses the per-asset
-    // upscale path; in classic it is a plain scale-1 wrapper.
-    auto make_target = [&](FrameBuffer& b) {
-        return make_render_target(b, surface, hd_cache);
-    };
+    BossFight fight{internal_level, init_boss_player(carry.lives, carry.score),
+                    {}, {}, {}, {}};
+    // L4 re-inits the player after the shared setup: FUN_24cc_02f2 writes
+    // player_x := 0xD2 = 210 (Boss_L2_Init's 0x3c = 60 stays for L2 and L6).
+    if (internal_level == 4) fight.player.x = 210;
 
-    // Level-entry loading screen — same flow as the platform levels
-    // (the reference shows "Please Wait" before every level, bosses
-    // included); music starts after it, with the fight itself.
-    // lpresent is used for loading + score tally screens: these are
-    // fullscreen single 320x200 images, so whole-frame upscale is fine
-    // (per-asset and whole-frame upscale are identical for a single
-    // opaque 320x200 image, and these screens are not arena fight frames).
-    // ESC is inert on every screen lpresent drives — the pre-fight loading
-    // card, the post-win fade, and the score tally.  None has a menu wired, and
-    // ESC there used to abort the run / drop a WON fight to game-over (the class
-    // of bug fixed across the ending).  Only a real window-close (SDL_QUIT)
-    // stops.  (The tally also consumes ESC as a skip inside show_score_tally
-    // before this present ever runs.)
-    // The non-gameplay screen presenter — loading card, post-win fade, classic
-    // tally (§3.7 cluster 3).  Same type run_platform_level builds; only the
-    // compose step differs, and boss's is the plain 320x200 uploader.
-    ScreenPresenter screen(surface,
-                           [&](const FrameBuffer& f, bool do_present) {
-                               // Always 320x200 — upscale whole-frame.
-                               upload_native_frame(tex, f, hd_scale,
-                                                   enhance.hd_profile);
-                               SDL_RenderClear(ren);
-                               SDL_RenderCopy(ren, tex, nullptr, nullptr);
-                               if (do_present) present_output(ren);
-                           },
-                           frame_ms);
-    const PresentFn lpresent = screen.fn();
+    // No reseed at boss entry: the EXE never re-touches DS:0x87ac after static
+    // init, so the LCG carries over from the previous level.
 
-    // Enhanced loading screen: cartoon vector font at HD res.  Classic → null
-    // hd_text (byte-identical bitmap path).
-    //
-    // The SAME presenter the tally below uses.  This was a second, hand-copied
-    // one — and it drew its rows through draw_centered_overlay_row while
-    // game_app's loading screen went through draw_tally_rows_overlay, because
-    // that side reused its tally handle.  One screen, two stacks, two code
-    // paths: the §3.14 drift again, one screen earlier.  Identical output for
-    // now (both compute x = ow/2 - measure/2 for an align-0 row) — but nothing
-    // said they had to stay identical, and that is what the tally taught.
-    // Built once, used by both text screens this level presents (the loading
-    // card here, the tally after the win).
-    const TextScreenDeps text_screen_deps{ren,      win,
-                                          tex,      &hd_text,
-                                          &text_overlay, &lsz,
-                                          hd_scale, &enhance.hd_profile,
-                                          frame_ms};
-    const bool early_quit = !screen.text_screen(
-        text_screen_deps, hd && hd_text.ok(), "OLDUVAI_DUMP_LOADING",
-        "loading", [&](const TextScreenHd& sh) {
-            return show_loading_screen(nullptr, internal_level, assets.charset,
-                                       assets.palette, lpresent, sh);
-        });
-    if (early_quit) res.quit = true;
+    // Smooth motion: vsync render interpolation (smooth_present.hpp), discrete
+    // sub-frames without vsync.  A display rebuild recomputes it: a Style
+    // change turns it over.
+    bool smooth = boss_smooth_motion(opts, hooks.force_smooth);
 
-    if (!early_quit) {
-        if (const char* mname = level_music_name(internal_level))
-            play_game_music(audio, game_dir, mname);
-    }
-    BossPlayerState player = init_boss_player(lives, score);
-    // The L4 arena re-inits the player position after the shared L2-style
-    // setup: FUN_24cc_02f2 (its own main) writes player_x := 0xD2 = 210
-    // (the shared Boss_L2_Init writes 0x3c = 60, which stays right for L2
-    // and L6 — both verified against the reference's capstone notes).
-    // Found by the l4_boss_fight scenario: native spawned at 60, reference
-    // at 210, diverging on the very first trace frame.
-    if (internal_level == 4) player.x = 210;
-    L2BossState l2;
-    L4BossState l4;
-    L6BossState l6;
-
-    // NO reseed at boss entry: the EXE never re-touches DS:0x87ac after
-    // static init, so the LCG state carries over from the preceding level
-    // (2026-07-03 review F1 removed a bootstrap-era `!= 2` reseed here).
-
-    // Arena framebuffer: HD-sized when hd, classic 320x200 otherwise.
-    FrameBuffer fb{fb_w, fb_h};
-
-    bool running = !early_quit;
-    int frame = 0;
-
-    // ── Pause overlay (parity with run_platform_level's ESC menu) ──────
-    // Boss fights previously had NO pause: ESC was a bare abort-to-title
-    // (2026-07-03 review finding — 3 of 7 play slots lacked the menu and
-    // the F5 pipeline).  v1 scope: Resume / Restart Fight / Quit (to Title
-    // or Exit Game) via the shared menus.json `pause_boss` screen.
-    // Options/save/cheats stay surface-only (they need the SettingsFlow
-    // extraction; saves mid-boss-fight are not a supported concept).
-    std::optional<MenuModel> boss_menu_model = load_menu_model();
-
-    // OL-B6: real Options bindings — the surface PauseBindings SUBSET that
-    // makes sense mid-boss-fight.  Live preview: music/sfx volume (SdlAudio)
-    // + fullscreen (SDL window).  enhance.* toggles stage like every other
-    // editable key and persist on Apply via the shared
-    // former per-feature encoding (the boss latches its flags at fight
-    // entry, so visible effect waits for the next fight).  Reinit-class
-    // keys (hd_profile / render_scale / music_device / sfx_backend) and
-    // aspect are STAGED + persist-only: boss_app has no reinit machinery
-    // (deliberately out of scope), so they are saved to play.json and take
-    // effect on the NEXT launch — NOT after the fight (the running session
-    // keeps its in-memory settings; there is no post-fight reinit path).
-    // Save/Load stay out: mid-boss-fight saves are not a supported concept.
-    // Boss Pause: staged-only.  No live cheat.god / autofire, and no live
-    // hd_profile / render_scale / music_device / sfx_backend / aspect path.
-    // The default StagingBindings hooks (all no-ops) express exactly that; the
-    // cheat.* skip it inherits is inert here (no cheats submenu on this menu).
-    struct BossPauseBindings : StagingBindings {} boss_bind;
-    MenuModel boss_pause_model = boss_menu_model.value_or(MenuModel{});
-    bool pause_open = false;
-
-    // F5: the SAME report form the platform level opens (§3.30 step 2) — its
-    // "bug_report" screen lives in the shared menus.json model.  The frozen
-    // scene, the present and the report's contents are bound at the freeze
-    // below.  OLDUVAI_MENU_SCRIPT drives it headlessly (tests/boss_report.sh).
-    ReportFormService report_form(boss_pause_model);
-    MenuScript menu_script;
-    menu_script.load_from_env();
-
-    // Batched staging: Options edits go through the session → confirm dialog
-    // (the same SettingsFlow controller the surface pause uses; OL-B1/OL-B6).
-    SettingsSession boss_session;
-    ConfirmDialog boss_confirm;
-    boss_bind.audio = audio;
-    boss_bind.win = win;
-    boss_bind.enhanced = enhance.enhanced;
-    boss_bind.persist = &enhance.persist;
-    boss_bind.session = &boss_session;
-    boss_bind.sound_avail = enhance.sound_avail;
-    SettingsSeed seed;
-    seed.enhanced = enhance.enhanced;
-    seed.hd_profile = enhance.hd_profile;
-    seed.render_scale = enhance.render_scale;
-    seed.music_device = enhance.music_device;
-    seed.sfx_backend = enhance.sfx_backend;
-    seed.aspect = enhance.aspect;
-    seed.fullscreen =
-        (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
-    seed.flags = enhance.flags;
-    seed.profile_family = enhance.profile_family;
-    seed_settings_mem(boss_bind, seed);
-
-    MenuActionTable boss_pause_actions = {
-        {"resume", [&] { pause_open = false; }},
-        {"restart_level", [&] { res.restart = true; running = false; }},
-        {"quit_title", [&] {
-            boss_confirm.ask("Quit to title?", [&] {
-                res.quit = true;
-                running = false;
-            });
-        }},
-        {"quit_desktop", [&] {
-            boss_confirm.ask("Exit game?", [&] {
-                res.quit = true;
-                res.quit_program = true;
-                running = false;
-            });
-        }},
-    };
-    Menu boss_pause_menu(boss_pause_model, boss_bind, boss_pause_actions);
-
-    // SettingsFlow (OL-B6): the SAME controller the surface pause and main
-    // menu use (OL-B1) — subtree-exit detection, confirm-dialog keys,
-    // apply/discard resolution.  Boss-specific effects live in these hooks.
-    // The boss cannot reinit mid-fight, so reinit-class display/audio changes
-    // (+ aspect) are captured into `pending`, seeded from the fight-entry
-    // settings; an Applied change publishes it to res.reinit and run_game
-    // applies it + rebuilds the pipeline when the fight ends.
-    BossReinit pending;
-    pending.enhanced     = enhance.enhanced;
-    pending.render_scale = enhance.render_scale;
-    pending.hd_profile   = enhance.hd_profile;
-    pending.music_device = enhance.music_device;
-    pending.sfx_backend  = enhance.sfx_backend;
-    pending.aspect       = enhance.aspect;
-
-    SettingsFlow::Hooks boss_hooks;
-    boss_hooks.persist = [&](const std::string& k, const std::string& v) {
-        boss_bind.save(k, v);
-    };
-
-    boss_hooks.classify = [&](const std::string& k, const std::string& v) {
-        // The boss has no live display/audio path, so every pipeline key is
-        // reinit-class FOR IT — it applies when the fight ends, not live (even
-        // a same-scale hd_profile swap or aspect, which are Live on the
-        // surface).  Drives the confirm-dialog note; capture is in apply_change.
-        if (k == "hd_profile" || k == "render_scale" || k == "enhanced" ||
-            k == "music_device" || k == "sfx_backend" || k == "aspect")
-            return ApplyTier::Reinit;
-        return classify_change(k, v, boss_bind.cur);
-    };
-
-    boss_hooks.apply_change = [&](const StagedChange& ch, ApplyTier tier) {
-        // Volume/fullscreen already previewed live; enhance.* toggles persist
-        // for the next fight.  Every display/audio PIPELINE key (whatever its
-        // surface tier) is captured into `pending` and published to res.reinit
-        // for run_game to apply when the fight ends.  run_game rebuilds the
-        // window only if the HD scale actually changes; a same-scale hd_profile
-        // swap just updates rt.  (In classic mode enhanced stays off, so the
-        // HD scale is 1 and applying these is inert — still persisted.)
-        (void)tier;
-        bool deferred = true;
-        if (ch.key == "enhanced")
-            pending.enhanced = ch.new_value == "true" || ch.new_value == "1";
-        else if (ch.key == "render_scale")
-            pending.render_scale = parse_i(ch.new_value, pending.render_scale);
-        else if (ch.key == "hd_profile")
-            pending.hd_profile = ch.new_value;
-        else if (ch.key == "music_device")
-            pending.music_device = ch.new_value;
-        else if (ch.key == "sfx_backend")
-            pending.sfx_backend = ch.new_value;
-        else if (ch.key == "aspect")
-            pending.aspect = ch.new_value;
-        else
-            deferred = false;   // volume/fullscreen live; enhance.* persist-only
-        if (deferred) {
-            res.reinit = pending;   // apply == commit; publish for run_game
-            std::fprintf(stderr,
-                         "boss options: %s=%s — applies when the fight ends\n",
-                         ch.key.c_str(), ch.new_value.c_str());
-        }
-    };
-
-    boss_hooks.revert_change = [&](const StagedChange& ch) {
-        boss_bind.mem[ch.key] = ch.old_value;
-
-        // Re-apply the cheap live preview at baseline (shared:
-        // settings_preview.hpp).  The boss has no hd_profile/aspect live
-        // path — those are staged-only mid-fight.
-        preview_cheap_key(ch.key, ch.old_value, boss_bind.audio,
-                          boss_bind.win, boss_bind.enhanced);
-    };
-    boss_hooks.reopen_options = [&]() { boss_pause_menu.open("options"); };
-    boss_hooks.value_of = [&boss_bind](const std::string& k) {
-        return boss_bind.get(k);
-    };
-    boss_hooks.confirm_note = [](bool any_reinit, bool any_persist) {
-        // Reinit-class display/audio changes now apply when the fight ends
-        // (run_game rebuilds the pipeline on return).  Persist-only changes
-        // (e.g. enhance.* feature toggles, latched at fight entry) still wait
-        // for the next launch.
-        if (any_reinit) return std::string("Applies when the fight ends.");
-        if (any_persist)
-            return std::string("Saved - takes effect on next launch.");
-        return std::string{};
-    };
-    SettingsFlow boss_flow(boss_pause_model, boss_session, boss_confirm,
-                           std::move(boss_hooks));
-
-    // Close-without-apply detection (surface parity): pause closed via
-    // Resume/ESC while the session is dirty = implicit Discard.
-    bool was_pause_open = false;
-    const bool boss_menu_ok =
-        boss_menu_model.has_value() &&
-        boss_pause_model.screens.count("pause_boss") != 0;
-    DosTicker dos_ticker;                // drift-free 18.2065 Hz main pacing
-    bool vga_scan_ok = true;             // cleared when vsync clearly refused
-
-    // Smooth motion: vsync-locked render interpolation (general technique —
-    // see smooth_present.hpp); falls back to discrete sub-frames without vsync.
-    // OLDUVAI_FORCE_SMOOTH=1 overrides the max_frames/shot guards the same way
-    // game_app's OLDUVAI_SMOOTH_FRAMES does for the surface loop: a frame-capped
-    // headless run would otherwise force smooth=false, leaving the L6 slam
-    // pose-hold (§3.3c) unreachable by any automated gate.  Replay folding is
-    // per logic tick, so replay+smooth stays deterministic.
-    const bool smooth =
-        (enhance.flags.smooth_motion &&
-         env_int("OLDUVAI_FORCE_SMOOTH", 0) == 1) ||
-        (enhance.flags.smooth_motion && max_frames <= 0 && shot.empty());
-    SmoothPacer pacer;
-    pacer.frame_ms = frame_ms;
-    pacer.discrete_n = smooth_subframe_count(win);
-    pacer.vsync = smooth_try_enable_vsync(ren, smooth);
-    bool smooth_vsync_ran = false;   // set per-frame; skips the outer delay
-    // Part 1 follow-up: the boss player's float render position, carried into
-    // render_fight's rt + present_wide's overflow wrt so render_boss_player_fb
-    // draws it sub-pixel on the HD smooth sub-frame.  Set by the smooth loop;
-    // false elsewhere → integer path (byte-identical).
-    bool boss_use_float = false;
-    float boss_pfx = 0.0f, boss_pfy = 0.0f;
-
-    // F4 — arena.present_frame(draw_lives): boss HUD label draw.
-    // Classic (non-hd_text) path: bitmap 2-digit lives at (48,8) unchanged.
-    // Enhanced path: erase was done once at load (assets.bg patched above);
-    //   now draw vector "LIVES:" at native (0,8), "ENERGY" at native (219,8),
-    //   and the 2-digit value at native (48,8) when draw_lives is true.
-    //   draw_lives=false is the L2 victory flash where the EXE never redraws
-    //   the lives digit — but the labels ARE drawn per the reference.
-    //   All coords x hd_scale for the HD RGBA buffer (baseline_y = 8*hd_scale).
-    // In HD mode, fb is already at HD resolution — no upscale needed; draw
-    // vector HUD directly on fb.px then upload at fb.w pitch.
-    // Draw the boss HUD vector labels into the output-resolution overlay:
-    // "LIVES:" at native (0,8), "ENERGY" at native (219,8), and the 2-digit
-    // lives value at native (48,8) when draw_lives.  The pip bar lives over the
-    // center 320 sub-region (drained-column gradient sample).
-    //
-    // ONE implementation for both the non-widescreen path AND the widescreen
-    // path.  `cx_native` = the native x of the center column (0 for the
-    // 320-wide / pillarbox path, wsb.M for the wide path); `total_native_w` =
-    // the full native width of the composed buffer (320 for the 320-wide path,
-    // 320+2*wsb.M for the wide path).  Native HUD x is mapped to the wide domain
-    // as (cx_native + x), then to output by sx = ow/total_native_w.  With the
-    // defaults (cx_native=0, total_native_w=320) sx = ow/320 and there is no x
-    // shift — byte-identical to the prior 320-only overlay.  The vertical scale
-    // sy = oh/200 is unchanged in both domains (height is always 200 native).
-    // Buffer-agnostic HUD draw: labels + energy bar into an arbitrary RGBA
-    // buffer `buf` of size (bw x bh).  `bw`/`bh` are the OUTPUT-resolution
-    // dimensions of the buffer (renderer output size for the live overlay;
-    // (wsb.w*hd_scale x 200*hd_scale) for the offscreen wide screenshot).  All
-    // mapping math (sx, sy, ox) is identical to the prior overlay — only the
-    // destination buffer + its dims differ.
-    // The HUD painter (§3.18): a font, the captured gradient, and the two
-    // numbers it displays.  `internal_level` chose which of l2/l4/l6 to read
-    // ONCE, so it becomes which address is bound here, not a member.
-    BossHud hud(&hd_text, std::move(hud_bar), &player.lives,
-                internal_level == 2 ? &l2.health
-              : internal_level == 4 ? &l4.health
-                                    : &l6.health);
-    // The classic (non-HD) stack draws the same lives with the game's own
-    // 1bpp font.  Without this the bitmap path silently draws nothing.
-    hud.set_classic_font(&assets.charset, &assets.palette);
-
-    // The arena presenter (§3.18): the six mutually-calling present lambdas
-    // and the HUD overlay trio, given the owner they needed.  Everything that
-    // knows WHICH boss this is arrives as a callback bound below — the
-    // presenter holds no assets, no player and no l2/l4/l6.
-    // Enhanced: the balloons the player flies in on float away when the
-    // fly-in ends, instead of vanishing with the sprite swap (the L1 landing's
-    // effect — render/rising_balloons.hpp).  The bunch sprite comes from
-    // L1SPR.MAT, which this arena already loads for the menu bone cursor.
-    // `boss_fx_alpha` interpolates its rise on smooth-motion sub-frames.
+    // Enhanced: the fly-in balloons float away when the fly-in ends (as on the
+    // L1 landing).  The bunch sprite is in L1SPR.MAT, already loaded for the
+    // menu cursor.  `boss_fx_alpha` lerps the rise on smooth sub-frames.
     RisingBalloons fly_in_balloons;
     float boss_fx_alpha = 1.0f;
     const auto draw_fly_in_balloons = [&](RenderTarget& rt) {
@@ -628,333 +107,126 @@ BossRunResult run_boss_level(const std::filesystem::path& game_dir,
                              boss_fx_alpha);
     };
 
-    BossArenaPresenter arena(surface, wsb, hud, fb, hd_cache);
-    arena.stats = &fstats;
-    arena.arena_bg = &assets.bg;
-    arena.smooth_use_float = &boss_use_float;
-    arena.smooth_fx = &boss_pfx;
-    arena.smooth_fy = &boss_pfy;
-    arena.draw_fight_sprites = [&](RenderTarget& rt) {
-        if (internal_level == 2)      render_l2_sprites(rt, assets, player, l2);
-        else if (internal_level == 4) render_l4_sprites(rt, assets, player, l4);
-        else                          render_l6_sprites(rt, assets, player, l6);
-        draw_fly_in_balloons(rt);
-    };
-    // Route a FIGHT present through the wide path when active, else the
-    // unchanged 320-wide present.  Scope note: steady fight frames AND the L4
-    // ride-off victory are routed wide.  L4 is special: the dino + player move
-    // HORIZONTALLY to the screen edge, so mirroring a baked 320 frame
-    // (present_wide_native) reflected + clipped them — instead it gets the SAME
-    // clean-bg-wide + sprite-overflow treatment as the fight.  L2 (static
-    // defeated-quad flash) and L6 (vertical drop) victories DON'T move
-    // horizontally, so present_wide_native's mirror is correct for them — they
-    // keep it.  The fade + score-tally that follow run pillarboxed (out of
-    // scope here).
-    //
-    // NOT "screenshots only exercise the fight path" — that is what this said
-    // until 2026-08-02, and it was wrong twice over.  Victory runs whenever
-    // `shot.empty() || OLDUVAI_REAL_SHOT` (see the victory block below), and
-    // the shot path DOES reach this branch: it routes an L4 ride-off frame
-    // through present_any so the wide compose is what gets photographed.
-    // boss_l4_victory is the gate.  The comment cost an hour of believing this
-    // branch was uncapturable — read the code.
-    arena.wide_victory = [&] {
-        return internal_level == 4 && l4.win_flag >= 1;
-    };
-    arena.draw_victory_native = [&](RenderTarget& rt) {
-        render_l4_victory_frame(rt, assets, player, l4);
-    };
-    arena.draw_victory_sprites = [&](RenderTarget& rt) {
-        render_l4_victory_sprites(rt, assets, player, l4);
-    };
-
-
-    // Declared before the dispatch table because L2's victory-sprite arm
-    // captures it — the L2 renderer takes the FLASH INDEX, not the boss
-    // state the other two take.  A callback closing over what its own arm
-    // needs is the point; a table of data could not express that difference.
+    // L2's victory renderer takes the flash index, so its arm captures this.
     int l2_last_flash = 0;   // last L2 victory flash frame — fade source parity
 
-    // ── Per-boss dispatch, bound ONCE (§3.7 / §3.4's verdict) ─────────────
-    // The fight loop asked "which boss?" in thirteen places.  Five of those
-    // were MECHANICAL DISPATCH: the arms differ only in which arena's state
-    // and renderer they name, and every arena already owns both.  Binding the
-    // three once at entry turns 15 branch arms into 5 calls.
-    //
-    // WHY THIS IS §3.4's CASE AND NOT §3.16's, because the two look alike and
-    // §3.16 refused the adjacent move: there, four EXE routines had genuinely
-    // different guard predicates, so a parameterised rule would have had to
-    // encode the differences it was meant to remove.  Here the bodies already
-    // live in boss_l2/l4/l6.cpp and boss_render.cpp — only the SELECTION
-    // repeated.  A callback bound to the right arena is not a table of data
-    // pretending to be logic; it is the dispatch written once.
-    //
-    // The other eight `internal_level ==` sites STAY: per-boss victory
-    // cinematics, the health-pip erase policy and the smooth-motion lerp
-    // save/restore have different BODIES, each carrying its own EXE citation.
-    // Those are §3.16's case and collapsing them would encode the differences.
-    struct BossOps {
-        std::function<void(RenderTarget&)> render_frame;        // pause path
-        std::function<void(RenderTarget&)> render_sprites;      // pause, wide
-        std::function<void(RenderTarget&)> render_fight_frame;  // fight path
-        std::function<void(const systems::BossInputs&)> update_frame;
-        std::function<bool()> take_sfx_hit;
-        std::function<void(RenderTarget&)> render_victory_sprites;
-        // Read-only, for the trace line and the F5 report.
-        std::function<int()> health;
-        std::function<std::string()> phase;
+    // The fight's per-boss dispatch, the fly-away over every draw path.
+    // Rebuilt with the display: `smooth` reaches L6's slam pacing.
+    BossOps boss_ops =
+        draw_after(make_boss_ops(fight, assets, l2_last_flash, smooth),
+                   draw_fly_in_balloons);
+
+    // The view draws through boss_ops as it is now, not a copy of it.
+    display.open_view(
+        {opts, assets, fight, fstats,
+         [&boss_ops](RenderTarget& t) { boss_ops.render_sprites(t); }, smooth,
+         frame_ms});
+
+    // Non-gameplay screens (loading card, post-win fade, classic tally): ESC
+    // is inert on all of them (no menu; a won fight must not become a game
+    // over); only window close stops.
+    const bool early_quit = !display.view().screen().text_screen(
+        display.view().text_deps(), display.surface().use_hd_text(),
+        "OLDUVAI_DUMP_LOADING", "loading", [&](const TextScreenHd& sh) {
+            return show_loading_screen(
+                nullptr, internal_level,
+                {assets.charset, assets.palette, display.view().present(), sh});
+        });
+    if (early_quit) res.quit = true;
+
+    const auto start_music = [&] {
+        play_level_music(pipe.audio.get(), opts.game_dir, internal_level);
     };
-    BossOps boss_ops;
-    if (internal_level == 2) {
-        boss_ops.render_frame = [&](RenderTarget& t) {
-            render_l2_frame(t, assets, player, l2); };
-        boss_ops.render_sprites = [&](RenderTarget& t) {
-            render_l2_sprites(t, assets, player, l2); };
-        boss_ops.render_fight_frame = boss_ops.render_frame;
-        boss_ops.update_frame = [&](const systems::BossInputs& i) {
-            update_l2_boss_frame(player, l2, i); };
-        boss_ops.take_sfx_hit = [&] {
-            if (!l2.sfx_hit_pending) return false;
-            l2.sfx_hit_pending = false; return true; };
-        boss_ops.render_victory_sprites = [&](RenderTarget& t) {
-            render_l2_victory_sprites(t, assets, player, l2_last_flash); };
-        boss_ops.health = [&] { return l2.health; };
-        boss_ops.phase = [&] {
-            return "jaw " + std::to_string(l2.jaw_state) + ", arm " +
-                   std::to_string(l2.arm_frame) + ", stomp timer " +
-                   std::to_string(l2.stomp_timer) +
-                   (l2.win_flag ? ", won" : "");
-        };
-    } else if (internal_level == 4) {
-        boss_ops.render_frame = [&](RenderTarget& t) {
-            render_l4_frame(t, assets, player, l4); };
-        boss_ops.render_sprites = [&](RenderTarget& t) {
-            render_l4_sprites(t, assets, player, l4); };
-        // The ONE arm that is not a plain forward, and it belongs here rather
-        // than at the call site: during victory phases 1-3 the fight frame
-        // must use the victory renderer so the player's stand/rise/ride pose
-        // is drawn.  Absorbing that into the callback is the whole point of
-        // binding behaviour instead of selecting data.
-        boss_ops.render_fight_frame = [&](RenderTarget& t) {
-            if (l4.win_flag >= 1 && l4.win_flag < 100)
-                render_l4_victory_frame(t, assets, player, l4);
-            else
-                render_l4_frame(t, assets, player, l4); };
-        boss_ops.update_frame = [&](const systems::BossInputs& i) {
-            update_l4_boss_frame(player, l4, i); };
-        boss_ops.take_sfx_hit = [&] {
-            if (!l4.sfx_hit_pending) return false;
-            l4.sfx_hit_pending = false; return true; };
-        boss_ops.render_victory_sprites = [&](RenderTarget& t) {
-            render_l4_victory_sprites(t, assets, player, l4); };
-        boss_ops.health = [&] { return l4.health; };
-        boss_ops.phase = [&] {
-            return "at (" + std::to_string(l4.boss_x) + ", " +
-                   std::to_string(l4.boss_y) + "), stun " +
-                   std::to_string(l4.stun_counter) + ", spring " +
-                   std::to_string(l4.spring_state) + ", victory " +
-                   std::to_string(l4.win_flag);
-        };
-    } else {
-        boss_ops.render_frame = [&](RenderTarget& t) {
-            render_l6_frame(t, assets, player, l6); };
-        boss_ops.render_sprites = [&](RenderTarget& t) {
-            render_l6_sprites(t, assets, player, l6); };
-        boss_ops.render_fight_frame = boss_ops.render_frame;
-        boss_ops.update_frame = [&](const systems::BossInputs& i) {
-            update_l6_boss_frame(player, l6, i, smooth); };
-        boss_ops.take_sfx_hit = [&] {
-            if (!l6.sfx_hit_pending) return false;
-            l6.sfx_hit_pending = false; return true; };
-        boss_ops.render_victory_sprites = [&](RenderTarget& t) {
-            render_l6_victory_sprites(t, assets, player, l6); };
-        boss_ops.health = [&] { return l6.health; };
-        boss_ops.phase = [&] {
-            return "frame " + std::to_string(l6.frame_counter) +
-                   ", punch " + std::to_string(l6.ground_punch_state) +
-                   ", hit reaction " +
-                   std::to_string(l6.hit_reaction_counter) + ", victory " +
-                   std::to_string(l6.win_flag);
-        };
-    }
+    if (!early_quit) start_music();
 
-    // The fly-away rides every boss draw path: the fight frame, and the pause
-    // path's two (the arena's wide sprite pass is wired above).
-    for (auto* fn : {&boss_ops.render_frame, &boss_ops.render_sprites,
-                     &boss_ops.render_fight_frame}) {
-        *fn = [inner = *fn, &draw_fly_in_balloons](RenderTarget& t) {
-            inner(t);
-            draw_fly_in_balloons(t);
-        };
-    }
+    bool running = !early_quit;
+    int frame = 0;
 
-    // Switch the renderer to the WIDE logical canvas now that loading is done —
-    // the fight (and the victory/tally that fall back to present_frame) all run
-    // below.  present_frame's 320-wide tex is RenderCopy'd to the whole output,
-    // so under the wide logical size it pillarboxes the 320 center inside the
-    // wide canvas — matching the intended "victory/tally pillarbox" look.
-    if (wsb.active) {
-        lsz.set(wsb.w * hd_scale, 200 * hd_scale);
-    }
+    BossPause pause(opts, pipe.audio.get(), pipe.sw.win, res, running);
+
+    // F5: the platform level's report form (shared "bug_report" screen), bound
+    // at the freeze below.  OLDUVAI_MENU_SCRIPT drives it
+    // (tests/boss_report.sh).
+    ReportFormService report_form(pause.model());
+    MenuScript menu_script;
+    menu_script.load_from_env();
+
+    TickPacer pacer;                     // the end of each tick
+    bool smooth_vsync_ran = false;       // set per-frame; skips the outer delay
+
+    // A display or audio Apply from the pause, in place: the fight stays and
+    // the pause stays open over the new display.  The shown arena is rebuilt
+    // from the loaded one and the fight's drain, `smooth` from the adopted
+    // Style (before the view: its pacer reads it), then the boss ops; the
+    // music plays on unless the audio was replaced.
+    const auto reinit_in_place = [&] {
+        const BossReinit target = pause.reinit_target();
+        const Rebuilt r = display.rebuild(
+            target, &target.aspect, [&](bool vector_hud) {
+                rebuild_arena_bg(assets, fight, vector_hud);
+                smooth = boss_smooth_motion(opts, hooks.force_smooth);
+                return true;
+            });
+        if (r == Rebuilt::kFailed) return false;
+        boss_ops =
+            draw_after(make_boss_ops(fight, assets, l2_last_flash, smooth),
+                       draw_fly_in_balloons);
+        pause.pipeline_changed(pipe.audio.get(), pipe.sw.win);
+        display.view().use_wide_canvas();
+        pacer.renderer_changed();
+        if (r == Rebuilt::kAudioToo) start_music();
+        return true;
+    };
+
+    // Loading is done: the wide logical canvas.
+    display.view().use_wide_canvas();
+
+    // The menus' bone cursor (L1SPR.MAT sprite 33).
+    const formats::Sprite* const bone =
+        assets.bone_atlas.size() > 33 ? &assets.bone_atlas[33] : nullptr;
+    const std::vector<Rgb>* const bone_palette =
+        bone != nullptr ? &assets.bone_palette : nullptr;
 
     while (running) {
+        // The display's parts, bound per frame.
+        const LevelSurface& surface = display.surface();
+        BossView& view = display.view();
+        BossArenaPresenter& arena = view.arena();
+        BossWidescreen& wsb = view.ws();
+        SmoothPos& smooth_pos = view.smooth_pos();
         fstats.begin_tick();
         cursor_autohide_frame();   // keyboard game: park the OS arrow
-        // Detect pause closing (Resume/ESC) with a dirty session → implicit
-        // Discard (§8.6 step 4; APPLY clears the session, so no double-revert).
-        if (was_pause_open && !pause_open && !boss_session.empty())
-            boss_flow.discard();
-        was_pause_open = pause_open;
+        pause.begin_frame();
         smooth_vsync_ran = false;   // set true only when the vsync fill paced
         // OLDUVAI_MENU_SCRIPT: one token before the poll, as on the platform.
         if (menu_script.active() &&
             drive_menu_script(menu_script, &report_form)) {
             res.quit = true;
-            running = false;
             break;
         }
         menu_script.shot_path.clear();   // `shot` is a platform-only token
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (handle_fullscreen_toggle(ev, win)) continue;
-            if (ev.type == SDL_QUIT) {
-                res.quit = true;
-                running = false;
-            } else if (report_form.open()) {
-                report_form.handle_event(ev);   // owns input while open
-            } else if (ev.type == SDL_KEYDOWN) {
-                const SDL_Keycode sym = ev.key.keysym.sym;
-                if (pause_open) {
-                    // Same routing as the surface pause and the title menu
-                    // (dialog_key_map.hpp): the confirm dialog first, then
-                    // ESC one screen out, closing at the root.
-                    menu_dialog_keydown(sym, boss_confirm, boss_flow,
-                                        boss_pause_menu,
-                                        [&] { pause_open = false; });
-                } else if (sym == SDLK_ESCAPE) {
-                    // ESC opens the pause overlay (menus.json present);
-                    // replay sessions and the no-menu fallback keep the
-                    // old bare abort-to-title.
-                    if (boss_menu_ok && !replay.active()) {
-                        pause_open = true;
-                        boss_pause_menu.open("pause_boss");
-                    } else {
-                        res.quit = true;
-                        running = false;
-                    }
-                } else if (sym == SDLK_F5) {
-                    report_form.open_form();   // freezes from this frame
-                }
-            }
-        }
+        poll_boss_events(pipe.sw.win, report_form, pause, replay.active(), res,
+                         running);
 
-        // Debug: OLDUVAI_BOSS_PAUSE_SHOT=<path.bmp> force-opens the pause
-        // overlay after the fly-in and dumps one frame (headless check,
-        // mirrors game_app's OLDUVAI_PAUSE_SHOT).
-        static const char* const s_bps = std::getenv("OLDUVAI_BOSS_PAUSE_SHOT");
-        if (s_bps && frame == 60 && boss_menu_ok && !pause_open) {
-            // OLDUVAI_BOSS_PAUSE_SCREEN picks the screen to capture (default
-            // "pause_boss") — lets the headless render check reach the shared
-            // Options screens (mirrors game_app's OLDUVAI_PAUSE_SCREEN).
-            const char* ps = std::getenv("OLDUVAI_BOSS_PAUSE_SCREEN");
-            boss_pause_menu.open(ps != nullptr ? ps : "pause_boss");
-            pause_open = boss_pause_menu.is_open();  // unknown id → no overlay
-            // Test-only: OLDUVAI_BOSS_PAUSE_MIDINTERP=1 forces the state a
-            // moving VSYNC tick leaves behind — last present mid-interpolation
-            // (elapsed/frame_ms < 1.0), so the float shadow is fractional while
-            // the logic position is integral.  The pause frame must reproduce
-            // EXACTLY that (the §3.4 triple feeds, below); the midinterp gate's
-            // golden pins a run where the sub-frame fill cannot converge by
-            // accident.  The 8px offset is a stress value, deliberately larger
-            // than the defect's sub-pixel so the shift is not masked by the
-            // pause menu slab; player.x/.y at frame 60 are deterministic under
-            // the headless recipe.
-            if (pause_open &&
-                std::getenv("OLDUVAI_BOSS_PAUSE_MIDINTERP") != nullptr) {
-                boss_use_float = true;
-                boss_pfx = static_cast<float>(player.x) + 8.0f;
-                boss_pfy = static_cast<float>(player.y) + 8.0f;
-                // use_float_pos also makes the compose read every OTHER float
-                // shadow (L2 rocks, the L4 dino), and those hold whatever the
-                // last wall-clock sub-frame left — the golden matched about
-                // half the runs until they were pinned too.  Pin them at the
-                // logic position so only the player carries the offset.
-                for (auto& s : l2.slots) s.fx = static_cast<float>(s.x);
-                l4.fx = static_cast<float>(l4.boss_x);
-                l4.fy = static_cast<float>(l4.boss_y);
-            }
-        }
+        // OLDUVAI_BOSS_PAUSE_SHOT=<path>: open Pause after the fly-in and dump
+        // one frame.
+        if (hooks.pause_shot != nullptr && frame == 60 && !pause.is_open())
+            open_pause_shot(pause, fight, smooth_pos, hooks);
 
-        // Options-exit detection (§8.6 step 2): after input handling,
-        // SettingsFlow checks whether the menu just left the Options subtree
-        // (membership derived from menus.json) and opens the confirm dialog
-        // if changes are staged.
-        if (pause_open && boss_pause_menu.is_open() && !boss_confirm.is_open())
-            boss_flow.track_screen(boss_pause_menu.current_screen());
+        pause.track_options_exit();
 
-        // F5 report form: freeze + draw the form over the frozen fight, the
-        // same service the platform level uses.  Presented like the pause
-        // menu's native path (pillarboxed inside a wide canvas).
+        // F5 form over the frozen fight, presented like the pause menu's native
+        // path.
         if (running && report_form.open()) {
             wsb.rebuild_if_resized();
             const auto show_native = [&](FrameBuffer& f) {
-                upload_native_frame(tex, f, hd_scale, enhance.hd_profile);
-                SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-                SDL_RenderClear(ren);
-                if (wsb.active) {
-                    const SDL_Rect dst{wsb.M * hd_scale, 0, 320 * hd_scale,
-                                       200 * hd_scale};
-                    SDL_RenderCopy(ren, tex, nullptr, &dst);
-                } else {
-                    SDL_RenderCopy(ren, tex, nullptr, nullptr);
-                }
-                present_output(ren);
+                arena.show_native(f);
             };
             const auto write_report = [&](const FrameBuffer& shot_fb,
                                           const BugAnnotations& ann) {
-                // A boss arena has no SystemsState: synthesise the shared
-                // rows, and carry the fight's own state in BossInfo.
-                systems::SystemsState snap;
-                snap.player.x = player.x;
-                snap.player.y = player.y;
-                snap.player.lives = player.lives;
-                snap.score = player.score;
-                snap.current_level = internal_level;   // boss display == internal
-                snap.current_screen = 0;
-                const bool want_presented = hd || wsb.active;
-                DisplayInfo di = read_display_info(ren, win);
-                di.aspect = enhance.aspect;
-                di.hd = hd;
-                di.hd_scale = hd_scale;
-                di.ws_active = wsb.active;
-                di.ws_margin = wsb.M;
-                di.ws_native_w = wsb.w;
-                BossInfo bi;
-                bi.supplied = true;
-                bi.health = boss_ops.health();
-                bi.phase = boss_ops.phase();
-                bi.frame = frame;
-                const std::string dir = write_bug_report(
-                    snap, shot_fb, assets.spr, internal_level, internal_level,
-                    /*overlay_scale=*/1, ann, want_presented, di, bi);
-                // screenshot_presented.png — the real on-screen boss frame
-                // (HD upscale / widescreen), from the last fight frame, which
-                // the frozen fb still holds.  Re-render WITHOUT presenting so
-                // RenderReadPixels reads the backbuffer (a post-present read
-                // is black on Metal).
-                if (!dir.empty() && want_presented) {
-                    const bool l4v =
-                        wsb.active && internal_level == 4 && l4.win_flag >= 1;
-                    if (wsb.active && !l4v)
-                        arena.present_wide(true, /*do_present=*/false);
-                    else
-                        arena.present_frame(true, /*do_present=*/false);
-                    capture_renderer_output(ren,
-                                            dir + "/screenshot_presented.png");
-                }
+                write_boss_report(fight, boss_ops, frame, assets, view,
+                                  shot_fb, ann);
             };
-            const formats::Sprite* bone =
-                assets.bone_atlas.size() > 33 ? &assets.bone_atlas[33] : nullptr;
             if (report_form.service_freeze(
                     {[&](FrameBuffer& out) {
                          RenderTarget prt{out.px.data(), out.w, out.h, 1,
@@ -962,891 +234,156 @@ BossRunResult run_boss_level(const std::filesystem::path& game_dir,
                          boss_ops.render_frame(prt);
                      },
                      show_native, write_report, assets.charset, bone,
-                     bone != nullptr ? &assets.bone_palette : nullptr,
-                     frame_ms}))
+                     bone_palette, frame_ms}))
                 continue;
         }
 
-        // Pause freeze: draw the frozen fight + menu, skip logic/frame++.
-        // The fight fb is HD-SIZED in HD mode, but the menu layout is
-        // native-coordinate — so compose the frozen scene at native 320x200
-        // (with the native menu slab) and then WHOLE-FRAME UPSCALE it into the
-        // SAME HD `tex` the fight uses, exactly like present_wide_native's
-        // native fallback.
-        //
-        // This block used to upload the native buffer into its own 320x200
-        // texture and let SDL stretch it.  SDL_HINT_RENDER_SCALE_QUALITY is "0"
-        // (window_util.cpp), so that is a NEAREST blow-up: opening the pause
-        // menu visibly dropped the arena to classic pixels while the menu above
-        // it stayed HD.  The old comment claimed this matched present_frame's
-        // fallback, but present_frame uploads into the HD `tex` — the two are
-        // not equivalent in HD, which was the bug.
-        if (pause_open && running) {
-            wsb.rebuild_if_resized();   // Alt+Enter taken WHILE paused
-            FrameBuffer pf{320, 200};
-            RenderTarget prt{pf.px.data(), 320, 200, 1, nullptr, nullptr};
-            // Freeze the fight at the same granularity the live fight was
-            // just rendered with (BACKLOG §3.4).  boss_use_float/px/py hold
-            // the LAST-presented float state; a VSYNC tick ends at
-            // elapsed/frame_ms < 1.0 (fractional), so without feeding the
-            // triple a pause that lands mid-interpolation re-draws the player
-            // at the integer position — a sub-pixel nudge on ESC, times
-            // hd_scale up to four HD pixels.  Discrete fills converge (the
-            // last sub-frame is alpha 1.0), which is why the plain goldens
-            // are unaffected.
-            boss_smooth_pos(prt, boss_use_float, boss_pfx, boss_pfy);
-            boss_ops.render_frame(prt);
-
-            const formats::Sprite* bone =
-                assets.bone_atlas.size() > 33 ? &assets.bone_atlas[33] : nullptr;
-            // HD hybrid font (same gate as game_app's surface pause): the slab
-            // + dim come from draw_menu (native, upscaled with the frame); the
-            // glyphs + bone cursor move to the output-resolution vector
-            // overlay (draw_menu_vector) so they stay crisp.  Classic keeps
-            // the bitmap glyphs drawn into the native pause buffer.
-            const bool menu_use_vector = hd && hd_text.ok();
-
-            // Widescreen: rebuild the frozen arena WIDE exactly the way the
-            // live fight does (build_wide_up) — mirror the CLEAN static
-            // background into the margins (reflect_pure + the 0.10 edge
-            // gradient), then draw the frozen fight SPRITES ONCE at
-            // origin_x = wsb.M so edge-crossing sprites overflow into the
-            // margins naturally.
-            //
-            // Mirroring the already-composed fight frame instead would reflect
-            // the LIVE SPRITES into the bezel — the boss tail and the ringside
-            // dinos appearing as ghosts in the margins.  reflect_pure mirrors
-            // whatever is at the frame's edge, so the source must be the
-            // sprite-free background.  Same reason the menu is drawn after the
-            // wrap, not before.
-            FrameBuffer wide_pf;
-            bool wide_pause = hd && arena.wide_ready() && arena.wide_w() > 320;
-            if (wide_pause) {
-                std::vector<std::uint8_t> wbuf =
-                    arena.compose_wide_native([&](RenderTarget& wrt) {
-                        // Same three fields the fight's wide compose feeds
-                        // build_wide_up — the paused edge must match the live
-                        // edge byte-for-byte at a mid-interpolation freeze.
-                        boss_smooth_pos(wrt, boss_use_float, boss_pfx,
-                                        boss_pfy);
-                        boss_ops.render_sprites(wrt);
-                    });
-                wide_pf = FrameBuffer{arena.wide_w(), 200};
-                if (wbuf.size() == wide_pf.px.size()) {
-                    wide_pf.px = std::move(wbuf);
-                } else {
-                    wide_pause = false;   // give up → pillarbox fallback
+        // Pause: the frozen fight + menu; logic is skipped.
+        if (pause.is_open() && running) {
+            // The parts bound above are the old view's: a rebuild starts the
+            // next frame.  A failed one ends the program (the pipeline is
+            // gone).
+            if (pause.wants_reinit()) {
+                if (!reinit_in_place()) {
+                    res.quit = true;
+                    res.quit_program = true;
+                    running = false;
                 }
+                continue;
             }
+            arena.show_pause(boss_ops.render_frame, boss_ops.render_sprites,
+                             pause.menu(), pause.confirm(), assets.charset,
+                             bone, bone_palette);
 
-            FrameBuffer& menu_fb = wide_pause ? wide_pf : pf;
-            if (boss_confirm.is_open()) {
-                // Confirm dialog replaces the menu while open (§8.6 step 5)
-                // — same draw_confirm reuse as game_app's surface pause.
-                draw_confirm(menu_fb, boss_confirm, assets.charset, /*dim=*/true,
-                             /*draw_text=*/!menu_use_vector);
-            } else if (boss_pause_menu.is_open()) {
-                // is_open() as well as pause_open: see menu.hpp.
-                draw_menu(menu_fb, boss_pause_menu, assets.charset, /*dim=*/true,
-                          /*draw_text=*/!menu_use_vector, bone,
-                          bone != nullptr ? &assets.bone_palette : nullptr);
-            }
-            if (wide_pause) {
-                const auto up = enhance::upscale_rgba(
-                    menu_fb.px, wsb.w, 200, hd_scale, enhance.hd_profile);
-                SDL_UpdateTexture(wsb.wtex, nullptr, up.data(),
-                                  wsb.w * hd_scale * 4);
-            } else {
-                // Native pause compose into the fight's HD texture
-                // (present_wide_native's native fallback).  The hd/non-hd
-                // branches collapse: hd_scale is 1 exactly when hd is false.
-                upload_native_frame(tex, pf, hd_scale, enhance.hd_profile);
-            }
-
-            // The renderer is shared with the shell, so the draw colour is
-            // whatever the last present set it to — pin it before the clear or
-            // the pillarbox bars inherit a stale colour.
-            SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-            SDL_RenderClear(ren);
-            if (wide_pause) {
-                // Already the full wide canvas — no bezel, no pillarbox.
-                SDL_RenderCopy(ren, wsb.wtex, nullptr, nullptr);
-            } else if (wsb.active) {
-                const SDL_Rect dst{wsb.M * hd_scale, 0, 320 * hd_scale,
-                                   200 * hd_scale};
-                SDL_RenderCopy(ren, tex, nullptr, &dst);
-            } else {
-                SDL_RenderCopy(ren, tex, nullptr, nullptr);
-            }
-
-            if (menu_use_vector) {
-                int ow = 0, oh = 0;
-                if (text_overlay.begin(ren, hd_text, ow, oh)) {
-                    // Boss HUD in the SAME overlay pass, BEFORE the menu (a
-                    // second begin/flush would not composite, so it cannot use
-                    // draw_boss_hud_overlay_wide, which opens its own).  Every
-                    // LIVE present overpaints the wide top band with the HUD;
-                    // without it the paused frame shows the mirrored arena
-                    // where the health bar and lives belong — and the enhanced
-                    // boss bg has its HUD strip erased (make_clean_boss_bg), so
-                    // that band is arena content, not a HUD.
-                    hud.draw_into(text_overlay.buffer(), ow, oh,
-                                       /*draw_lives=*/true,
-                                       /*cx_native=*/wsb.active ? wsb.M : 0,
-                                       /*total_native_w=*/wsb.active ? wsb.w : 320);
-                    // Where the picture sits in the output (the letterboxed
-                    // logical rect; in widescreen the centre 320 at wsb.M —
-                    // the dst rect above), so the glyphs land on the slab
-                    // instead of stretching across the bars (§3.23).
-                    const MenuFrame pic =
-                        wsb.active
-                            ? MenuFrame::picture(ow, oh, lsz.w(), lsz.h(),
-                                                 wsb.M * hd_scale,
-                                                 320 * hd_scale)
-                            : MenuFrame::picture(ow, oh, lsz.w(), lsz.h());
-                    if (boss_confirm.is_open())
-                        draw_confirm_vector(text_overlay.buffer(), ow, oh,
-                                            hd_text, boss_confirm, pic);
-                    else if (boss_pause_menu.is_open())
-                        draw_menu_vector(text_overlay.buffer(), ow, oh,
-                                         hd_text, boss_pause_menu, 0.0f, pic);
-                    text_overlay.flush(ren, lsz.w(), lsz.h());
-                }
-            }
-
-            if (s_bps) {                     // headless: dump + exit
-                // Readback BEFORE the buffer swap (post-present readback is
-                // black on Metal — same rule as the --shot path).
-                capture_renderer_output(ren, s_bps);
+            if (hooks.pause_shot != nullptr) {   // headless: dump + exit
+                // Read back before the buffer swap (black on Metal after it).
+                capture_renderer_output(pipe.sw.ren, hooks.pause_shot);
                 res.quit = true;
+                res.quit_program = true;   // not game over -> title
                 running = false;
                 continue;
             }
-            present_output(ren);
+            present_output(pipe.sw.ren);
             SDL_Delay(16);
             continue;
         }
 
-        // Debug: OLDUVAI_AUTO_FULLSCREEN=<frame> programmatically toggles
-        // desktop-fullscreen at that frame (simulates Alt+Enter) so the
-        // recompute path can be captured deterministically.
-        // -1 fallback: unset and mistyped both mean "never", where atoi made a
-        // typo mean "frame 0" — the quieter half of the same bug.
-        if (frame == env_int("OLDUVAI_AUTO_FULLSCREEN", -1)) {
-            SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP);
-        }
+        maybe_auto_fullscreen(pipe.sw.win, frame);
 
-        BossInputs in;
-        if (replay.active()) {
-            // Reference boss convention: frame N's logic uses key state
-            // folded up to frame N, and frame 0 always runs input-free
-            // (the reference engine's boss-replay key-state convention).  This
-            // differs from run_platform_level's at(frame + 1): there the
-            // two engines' surface traces sit one line apart and the
-            // differ re-aligns them, but the boss fly-in (44 identical
-            // input-independent frames) pins boss alignment at 0 <-> 0,
-            // so input must land on exactly the same frame number.
-            if (frame > 0) {
-                const auto rin = replay.at(frame);
-                in.left = rin.left;
-                in.right = rin.right;
-                in.jump = rin.up;
-                in.fire = rin.attack;
-            }
-            if (frame > replay.last_frame() + 18) {
-                res.quit = true;
-                running = false;
-            }
-        } else {
-            const Uint8* k = SDL_GetKeyboardState(nullptr);
-            in.left = k[SDL_SCANCODE_LEFT] != 0 || gamepad::left();
-            in.right = k[SDL_SCANCODE_RIGHT] != 0 || gamepad::right();
-            in.jump = k[SDL_SCANCODE_UP] != 0 || gamepad::up();
-            in.fire = k[SDL_SCANCODE_SPACE] != 0 || k[SDL_SCANCODE_LCTRL] != 0 ||
-                      gamepad::attack_held();
+        const BossInputs in = read_boss_inputs(replay, frame);
+        if (replay.active() && frame > replay.last_frame() + 18) {
+            res.quit = true;
+            running = false;
         }
+        record_boss_inputs(input_rec, frame, in);
 
-        // Record the resolved input at the frame the boss reader will resolve
-        // it (at(frame)); frame 0 is input-free on replay, so skip it to match.
-        if (input_rec.active() && frame > 0) {
-            systems::FrameInputs fin;
-            fin.left = in.left;
-            fin.right = in.right;
-            fin.up = in.jump;
-            fin.attack = in.fire;
-            input_rec.record(frame, fin);
-        }
-
-        // Previous-tick snapshot for the smooth-motion lerp (reference
-        // boss runners: player x/y, L2 projectile x, L4 boss x/y).
-        if (smooth) {
-            player.prev_x = player.x;
-            player.prev_y = player.y;
-            for (auto& s : l2.slots) s.prev_x = s.x;
-            l4.prev_x = l4.boss_x;
-            l4.prev_y = l4.boss_y;
-        }
-        const int l4_health_before = l4.health;
-        const int l6_health_before = l6.health;
+        if (smooth) save_prev_positions(fight);
+        const int l4_health_before = fight.l4.health;
+        const int l6_health_before = fight.l6.health;
         boss_ops.update_frame(in);
 
-        // AFTER the update, so the release is seen on the tick it happens:
-        // the player holds the balloons through the fly-in descent; the bunch
-        // is released on the tick it ends (boss.cpp's halo_flag counter).
-        fly_in_balloons.step(enhance.enhanced, player.halo_flag > 0,
-                             player.death_counter == 0, player.x,
-                             player.y - 34, 0);
+        // After the update, so the release lands on the tick the fly-in ends
+        // (halo_flag counter).
+        fly_in_balloons.step(opts.enhanced, fight.player.halo_flag > 0,
+                             fight.player.death_counter == 0, fight.player.x,
+                             fight.player.y - 34, 0);
 
-
-        // compose-skip (SPIKE_BOSS_PERF): when the widescreen present is
-        // active, arena.present_wide() → show_wide_up(arena.build_wide_up()) composes its
-        // OWN buffer and never reads `fb` -- the 320xHD framebuffer (the fight
-        // sprite blit into fb) is pure work measured at 5.7–6.1 ms per
-        // present.  `fb` is still needed by the resize fallback
-        // (present_wide → present_frame), F5 bug capture and --play-shot, so
-        // compose is only skipped on the wide-present path when those readers
-        // are inactive this tick.  rebuild_if_resized() aligns the wide state
-        // with what present_any will see, so a just-swallowed Alt+Enter
-        // cannot leave the skip on while present falls back to present_frame.
+        // Skip the fb compose when the wide present is active: it builds its
+        // own buffer (saves 5.7-6.1 ms per present).  fb is still needed by the
+        // resize fallback, F5 and --play-shot.  rebuild_if_resized() first, so
+        // a just-taken Alt+Enter cannot leave the skip on while present falls
+        // back to present_frame.
         wsb.rebuild_if_resized();
-        const bool skip_compose = wsb.active && wsb.wtex != nullptr &&
-                                  shot.empty();
+        const bool skip_compose = wsb.active && wsb.wtex() != nullptr &&
+                                  opts.screenshot.empty();
         auto render_fight = [&]() {
             if (skip_compose) return;
             FrameStats::Timer ct(&fstats, &FrameStats::compose_ms);
-            auto rt = make_target(fb);
-            rt.use_float_pos = boss_use_float;
-            rt.player_fx = boss_pfx;
-            rt.player_fy = boss_pfy;
+            auto rt = view.target(view.fb());
+            boss_smooth_pos(rt, smooth_pos.use_float, smooth_pos.fx,
+                            smooth_pos.fy);
             boss_ops.render_fight_frame(rt);
         };
 
-        // Render block.  Under smooth motion, L2/L4 draw 3 lerped
-        // sub-frames per logic tick (54 Hz) — the reference boss
-        // runners interpolate the player plus the L2 projectiles' x
-        // and the L4 triceratops x/y, each behind the 16-px teleport
-        // guard.  L6 interpolates the PLAYER too (the jump to the giant's
-        // head) — matching Python run_l6_boss's sub-frame pass
-        // (boss_l6.py apply_boss_player_interp); the giant is anchored so only
-        // the player moves there.  Animation timers (jaw/arm, pip erasure)
-        // tick once per logic frame, AFTER this block.
+        // Smooth motion: sub-frames lerp the player, L2 projectile x and L4
+        // dino x/y, each behind the 16 px teleport guard (L6: the player only;
+        // the giant is anchored).  Animation timers tick once per logic frame,
+        // after this block.
         if (smooth) {
-            const int cur_px = player.x;
-            const int cur_py = player.y;
-            smooth_vsync_ran = smooth_fill_tick(pacer, [&](float alpha, int) {
+            smooth_vsync_ran = smooth_fill_tick(view.pacer(), [&](float alpha,
+                                                                   int) {
                 boss_fx_alpha = alpha;   // this sub-frame's balloon rise
-                // Integer logic shadow AND the float render position
-                // (1-HD-px, read by render_boss_player_fb via
-                // rt/wrt.player_fx) from ONE guarded decision — they were two
-                // `if`s with the same condition spelled out twice.  Bosses
-                // have no screen changes, so no force signal.
-                const auto pp = snap_lerp_pair(player.prev_x, player.prev_y,
-                                               cur_px, cur_py, alpha);
-                player.x = pp.x;
-                player.y = pp.y;
-                boss_pfx = pp.fx;
-                boss_pfy = pp.fy;
-                boss_use_float = true;
-                std::array<int, 4> saved_sx{};
-                int saved_bx = 0, saved_by = 0;
-                if (internal_level == 2) {
-                    for (std::size_t si = 0; si < l2.slots.size(); ++si) {
-                        auto& s = l2.slots[si];
-                        saved_sx[si] = s.x;
-                        // Scalar, not pair: a projectile has only x.  The
-                        // `ptype != 0` half is a CALLER concern (an inactive
-                        // slot is not interpolated at all), so it stays here;
-                        // only the distance guard moves into the helper.  A
-                        // teleporting slot yields cur for both shadows, which
-                        // is what the old else-branch produced.
-                        if (s.ptype != 0) {
-                            s.fx = snap_lerp_f(s.prev_x, saved_sx[si], alpha);
-                            s.x = snap_lerp_i(s.prev_x, saved_sx[si], alpha);
-                        } else {
-                            s.fx = static_cast<float>(s.x);
-                        }
-                    }
-                } else if (internal_level == 4) {
-                    saved_bx = l4.boss_x;
-                    saved_by = l4.boss_y;
-                    // The triceratops moves diagonally, so this is exactly the
-                    // case the pair rule exists for: either axis teleporting
-                    // must snap both, or the dino half-interpolates.
-                    const auto bp = snap_lerp_pair(l4.prev_x, l4.prev_y,
-                                                   saved_bx, saved_by, alpha);
-                    l4.boss_x = bp.x;
-                    l4.boss_y = bp.y;
-                    l4.fx = bp.fx;
-                    l4.fy = bp.fy;
-                }
-
-                // L6: only the player is interpolated (giant is anchored).
+                const FightPositions logic =
+                    interpolate_fight(fight, alpha, smooth_pos);
                 render_fight();
                 arena.present_any();
-                player.x = cur_px;
-                player.y = cur_py;
-                if (internal_level == 2) {
-                    for (std::size_t si = 0; si < l2.slots.size(); ++si) {
-                        l2.slots[si].x = saved_sx[si];
-                    }
-                } else if (internal_level == 4) {
-                    l4.boss_x = saved_bx;
-                    l4.boss_y = saved_by;
-                }
+                restore_fight(fight, logic);
             });
-            boss_use_float = false;   // non-smooth paths below draw integer
+            smooth_pos.use_float = false;   // the paths below draw integer
             boss_fx_alpha = 1.0f;
         } else {
             render_fight();
             arena.present_any();
         }
 
-        // Post-render ticks + HUD pip erasure — once per logic tick,
-        // after the render block (the reference's draw-then-increment
-        // order; jaw/arm timers must not fire 3x under sub-frames).
-        bool won = false;
-        if (internal_level == 2) {
-            tick_l2_boss_post_render(player, l2);
-            if (l2.health_column_pending) {
-                // Classic only: enhanced uses vector bar (health tracked above)
-                if (!(hd && hd_text.ok())) erase_pip_column(assets, l2.health);
-                l2.health_column_pending = false;
-            }
-            won = l2.win_flag;
-        } else if (internal_level == 4) {
-            for (int h = l4.health; h < l4_health_before; ++h) {
-                // Classic only: enhanced uses vector bar (health tracked above)
-                if (!(hd && hd_text.ok())) erase_pip_column(assets, h + 1);
-            }
-            won = l4.win_flag >= 100;
-        } else {
-            tick_l6_boss_post_render(l6);
-            for (int h = l6.health; h < l6_health_before; ++h) {
-                // Classic only: enhanced uses vector bar (health tracked above)
-                if (!(hd && hd_text.ok())) erase_pip_column(assets, h + 1);
-            }
-            won = l6.win_flag != 0;
+        // Post-render ticks + HUD pip erasure, once per logic tick after the
+        // render (draw-then-increment; jaw/arm timers must not fire per
+        // sub-frame).
+        bool won = boss_post_render(fight, assets, l4_health_before,
+                                    l6_health_before, !surface.use_hd_text());
+        if (SdlAudio* const audio = pipe.audio.get()) {
+            if (boss_ops.take_sfx_hit()) audio->play_sfx("SFX_HIT");
+            if (fight.player.jump_apex_sfx_pending)
+                audio->play_sfx("SFX_JUMP_APEX");
         }
-        if (audio != nullptr) {
-            bool hit = false;
-            if (boss_ops.take_sfx_hit()) hit = true;
-            if (hit) audio->play_sfx("SFX_HIT");
-            if (player.jump_apex_sfx_pending) audio->play_sfx("SFX_JUMP_APEX");
-        }
-        player.jump_apex_sfx_pending = false;
+        fight.player.jump_apex_sfx_pending = false;
 
         if (trace.active()) {
-            trace.write_boss(frame, player, boss_ops.health());
+            trace.write_boss(frame, fight.player, boss_ops.health());
         }
         ++frame;
-        if (!shot.empty() && frame == shot_frame) {
-            if (std::getenv("OLDUVAI_REAL_SHOT") != nullptr) {
-                // Debug: capture the ACTUAL window/fullscreen output (live
-                // present → SDL logical-size scaling + letterbox bars), NOT the
-                // offscreen ideal wide buffer — so we see the real on-screen
-                // result (the squashing / bars the offscreen path hides).
-                // Render WITHOUT presenting so RenderReadPixels sees the frame
-                // before the buffer swap (post-present readback is black on Metal).
-                const bool l4v =
-                    wsb.active && internal_level == 4 && l4.win_flag >= 1;
-                // An L4 ride-off frame must be photographed through the branch
-                // that DRAWS it.  This used to fall through to present_frame,
-                // so a victory shot captured a pillarboxed fight frame and the
-                // wide ride-off compose was never in any image (§3.7).
-                if (l4v) arena.present_any(true, /*do_present=*/false);
-                else if (wsb.active) arena.present_wide(true, /*do_present=*/false);
-                else arena.present_frame(true, /*do_present=*/false);
-                capture_renderer_output(ren, shot);
-            } else if (wsb.active) {
-                // Widescreen HD: build the SAME wide upscaled scene buffer the
-                // live present uses (compose + sprite overflow + whole-frame
-                // upscale), bake the wide HUD into it at output resolution, and
-                // save it straight to an offscreen SDL surface at the correct
-                // 21:9 native dims (wsb.w*hd_scale x 200*hd_scale).  RenderReadPixels
-                // would capture the 16:10 WINDOW (wrong aspect) — the offscreen
-                // surface preserves the true wide aspect (matches the spike).
-                std::vector<std::uint8_t> up = arena.build_wide_up();
-                const int uw = wsb.w * hd_scale, uh = 200 * hd_scale;
-                if (hd_text.ok())
-                    hud.draw_into(up, uw, uh, /*draw_lives=*/true,
-                                       /*cx_native=*/wsb.M,
-                                       /*total_native_w=*/wsb.w);
-                SDL_Surface* s = SDL_CreateRGBSurfaceWithFormat(
-                    0, uw, uh, 32, SDL_PIXELFORMAT_RGBA32);
-                if (s != nullptr) {
-                    for (int y = 0; y < uh; ++y)
-                        std::memcpy(
-                            static_cast<std::uint8_t*>(s->pixels) +
-                                static_cast<std::size_t>(y) * s->pitch,
-                            up.data() + static_cast<std::size_t>(y) * uw * 4,
-                            static_cast<std::size_t>(uw) * 4);
-                    save_surface_image(s, shot);
-                    SDL_FreeSurface(s);
-                }
-            } else if (hd) {
-                // HD: the vector HUD labels now live in the output-resolution
-                // overlay (drawn after the scene RenderCopy), not in fb — so
-                // capture the FINAL rendered output (scene + overlay).  Re-draw
-                // scene + overlay WITHOUT presenting (RenderReadPixels reads the
-                // backbuffer, which a prior present may have swapped away).
-                SDL_UpdateTexture(tex, nullptr, fb.px.data(), fb.w * 4);
-                SDL_RenderClear(ren);
-                SDL_RenderCopy(ren, tex, nullptr, nullptr);
-                if (hd_text.ok()) arena.hud_overlay(/*draw_lives=*/true);
-                capture_renderer_output(ren, shot);
-            } else {
-                SDL_Surface* s = SDL_CreateRGBSurfaceWithFormat(
-                    0, fb.w, fb.h, 32, SDL_PIXELFORMAT_RGBA32);
-                std::memcpy(s->pixels, fb.px.data(), fb.px.size());
-                save_surface_image(s, shot);
-                SDL_FreeSurface(s);
-            }
+        if (!opts.screenshot.empty() && frame == opts.screenshot_frame) {
+            arena.capture_shot(opts.screenshot, hooks.real_shot);
             running = false;
         }
-        if (max_frames > 0 && frame >= max_frames) running = false;
+        if (opts.frames > 0 && frame >= opts.frames) running = false;
 
-        // Debug: OLDUVAI_FORCE_WIN=<frame> forces the win at that frame so the
-        // victory sequence can be triggered + captured deterministically.
-        // INT_MAX fallback: a mistyped value must never satisfy `frame >=`,
-        // which `atoi` made always-true by parsing it as 0.
-        if (frame >= env_int("OLDUVAI_FORCE_WIN", INT_MAX)) won = true;
-        // Debug: OLDUVAI_FORCE_L4_RIDEOFF=<frame> seeds the L4 ride-off at that
-        // frame (win_flag 1 -> 2 -> 3 -> 100 then runs on its own), so the
-        // victory compose can be captured without playing the fight out.
-        // FORCE_WIN cannot do this: it sets `won` directly and leaves win_flag
-        // at 0, which ends the loop before the ride-off draws a single frame.
-        if (internal_level == 4 && l4.win_flag == 0 &&
-            frame >= env_int("OLDUVAI_FORCE_L4_RIDEOFF", INT_MAX)) {
-            l4.win_flag = 1;
-        }
+        if (debug_force_win(fight, frame, hooks)) won = true;
         if (won) {
             res.survived = true;
             running = false;
         }
-        if (player.lives < 0) running = false;
+        if (fight.player.lives < 0) running = false;
 
-        // BEFORE the pacing wait, so `worst_work` means work and not sleep —
-        // the same window run_platform_level measures.
+        // Before the pacing wait, so `worst_work` excludes sleep.
         fstats.end_tick();
 
         // Counters omitted: the boss has no --vga-scan diagnostic to report.
-        pace_end_of_tick(ren, tex, dos_ticker, smooth_vsync_ran,
-                         enhance.vga_scan, hd, vga_scan_ok);
+        pacer.end_tick(pipe.sw.ren, surface.tex(), smooth_vsync_ran,
+                       opts.vga_scan, surface.hd());
     }
-    // Reported at the end of the FIGHT, not of the function: everything below
-    // is victory/fade/tally, which is a cinematic and not the loop whose
-    // pacing this measures.
+    // Reported at the end of the fight; victory/fade/tally are not paced by it.
     fstats.report(internal_level);
 
-    // Keep the boss music playing THROUGH the victory flash + ride-off:
-    // The reference boss-L2 victory loop has no stop_music, so the
-    // T-Rex track plays right up to the score tally, where BONUS.MDI takes
-    // over (FUN_270a_01b4).  Only stop here when there is
-    // no victory sequence to come (loss/quit) — otherwise the tally's
-    // play_music(BONUS.MDI) replaces it.
+    // Boss music plays through the victory until the tally's BONUS.MDI replaces
+    // it (FUN_270a_01b4).  Stop it only when no victory follows.
     const bool victory_coming =
-        res.survived && !res.quit && max_frames <= 0 && shot.empty();
-    if (audio != nullptr && !victory_coming) audio->stop_music();
-    res.lives = player.lives;
-    res.score = player.score;
+        res.survived && !res.quit && opts.frames <= 0 &&
+        opts.screenshot.empty();
+    if (pipe.audio && !victory_coming) pipe.audio->stop_music();
+    carry.lives = fight.player.lives;
+    carry.score = fight.player.score;
 
-    // ── Victory sequences (F3) ───────────────────────────────────────────────
-    // EXE: after the win condition each boss main calls Level_EndScreen(N,500):
-    //   L2 T-Rex    23cf:0fc9 — Level_EndScreen(2, 500)
-    //   L4 Tricera  24cc:0818 — Level_EndScreen(4, 500)
-    //   L6 Giant    254f:0620 — Level_EndScreen(6, 500)
-    if (res.survived && !res.quit && max_frames <= 0 &&
-        (shot.empty() || std::getenv("OLDUVAI_REAL_SHOT") != nullptr)) {
-        // The fight is WON: ESC is inert throughout the ending (victory + fade
-        // + tally have no menu) — it used to jump straight to THE END.  The
-        // victory loops below poll SDL_QUIT only; the fade + tally go through
-        // lpresent / show_score_tally, which are ESC-inert on their own.
-        if (internal_level == 2) {
-            // 18-frame flash; the EXE per-frame hold comes from the victory
-            // lcall(15) routed through the delay shim at 1847:168f, which does
-            // arg>>1 → 7 ticks (NOT 15).  7 ticks at 18 FPS ≈ 388 ms/frame
-            // (18 x 388 ≈ 7 s total, not ~15 s).
-            constexpr int kVictoryFrames = 18;
-            constexpr Uint32 kFlashExtraMs = 388;   // 1000 * 7 / 18 ≈ 388
-            for (int vf = 0; vf < kVictoryFrames && !res.quit; ++vf) {
-                l2_last_flash = vf;   // remember for the post-victory fade parity
-                // Widescreen: render the victory flash at NATIVE 320 and present
-                // it wide (mirror + edge gradient) so it matches the fight; else
-                // the unchanged HD pillarbox path.
-                FrameBuffer vnat;   // native 320 for the wide victory path
-                if (arena.wide_on()) {
-                    RenderTarget rt{vnat.px.data(), 320, 200, 1, nullptr,
-                                    nullptr};
-                    render_l2_victory_frame(rt, assets, player, vf);
-                } else {
-                    auto rt = make_target(fb);
-                    render_l2_victory_frame(rt, assets, player, vf);
-                }
-
-                // F4: HUD lives digit NOT drawn (EXE draw_lives=false), but
-                // vector "LIVES:"/"ENERGY" labels ARE drawn.
-                // Won already — ESC is inert here (no game-over); only a
-                // window-close stops the victory flash.
-                if (!poll_screen_events(win)) res.quit = true;
-                if (!res.quit) {
-                    if (std::getenv("OLDUVAI_REAL_SHOT") != nullptr && arena.wide_on() &&
-                        vf == 8 && !shot.empty()) {
-                        // Debug: capture a mid-flash victory frame (real output).
-                        arena.present_wide_native(vnat, /*draw_lives=*/false,
-                                            /*do_present=*/false);
-                        capture_renderer_output(ren, shot);
-                        res.quit = true;   // captured; stop the sequence
-                    } else if (arena.wide_ready()) {
-                        // Widescreen: build the wide buffer the SAME way the fight
-                        // does — clean RING.PC1 arena composed wide (mirror + 0.10
-                        // edge gradient) — then draw the victory SPRITES ONCE at
-                        // origin_x = wsb.M so the defeated T-Rex stays in the centre
-                        // 320.  present_wide_native mirrored the baked 320 frame,
-                        // reflecting the T-Rex tail at the screen edge into the
-                        // margin (the "mirrored big T-Rex tail").  Same fix as the
-                        // L4 ride-off victory.
-                        arena.keep_fade_source(vnat);
-                        arena.show_wide_native(
-                            arena.compose_wide_native([&](RenderTarget& wrt) {
-                                render_l2_victory_sprites(wrt, assets, player,
-                                                          vf);
-                            }),
-                            /*draw_lives=*/false);
-                        SDL_Delay(kFlashExtraMs);
-                    } else if (arena.wide_on()) {
-                        arena.present_wide_native(vnat, /*draw_lives=*/false);  // resize fallback
-                        SDL_Delay(kFlashExtraMs);
-                    } else {
-                        arena.present_frame(/*draw_lives=*/false);
-                        SDL_Delay(kFlashExtraMs);
-                    }
-                }
-            }
-        } else if (internal_level == 4) {
-            // 3-phase ride-off (phase logic already in boss_l4.cpp update_victory;
-            // the L4 win_flag was 100 when we exited the fight loop — reset to
-            // phase 1 start because the fight loop exited when win_flag>=100 was
-            // detected; all three phases already ran inside the fight loop
-            // via update_l4_boss_frame → update_victory.  The fight loop exits
-            // only when won=true (win_flag>=100), so by that point the ride-off
-            // is complete.  No separate post-loop phase loop needed — the victory
-            // rendered live inside the fight loop via render_l4_victory_frame.
-            // Nothing to do here; fall through to fade.
-            (void)l4;
-        } else {
-            // L6: player drops then 30-count victory sequence.
-            // Build the static victory backdrop once (native 320x200 RGBA).
-            FrameBuffer victory_bg_fb;   // always 320x200 for the blit helpers
-            // Fill from current bg.
-            std::copy(assets.bg.begin(), assets.bg.end(),
-                      victory_bg_fb.px.begin());
-            // H3.MAT sprite 0 (pose C, slam/resting) at (80,7) — the beaten pose.
-            // boss_l6.py:98-100,164,591-595: H-MAT frame 2 = H3.MAT[0].
-            // H1/H2/H3.MAT each contain exactly one sprite (one 240x190 pose),
-            // so h1[2] is always OOB; correct source is assets.h3[0].
-            {
-                RenderTarget vt{victory_bg_fb.px.data(), 320, 200, 1,
-                                nullptr, nullptr};
-                blit_at(vt, assets.h3, 0, assets.palette, 80, 7);
-
-                // L6SPR[49] at (213,7) — beaten face sprite.
-                if (static_cast<int>(assets.spr.size()) > 49)
-                    blit_sprite(vt, assets.spr[49], assets.palette, 213, 7);
-            }
-
-            // Widescreen L6 victory present: clean arena composed wide (mirror +
-            // 0.10 edge gradient) with the victory SPRITES drawn ONCE at
-            // origin_x = wsb.M — so the beaten giant / landed player stay in the
-            // centre 320 and are NOT reflected into the margin.  Replaces
-            // present_wide_native (which mirrored the baked 320 frame → the "big
-            // caveman reflection").  Same treatment as L2/L4.  Falls back to
-            // present_wide_native if a resize drops the wide texture mid-sequence.
-            auto present_l6_victory_wide = [&](bool do_present = true) {
-                arena.rebuild_if_resized();
-                FrameBuffer vnat;
-                {
-                    RenderTarget rt{vnat.px.data(), 320, 200, 1, nullptr,
-                                    nullptr};
-                    render_l6_victory_frame(rt, victory_bg_fb.px, assets, player,
-                                            l6);
-                }
-                if (!arena.wide_ready()) {
-                    arena.present_wide_native(vnat);   // resize fallback
-                    return;
-                }
-                arena.keep_fade_source(vnat);      // post-victory fade source
-                // do_present=false renders WITHOUT flipping, so the capture
-                // hook below can read the renderer back — the same shape the
-                // L2 flash and the L4 ride-off use.  A present would leave
-                // nothing to read.
-                arena.show_wide_native(
-                    arena.compose_wide_native([&](RenderTarget& wrt) {
-                        // Sub-pixel drop on the smooth-motion path — the same
-                        // three fields present_wide feeds the fight.  Inert
-                        // when boss_use_float is false (classic, or the
-                        // landed hold).
-                        boss_smooth_pos(wrt, boss_use_float, boss_pfx,
-                                        boss_pfy);
-                        render_l6_victory_sprites(wrt, assets, player, l6);
-                    }),
-                    /*draw_lives=*/true, do_present);
-            };
-
-            // Reset victory state in case fight loop already set win_flag=100.
-            l6.win_flag = 1;
-            l6.win_counter = 0;
-            l6.cycle_idx = 0;
-            l6.cycle_tick = 0;
-
-            // Victory-frame counter for the capture hook below.  The L6
-            // victory had NO hook at all until 2026-09-06 — L2's flash and L4's
-            // ride-off each had one, so this path was the only boss ending no
-            // test could photograph, which is why §3.7's dispatch slice left the
-            // victory-sprite chain alone.
-            int l6_vf = 0;
-            while (l6.win_flag != 100 && !res.quit) {
-                const Uint32 vt0 = SDL_GetTicks();
-                // Won already — ESC is inert here (no game-over); only a
-                // window-close stops the victory ride-off.
-                if (!poll_screen_events(win)) res.quit = true;
-
-                // Snapshot player y before the logic tick (smooth-motion lerp).
-                // cycle_idx / win_flag advance once per logic frame outside the
-                // sub-frame loop — spec F3: only the drop is interpolated.
-                const int prev_y = player.y;
-                update_l6_victory_frame(player, l6);
-                const int cur_y  = player.y;
-                const bool is_dropping = (cur_y != prev_y);
-
-                // Debug: capture a mid-drop victory frame (real output).
-                // Placed BEFORE the smooth sub-frame branch on purpose —
-                // boss_use_float is still false here, so the frame is rendered
-                // at integer positions and does not depend on which sub-frame
-                // the lerp happens to be in.  That is what makes a fixed index
-                // a stable golden.
-                if (std::getenv("OLDUVAI_REAL_SHOT") != nullptr && arena.wide_on() &&
-                    l6_vf == 8 && !shot.empty()) {
-                    present_l6_victory_wide(/*do_present=*/false);
-                    capture_renderer_output(ren, shot);
-                    res.quit = true;   // captured; stop the sequence
-                    break;
-                }
-                ++l6_vf;
-
-                if (smooth && is_dropping) {
-                    // 3 sub-frames at 54 Hz: lerp player y between prev and cur.
-                    // Same shared guard as the fight loop; the drop is always
-                    // +4 so it never trips it — kept because "always" is a
-                    // property of today's kDropDY, not of the code.
-                    smooth_fill_tick(pacer, [&](float alpha, int) {
-                        // Single axis, so the shared scalar helpers apply
-                        // directly (unlike the fight's pair_lerp, which guards
-                        // on either axis and snaps both).  The drop is +4/tick,
-                        // always inside the guard — the guard is kept because
-                        // "always" is a property of today's kDropDY.
-                        player.y = snap_lerp_i(prev_y, cur_y, alpha);
-                        // FLOAT shadow of the same lerp.  The integer y above
-                        // moves in whole NATIVE pixels — 16 output pixels per
-                        // logic tick at hd_scale 4 — so on its own the three
-                        // sub-frames could only land on three of them and the
-                        // drop read as un-lerped (playtest 2026-07-28).  The
-                        // fight player has had this since the boss lerp landed;
-                        // this is the victory catching up.
-                        boss_pfy = snap_lerp_f(prev_y, cur_y, alpha);
-                        boss_pfx = static_cast<float>(player.x);   // x is fixed
-                        boss_use_float = true;
-                        if (arena.wide_on()) {
-                            present_l6_victory_wide();   // clean bg + sprites@wsb.M
-                        } else {
-                            auto rt = make_target(fb);
-                            rt.use_float_pos = boss_use_float;
-                            rt.player_fx = boss_pfx;
-                            rt.player_fy = boss_pfy;
-                            render_l6_victory_frame(rt, victory_bg_fb.px,
-                                                    assets, player, l6);
-                            arena.present_frame();
-                        }
-                        player.y = cur_y;   // restore before next sub-frame
-                    });
-                    // Leave no stale float state for the landed frames or the
-                    // post-victory fade, which re-render from logic positions.
-                    boss_use_float = false;
-                } else {
-                    if (arena.wide_on()) {
-                        present_l6_victory_wide();   // clean bg + sprites@wsb.M
-                    } else {
-                        auto rt = make_target(fb);
-                        render_l6_victory_frame(rt, victory_bg_fb.px, assets,
-                                                player, l6);
-                        arena.present_frame();
-                    }
-                    const Uint32 vspent = SDL_GetTicks() - vt0;
-                    if (vspent < frame_ms) SDL_Delay(frame_ms - vspent);
-                }
-            }
-        }
-    }
-
-    // ── Fade + score tally ───────────────────────────────────────────────────
-    // No logical-size switch here.  There used to be one restoring the
-    // pillarbox canvas "before the fade + tally", and it was dead on every
-    // path: with a victory the wide set below overwrites it before anything
-    // renders, without one the whole block is skipped and the level is over.
-    //
-    // It was also the wrong idea.  The tally is a UI screen, not arena
-    // content — there is nothing beside it to peek, so widescreen has nothing
-    // to add and pillarboxing actively hurts: the vector rows are laid out
-    // about the OUTPUT centre while the artwork follows the LOGICAL canvas, so
-    // the two agree only when the logical canvas IS the window.  The tally
-    // simply inherits the wide logical, which equals the output size, so it is
-    // presented 1:1 and centred with no special handling at all.
-    if (res.survived && !res.quit) {
-        if (arena.wide_on()) {
-            // Widescreen: fade the LAST VICTORY frame (the presenter's) — NOT the
-            // stale fight `fb` (which still holds player+club+enemies) — to
-            // black, wrapped WIDE (mirror + 0.10 gradient, no HUD) so it matches
-            // the victory.  Use the wide logical during the fade, then restore
-            // the pillarbox logical for the tally (which appears on the now-black
-            // screen, so its bezel bars are invisible).
-            arena.use_wide_logical();
-
-            // L4 AND L2 fade through the OVERFLOW compose, not present_wide_native:
-            // both have a victory sprite at the screen edge (L4's dino horn at
-            // boss_x-55 ≈ 305; L2's defeated T-Rex tail), so mirroring the baked
-            // wsb.last_native would DUPLICATE it into the margin (the "tail mirrored
-            // at the edge" bug — it pops back in during the fade).  Build the wide
-            // buffer once (clean bg mirror + the victory sprites drawn ONCE at
-            // origin_x = wsb.M, exactly like the victory present), then darken it
-            // per frame — the edge sprite stays single.  L6 has the beaten giant
-            // (240px pose, reaches the screen edge) + the landed player, so its
-            // final frame ALSO mirrors into the margin (the "big caveman
-            // reflection") — fade it through the same overflow compose.
-            if (arena.wide_ready() &&
-                (internal_level == 4 || internal_level == 2 ||
-                 internal_level == 6)) {
-                const std::vector<std::uint8_t> wbase =
-                    arena.compose_wide_native([&](RenderTarget& wrt) {
-                        boss_ops.render_victory_sprites(wrt);
-                    });
-                for (int f2 = 0; f2 <= kFadeFrames && !res.quit; ++f2) {
-                    const double k =
-                        1.0 - static_cast<double>(f2) / kFadeFrames;
-                    std::vector<std::uint8_t> faded = wbase;
-                    for (std::size_t i = 0; i < faded.size(); i += 4) {
-                        faded[i]     = static_cast<std::uint8_t>(faded[i] * k);
-                        faded[i + 1] = static_cast<std::uint8_t>(faded[i + 1] * k);
-                        faded[i + 2] = static_cast<std::uint8_t>(faded[i + 2] * k);
-                    }
-                    arena.show_wide_native(faded, /*draw_lives=*/false,
-                                           /*do_present=*/true,
-                                           /*draw_hud=*/false);
-                    if (!poll_screen_events(win)) res.quit = true;
-                    SDL_Delay(frame_ms);
-                }
-            } else {
-                for (int f2 = 0; f2 <= kFadeFrames && !res.quit; ++f2) {
-                    FrameBuffer faded;
-                    apply_fade(faded, arena.last_wide_native(),
-                               static_cast<double>(f2) / kFadeFrames);
-                    arena.present_wide_native(faded, /*draw_lives=*/false,
-                                        /*do_present=*/true, /*draw_hud=*/false);
-                    if (!poll_screen_events(win)) res.quit = true;
-                    SDL_Delay(frame_ms);
-                }
-            }
-            // §3.13: update the MIRROR as well, not just SDL.  text_overlay
-            // .flush() restores SDL's logical size from lsz.w()/h, so the
-            // tally's own HD-text flush was putting the WIDE dims back (last
-            // written for the fight) one frame after this line asked for
-            // pillarbox — displacing the tally by exactly the margin width,
-            // 128 px in an 896x400 window.  Confirmed against the classic
-            // non-widescreen tally, which lands where this now does.
-            // Tally stays on the WIDE logical, deliberately.  Switching to
-            // the pillarbox canvas here shifts the whole composition 128 px
-            // left of the window centre in an 896x400 window, because the
-            // vector rows are laid out about the OUTPUT centre while the
-            // artwork follows the logical canvas — the two only agree when
-            // the logical canvas IS the window.
-            //
-            // This screen is an intentional Olduvai divergence: there is no
-            // DOS text-mode tally to be faithful to, so the goal is simply a
-            // CENTRED tally, and centred is what the wide logical gives.
-        } else {
-            // Classic / non-widescreen: fade the arena frame to black.  The fade
-            // applies to a native 320x200 FrameBuffer (lpresent upscales it).
-            FrameBuffer fade_src;   // 320x200 for the lpresent path
-            if (hd) {
-                // Downscale the HD fb to 320x200 (nearest-neighbour).
-                for (int y = 0; y < 200; ++y)
-                    for (int x = 0; x < 320; ++x) {
-                        const std::size_t so =
-                            (static_cast<std::size_t>(y * hd_scale) * fb.w +
-                             x * hd_scale) * 4;
-                        const std::size_t do_ =
-                            (static_cast<std::size_t>(y) * 320 + x) * 4;
-                        fade_src.px[do_]     = fb.px[so];
-                        fade_src.px[do_ + 1] = fb.px[so + 1];
-                        fade_src.px[do_ + 2] = fb.px[so + 2];
-                        fade_src.px[do_ + 3] = fb.px[so + 3];
-                    }
-            } else {
-                fade_src = fb;   // classic: fb is already 320x200
-            }
-            if (!fade_to_black(fade_src, lpresent)) res.quit = true;
-        }
-        if (!res.quit) {
-            // The tally is presented 1:1 with the WINDOW, in every mode.
-            //
-            // It is a UI screen, not arena content, and its two halves live in
-            // different coordinate systems: the vector rows lay out about the
-            // OUTPUT centre (draw_tally_rows_overlay uses ow/2, and
-            // TextOverlay::begin takes ow from SDL_GetRendererOutputSize) while
-            // the artwork follows the LOGICAL canvas.  They agree only when the
-            // logical canvas IS the window.
-            //
-            // Widescreen satisfied that by accident — its wide logical happens
-            // to equal the output size — so the tally was centred there and
-            // 127 px off centre with widescreen OFF, where the logical canvas
-            // is the 640x400 pillarbox.  Stating it here makes all modes agree
-            // for the same reason instead of one of them agreeing by luck.
-            {
-                int ow = 0, oh = 0;
-                if (SDL_GetRendererOutputSize(ren, &ow, &oh) == 0 && ow > 0 &&
-                    oh > 0) {
-                    lsz.set(ow, oh);
-                }
-            }
-            // Display level: internal boss levels 2/4/6 == display levels 2/4/6
-            // (only L3↔L5 swap; boss slots are not affected).
-            const int display_level = internal_level;
-
-            // BONUS.MDI replaces the boss track that was still playing
-            // through the victory flash (FIX C).
-            play_tally_music(audio, game_dir);
-
-
-            if (!screen.text_screen(text_screen_deps, hd && hd_text.ok(),
-                                    "OLDUVAI_DUMP_TALLY", "tally",
-                                    [&](const TextScreenHd& sh) {
-                                        return show_score_tally(
-                                            res.lives, res.score,
-                                            display_level, 500,
-                                            assets.charset, assets.palette,
-                                            lpresent, sh,
-                                            TallyAudio{audio,
-                                                       enhance.enhanced});
-                                    })) {
-                res.quit = true;
-            }
-        }
-    }
-
-    // ── End victory block ────────────────────────────────────────────────────
-
-    hd_cache.clear();
-    // No wtex destroy here: BossWidescreen owns it and its destructor releases
-    // it on the way out.  Destroying it here as well would be a double free
-    // that no compiler warns about — the rename made this line look harmless.
+    BossView& view = display.view();
+    const BossEnding ending{display.surface(), view.hd_cache(), view.arena(),
+                            view.screen(),     view.text_deps(), view.present(),
+                            assets,            fight.player,     view.fb(),
+                            opts.screenshot,   frame_ms,         res,
+                            pipe.audio.get(),  opts.game_dir,    opts.enhanced};
+    play_boss_ending(ending, fight, boss_ops.render_victory_sprites,
+                     l2_last_flash, smooth, view.pacer(), view.smooth_pos(),
+                     opts.frames <= 0 &&
+                         (opts.screenshot.empty() || hooks.real_shot));
     return res;
 }
 

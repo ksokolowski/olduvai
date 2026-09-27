@@ -46,7 +46,7 @@ inline SettingsFlow::Key flow_key_from_sym(SDL_Keycode sym) {
 inline bool menu_dialog_keydown(SDL_Keycode sym, const ConfirmDialog& confirm,
                                 SettingsFlow& flow, Menu& menu,
                                 const std::function<void()>& on_root_escape) {
-    // The dialog intercepts all input while open (§8.6 step 4); SettingsFlow
+    // The dialog intercepts all input while open; SettingsFlow
     // resolves move/apply/discard/cancel through that site's own hooks.
     if (confirm.is_open()) {
         flow.handle_key(flow_key_from_sym(sym));

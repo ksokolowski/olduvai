@@ -13,10 +13,13 @@
 # Scenarios:
 #   ws_pan_walk  — l1 rightward walk/fight → kind-1 panorama pans
 #   ws_cave_sign — l1 cave-2 entry → kind-2 fade pair
+#   ws_secret_in — l1 screen 5 into the secret room → the enhanced slide
+#                  (secret_slide.cpp, which nothing else ran)
 #
 # Determinism (host-independent by construction):
-#  - --hd-profile mmpx: INTEGER upscaler. NEVER switch this to omniscale —
-#    its float codegen is not bit-stable across LTO relinks.
+#  - --hd-profile mmpx: INTEGER upscaler (chosen for the handhelds' speed —
+#    omniscale is equally deterministic, pinned by test_scaler_goldens on the
+#    CI platform matrix, §3.36, which retired the old bit-stability claim).
 #  - --window 896x400 + OLDUVAI_WS_FORCE_MARGIN=64 pin the margin and the
 #    renderer output size on any host/driver (native_w 448 x scale 2).
 #  - XDG_CONFIG_HOME → fresh temp dir (user play.json cannot leak).
@@ -58,9 +61,10 @@ export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}"
 export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}"
 FAIL=0
 
-# run_scenario <name> <play-frames>
+# run_scenario <name> <replay> <play-frames> [extra args...]
 run_scenario() {
-    GOLDEN="${FIX}/$1.sha256"
+    NAME_="$1"; REPLAY="$2"; FRAMES="$3"; shift 3
+    GOLDEN="${FIX}/${NAME_}.sha256"
     OUT_DIR="$(mktemp -d /tmp/wide_transition.XXXXXX)"
     CFG_DIR="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
     XDG_CONFIG_HOME="${CFG_DIR}" OLDUVAI_WS_FORCE_MARGIN=64 \
@@ -68,17 +72,17 @@ run_scenario() {
         "${BINARY}" --play --level 1 --enhanced --hd-profile mmpx \
         --render-scale 2 --aspect widescreen --window 896x400 \
         --transitions classic \
-        --replay "${FIX}/$1.jsonl" --play-frames "$2" \
-        --game-dir "${GAME_DIR}" >/dev/null 2>&1
+        --replay "${FIX}/${REPLAY}.jsonl" --play-frames "${FRAMES}" \
+        --game-dir "${GAME_DIR}" "$@" >/dev/null 2>&1
     rm -rf "${CFG_DIR}"
     SCEN_FAIL=0
     while read -r WANT NAME; do
         [ -n "${NAME}" ] || continue
         if [ ! -s "${OUT_DIR}/${NAME}" ]; then
-            echo "wide_transition[$1]: FAIL — frame ${NAME} not produced"
+            echo "wide_transition[${NAME_}]: FAIL — frame ${NAME} not produced"
             SCEN_FAIL=1
         elif [ "$(sha256 "${OUT_DIR}/${NAME}")" != "${WANT}" ]; then
-            echo "wide_transition[$1]: FAIL — ${NAME} differs from golden hash"
+            echo "wide_transition[${NAME_}]: FAIL — ${NAME} differs from golden hash"
             echo "  shot=${OUT_DIR}/${NAME}  golden=${GOLDEN}"
             SCEN_FAIL=1
         fi
@@ -88,7 +92,7 @@ run_scenario() {
     GOT=$(ls "${OUT_DIR}" 2>/dev/null | wc -l)
     WANTN=$(wc -l < "${GOLDEN}")
     if [ "${GOT}" -ne "${WANTN}" ]; then
-        echo "wide_transition[$1]: FAIL — frame count ${GOT} != golden ${WANTN}"
+        echo "wide_transition[${NAME_}]: FAIL — frame count ${GOT} != golden ${WANTN}"
         SCEN_FAIL=1
     fi
     if [ ${SCEN_FAIL} -eq 0 ]; then
@@ -98,8 +102,9 @@ run_scenario() {
     fi
 }
 
-run_scenario ws_pan_walk 400
-run_scenario ws_cave_sign 400
+run_scenario ws_pan_walk ws_pan_walk 400
+run_scenario ws_cave_sign ws_cave_sign 400
+run_scenario ws_secret_in secret_l1_in 400 --start-screen 5
 
 [ ${FAIL} -eq 0 ] && echo "wide_transition: PASS"
 exit ${FAIL}

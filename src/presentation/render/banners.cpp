@@ -11,19 +11,13 @@
 
 namespace olduvai::presentation {
 
-// Animated enhanced banners (wall-clock driven, so motion is smooth at any
-// refresh rate and independent of the 18 Hz logic tick):
-// GET READY!       → fully visible for HOLD ms, then rockets straight up
-//                    off the top over FLY ms (quadratic accel), then gone.
-//                    Armed on the level-start rising edge of
-//                    get_ready_counter (arm_tick).
-// NOT ENOUGH FOOD! → colour gradient + a gentle vertical bob in place; a
-//                    persistent status banner, so it rides the wall clock.
-// DEFAULT effect is opts.banner_fx ("caveman": primal fire-and-blood);
-// rainbow/fire/gold/pulse stay available.  `t/1000` is wall-clock seconds →
-// all animation is refresh-rate-independent.  Under headless capture
-// (--play-frames / --play-shot) the clock is the logic tick instead, so a
-// captured frame is reproducible run to run (see the constructor).
+// Animated enhanced banners on the wall clock (smooth at any refresh):
+// GET READY!       visible for HOLD ms, then rockets off the top over FLY ms
+//                  (quadratic); armed on the get_ready_counter rising edge.
+// NOT ENOUGH FOOD! colour gradient + gentle bob in place while the status
+//                  lasts.
+// Effect: opts.banner_fx (default "caveman"; rainbow/fire/gold/pulse).  Under
+// headless capture the clock is the logic tick, so captures are reproducible.
 BannerPresenter::BannerPresenter(enhance::HdText& hd_text,
                                  const systems::SystemsState& state,
                                  const std::string& banner_fx,
@@ -37,10 +31,8 @@ BannerPresenter::BannerPresenter(enhance::HdText& hd_text,
 
 Uint32 BannerPresenter::now_ms() const {
     if (deterministic_clock_) {
-        // Logic tick clock: frame_counter x (1000/18) ms -- the same 55 ms the
-        // loop paces at (game_app.cpp frame_ms).  Quantised to the logic tick,
-        // so every present within one tick (incl. the capture re-present)
-        // draws the identical banner.  See the constructor comment.
+        // Logic-tick clock: frame_counter x (1000/18) ms, so every present in a
+        // tick draws the same banner.
         return static_cast<Uint32>(state_.frame_counter) * (1000u / 18u);
     }
     return SDL_GetTicks();
@@ -66,24 +58,20 @@ std::uint64_t BannerPresenter::key() const {
     return 0x9E3779B97F4A7C15ull;     // draws nothing
 }
 
-void BannerPresenter::draw(std::vector<std::uint8_t>& b, int ow, int oh) {
+void BannerPresenter::draw(const enhance::Canvas& cv) {
     if (suppressed_) return;
-    // draw_centered_overlay_row centres at the output midpoint, which maps
-    // to native x≈160 in BOTH the plain and widescreen canvases (the center
-    // 320 sits at wsp.margin()), so one call serves every present path.
-    // The font cap is sized to the pre-baked box's glyph height (native px
-    // → output px) so the text "fits the box, centered"; cap is
-    // saved/restored so a HUD/menu draw sharing this overlay pass keeps its
-    // size.  Gates mirror the pre-baked draws: GET-READY counter window
-    // [2,17] (FUN_27f7_1277); food gate screen + food < 45 (FUN_263c_09ab).
+    // draw_centered_overlay_row centres at the output midpoint, native x~160 in
+    // both plain and widescreen canvases.  The cap matches the pre-baked box's
+    // glyph height and is restored afterwards.  Gates as the pre-baked draws:
+    // GET READY window [2,17] (FUN_27f7_1277); food gate screen + food < 45
+    // (FUN_263c_09ab).
     const int saved_cap = hd_text_.cap_px();
     const Uint32 now = now_ms();
     auto emit = [&](int cap_native, int baseline, const char* text,
                     const enhance::BannerShader& shader) {
         hd_text_.set_cap_px(
-            std::max(1, static_cast<int>(cap_native * oh / 200.0 + 0.5)));
-        draw_centered_overlay_row_banner(b, ow, oh, hd_text_, baseline, text,
-                                         shader);
+            std::max(1, static_cast<int>(cap_native * cv.h / 200.0 + 0.5)));
+        draw_centered_overlay_row_banner(cv, hd_text_, baseline, text, shader);
     };
 
     // GET READY! — caveman (default), hold then rocket up off the top.

@@ -1,76 +1,51 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Smooth-motion previous-tick snapshot.  Copies every logic position the render
-// interpolation reads into its prev_* shadow BEFORE the sim tick (mirrors the
-// reference save_prev_positions).  Presentation-only: the prev_* fields are
-// render-interp shadows, NOT in the per-frame JSONL trace, so relocating these
-// copies is byte-identical.  MUST run before run_frame each tick.
+// Smooth-motion previous-tick snapshot: copy every logic position the render
+// interpolation reads into its prev_* shadow, before run_frame each tick.
+// Render-only (prev_* are not traced).
 #pragma once
 
+#include <array>
 #include <cmath>
 #include <cstdlib>
+#include <utility>
+#include <vector>
 
 #include "systems/player.hpp"   // systems::SystemsState
 
 namespace olduvai::presentation {
 
-// ── The other half of smooth motion: the interpolation itself ───────────────
-//
-// The snapshot above says WHAT to remember; these say how to read it back.
-// They live together because they are twins — a prev_* field nothing
-// interpolates is dead weight, and an interpolation with no snapshot reads
-// garbage.
-//
-// THE SNAP GUARD.  A position that moved more than this in one logic tick did
-// not travel, it TELEPORTED (screen change, respawn, warp), and interpolating
-// across a teleport smears the sprite over the whole screen.  Above the
-// threshold the render jumps straight to the new position.
-//
-// The constant was `constexpr int kSnap = 16;` in BOTH game_app.cpp and
-// boss_app.cpp, carrying the same `// reference _SNAP_THRESHOLD` comment, with
-// a float twin `systems::kSnapThreshold` for the bubbles.  Three spellings of
-// one number is exactly the shape CONTRIBUTING's helper-ownership rule names.
+// ---- The interpolation that reads the snapshot back ----
+// A move of more than kSnapPx in one tick is a teleport (screen change,
+// respawn, warp); interpolating it would smear the sprite, so the render
+// jumps.
 inline constexpr int kSnapPx = 16;   // reference _SNAP_THRESHOLD
 
-// Did this axis teleport rather than move?
-//
-// `force` is the caller's own snap SIGNAL, independent of distance: the
-// platform loop passes its screen/cave-mode change, because entering the L3
-// screen-4 cave moves the player only (9,11) px — UNDER the threshold — and
-// interpolating that swept the sprite across the screen (bug report
-// 2026-07-17_165051_L3_S4, gated by `cave_lerp`).  Distance alone cannot see
-// that; only the caller knows.  Bosses have no screen changes and pass nothing.
+// Did this axis teleport rather than move?  `force` is the caller's own signal:
+// the platform loop passes a screen/cave-mode change (the L3 screen-4 cave
+// entry moves only 9,11 px).  Bosses pass nothing.
 inline bool snap_jumped(int prev, int cur, bool force = false) {
     return force || std::abs(cur - prev) > kSnapPx;
 }
 
-// Interpolated position for one axis, as a float — the sub-pixel form the HD
-// path wants (see RenderTarget::player_fx/fy).  Teleports return `cur`.
+// Interpolated position for one axis as a float (the HD sub-pixel form);
+// teleports return `cur`.
 inline float snap_lerp_f(int prev, int cur, float alpha, bool force = false) {
     if (snap_jumped(prev, cur, force)) return static_cast<float>(cur);
     return static_cast<float>(prev) + static_cast<float>(cur - prev) * alpha;
 }
 
-// Integer twin, for the logic-position shadow a renderer reads when it has no
-// float path.  Rounds the same way the callers always did (lround).
+// Integer twin (lround), for renderers without a float path.
 inline int snap_lerp_i(int prev, int cur, float alpha, bool force = false) {
     if (snap_jumped(prev, cur, force)) return cur;
     return prev + static_cast<int>(
                       std::lround(static_cast<double>(cur - prev) * alpha));
 }
 
-// ── The pair form, and why it returns BOTH shadows from one call ────────────
-//
-// A pair guards on EITHER axis and then snaps BOTH, so a diagonal teleport
-// cannot half-interpolate — that is a real rule, not a spelling, and it is why
-// two scalar calls are NOT a substitute.
-//
-// It returns the integer AND float shadows together because every caller needs
-// both and they must agree.  Open-coded, they were two `if` statements with
-// the same condition written twice — and a duplicated decision is a decision
-// that can diverge.  The L6 victory drop shipped broken for the neighbouring
-// reason (a lerp whose render half never happened), so here the two halves
-// cannot be computed apart: one branch, one result.
+// ---- The pair form ----
+// Guards on either axis and snaps both, so a diagonal teleport cannot
+// half-interpolate.  Returns the integer and float shadows from one decision
+// so they always agree.
 struct SnapLerp2 {
     int x, y;        // integer logic shadow
     float fx, fy;    // sub-pixel render shadow (RenderTarget::player_fx/fy)
@@ -109,6 +84,129 @@ inline void save_prev_positions(systems::SystemsState& s) {
     for (auto& b : s.score_bonuses) {
         b.prev_x = b.x;
         b.prev_y = b.y;
+    }
+}
+
+// The logic positions the smooth sub-frames overwrite: saved before the fill,
+// the interpolation target, and restored after it.
+struct LogicPositions {
+    struct Ent { int x, y, cy, tx, ty, ddy; };
+    systems::PlayerState player;
+    std::vector<Ent> entities;
+    int stone_x = 0, stone_y = 0;
+    int fireball_x = 0, fireball_y = 0;
+    int glider_x = 0, glider_y = 0;
+    int death_halo_x = 0, death_halo_y = 0;
+    std::array<std::pair<int, int>, 10> bonus{};
+};
+
+inline LogicPositions save_logic_positions(const systems::SystemsState& s) {
+    LogicPositions p;
+    p.player = s.player;
+    p.entities.reserve(s.entities.size());
+    for (const auto& e : s.entities)
+        p.entities.push_back(
+            {e.x, e.y, e.current_y, e.throw_x, e.throw_y, e.draw_dy});
+    p.stone_x = s.stone_x;
+    p.stone_y = s.stone_y;
+    p.fireball_x = s.fireball_x;
+    p.fireball_y = s.fireball_y;
+    p.glider_x = s.glider_x;
+    p.glider_y = s.glider_y;
+    p.death_halo_x = s.death_halo_x;
+    p.death_halo_y = s.death_halo_y;
+    for (std::size_t i = 0; i < s.score_bonuses.size(); ++i)
+        p.bonus[i] = {s.score_bonuses[i].x, s.score_bonuses[i].y};
+    return p;
+}
+
+inline void restore_logic_positions(systems::SystemsState& s,
+                                    const LogicPositions& p) {
+    s.player = p.player;
+    for (std::size_t i = 0; i < s.entities.size(); ++i) {
+        auto& e = s.entities[i];
+        const auto& sv = p.entities[i];
+        e.x = sv.x;
+        e.y = sv.y;
+        e.current_y = sv.cy;
+        e.throw_x = sv.tx;
+        e.throw_y = sv.ty;
+        e.draw_dy = sv.ddy;
+    }
+    s.stone_x = p.stone_x;
+    s.stone_y = p.stone_y;
+    s.fireball_x = p.fireball_x;
+    s.fireball_y = p.fireball_y;
+    s.glider_x = p.glider_x;
+    s.glider_y = p.glider_y;
+    s.death_halo_x = p.death_halo_x;
+    s.death_halo_y = p.death_halo_y;
+    for (std::size_t i = 0; i < s.score_bonuses.size(); ++i) {
+        s.score_bonuses[i].x = p.bonus[i].first;
+        s.score_bonuses[i].y = p.bonus[i].second;
+    }
+}
+
+// Set every interpolated field to `alpha` between its prev_* value and `cur`,
+// the int and float shadows from one guarded decision: player x/y (dx/dy only
+// during the ghost rise), entity x/y/current_y/throw/draw_dy, fireball,
+// glider, death halo, rolling stone, score popups.  `force` snaps them all (a
+// screen or cave/secret mode change can be a hop under kSnapPx).  The player's
+// float position goes to player_fx/fy: it lives on RenderTarget.
+inline void apply_interpolated(systems::SystemsState& s,
+                               const LogicPositions& cur, float alpha,
+                               bool force, float& player_fx,
+                               float& player_fy) {
+    auto lerp2 = [&](int& x, int& y, float& fx, float& fy, int prevx,
+                     int prevy, int curx, int cury) {
+        const auto r = snap_lerp_pair(prevx, prevy, curx, cury, alpha, force);
+        x = r.x;
+        y = r.y;
+        fx = r.fx;
+        fy = r.fy;
+    };
+    auto lerp1 = [&](int& v, float& fv, int prevv, int curv) {
+        v = snap_lerp_i(prevv, curv, alpha, force);
+        fv = snap_lerp_f(prevv, curv, alpha, force);
+    };
+    const systems::PlayerState& p = cur.player;
+    lerp2(s.player.x, s.player.y, player_fx, player_fy, p.prev_x, p.prev_y,
+          p.x, p.y);
+    // dx/dy carry the gait offset (added to a float base, so int only);
+    // lerping them staggers the walk.  Only during the ghost rise.
+    if (s.player.ghost_rise != 0) {
+        const auto r = snap_lerp_pair(p.prev_dx, p.prev_dy, p.dx, p.dy, alpha,
+                                      force);
+        s.player.dx = r.x;
+        s.player.dy = r.y;
+    }
+    for (std::size_t i = 0; i < s.entities.size(); ++i) {
+        auto& e = s.entities[i];
+        const auto& sv = cur.entities[i];
+        lerp2(e.x, e.y, e.fx, e.fy, e.prev_x, e.prev_y, sv.x, sv.y);
+        lerp1(e.current_y, e.f_current_y, e.prev_current_y, sv.cy);
+        lerp2(e.throw_x, e.throw_y, e.f_throw_x, e.f_throw_y, e.prev_throw_x,
+              e.prev_throw_y, sv.tx, sv.ty);
+        lerp1(e.draw_dy, e.f_draw_dy, e.prev_draw_dy, sv.ddy);
+    }
+    if (s.fireball_flag != 0)
+        lerp2(s.fireball_x, s.fireball_y, s.fireball_fx, s.fireball_fy,
+              s.prev_fireball_x, s.prev_fireball_y, cur.fireball_x,
+              cur.fireball_y);
+    lerp2(s.glider_x, s.glider_y, s.glider_fx, s.glider_fy, s.prev_glider_x,
+          s.prev_glider_y, cur.glider_x, cur.glider_y);
+    if (s.death_halo_active)
+        lerp2(s.death_halo_x, s.death_halo_y, s.death_halo_fx,
+              s.death_halo_fy, s.prev_death_halo_x, s.prev_death_halo_y,
+              cur.death_halo_x, cur.death_halo_y);
+    if (s.stone_state != 0)
+        lerp2(s.stone_x, s.stone_y, s.stone_fx, s.stone_fy, s.prev_stone_x,
+              s.prev_stone_y, cur.stone_x, cur.stone_y);
+    for (std::size_t i = 0; i < s.score_bonuses.size(); ++i) {
+        auto& b = s.score_bonuses[i];
+        if (b.counter > 0)
+            lerp2(b.x, b.y, b.fx, b.fy, b.prev_x, b.prev_y, cur.bonus[i].first,
+                  cur.bonus[i].second);
     }
 }
 

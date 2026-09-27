@@ -11,19 +11,17 @@
 namespace olduvai::presentation {
 namespace {
 
-// Two latches + the pre-reinit snapshot carry state across the two
-// run_platform_level calls (frame-5 trigger → kReinitDisplay → run_game
-// rebuilds → re-entry with restore).  Process-global, zero-initialised, reset
-// naturally because reinit_smoke.sh runs a fresh process per assertion.
+// State carried from the frame-5 trigger to the result after the in-place
+// rebuild.  Process-global; reinit_smoke.sh runs a fresh process per
+// assertion.
 bool s_triggered = false;      // have we fired the trigger?
 bool s_done = false;           // have we written the result file?
 int s_pre_x = 0, s_pre_y = 0;  // player pos before reinit
 int s_pre_entcount = -1;       // live entity count before reinit
 unsigned s_pre_entsum = 0;     // entity CONTENT checksum before reinit
 
-// FNV-1a content checksum over the mutable per-entity fields: an equal COUNT of
-// freshly-respawned (reset) entities must NOT pass the round-trip check — the
-// exact false-confidence shape this hook was built to close.
+// FNV-1a over the mutable per-entity fields, so a freshly respawned set with
+// the same count does not pass the round trip.
 unsigned ent_checksum(const std::vector<core::Entity>& es) {
     unsigned h = 2166136261u;
     const auto mix = [&h](int v) {
@@ -57,9 +55,8 @@ void ReinitTestHook::maybe_write_result(const systems::SystemsState& state,
     const int post_y = state.player.y;
     const int post_entcount = static_cast<int>(state.entities.size());
     const unsigned post_entsum = ent_checksum(state.entities);
-    // Post-reinit present-path derivation — the fields §3.8 exists for.  A
-    // reinit that leaves these stale (the shipped smooth-after-classic bug)
-    // changes nothing the old fields could see.
+    // The present-path fields after the reinit (a stale smooth flag after
+    // Classic was the bug this gate catches).
     const int post_enhanced = opts.enhanced ? 1 : 0;
     const int post_smooth = opts.enhance.smooth_motion ? 1 : 0;
     // "wb": the file is machine-parsed by reinit_smoke.sh; text mode on Windows
@@ -76,7 +73,7 @@ void ReinitTestHook::maybe_write_result(const systems::SystemsState& state,
 
 void ReinitTestHook::maybe_trigger(const systems::SystemsState& state,
                                    const GameOptions& opts, int frame,
-                                   bool menu_ok, PendingReinit& reinit_req,
+                                   bool menu_ok, DisplaySettings& reinit_req,
                                    bool& want_reinit, PauseService& pause) {
     // Frame 5: the player has a valid spawn position by then (GET READY counter
     // started at 0x11).
@@ -86,16 +83,10 @@ void ReinitTestHook::maybe_trigger(const systems::SystemsState& state,
     s_pre_y = state.player.y;
     s_pre_entcount = static_cast<int>(state.entities.size());
     s_pre_entsum = ent_checksum(state.entities);
-    // Force the save→reinit→restore MECHANISM directly (decoupled from the Pause
-    // classifier): seed the target fields + raise want_reinit so the pause block
-    // captures the snapshot and returns kReinitDisplay.
-    // OLDUVAI_REINIT_CLASSIC=1 targets the ENHANCED -> CLASSIC switch instead
-    // of a same-mode scale change — the direction the shipped present-path bug
-    // ran (smooth stuck on after Classic), and the one §3.8's gate must drive.
-    // Three targets: same-mode scale change (default), CLASSIC
-    // (OLDUVAI_REINIT_CLASSIC=1 — the shipped bug's direction), and ENHANCED
-    // (OLDUVAI_REINIT_ENHANCED=1 — classic/dos -> enhanced/smooth adoption,
-    // the reverse direction; untested until 2026-08-24 playtest raised it).
+    // Drive the save -> reinit -> restore mechanism directly: seed the target
+    // and raise want_reinit.  Targets: a same-mode scale change (default);
+    // OLDUVAI_REINIT_CLASSIC=1 (enhanced -> classic); OLDUVAI_REINIT_ENHANCED=1
+    // (classic -> enhanced).
     const bool to_classic = std::getenv("OLDUVAI_REINIT_CLASSIC") != nullptr;
     const bool to_enhanced = std::getenv("OLDUVAI_REINIT_ENHANCED") != nullptr;
     reinit_req.enhanced =

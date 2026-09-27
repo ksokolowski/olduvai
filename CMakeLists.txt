@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.21)
 project(olduvai
-    VERSION 0.9.8
+    VERSION 0.9.9
     DESCRIPTION "Native recreation of the Prehistorik (1991) engine"
     LANGUAGES CXX C)
 
@@ -212,6 +212,7 @@ add_library(olduvai_formats
     src/enhance/hd_asset_cache.cpp
     src/enhance/hd_text.cpp
     src/presentation/menu/text_editor.cpp
+    src/presentation/sequence/transition_classify.cpp
     src/enhance/enhanced_hud.cpp
     src/prepare/exe_tables.cpp
     src/prepare/game_files.cpp
@@ -233,6 +234,13 @@ add_library(olduvai_formats
     src/systems/fluid_bubbles.cpp
     ${CMAKE_BINARY_DIR}/generated/build_id.cpp
 )
+# omniscale is float arithmetic: keep a*b+c unfused so every platform rounds
+# alike.  arm64 clang contracts to FMA by default and x86 GCC / MSVC do not;
+# that alone made two test_scaler_goldens cells differ between the Mac and CI.
+if(NOT MSVC)
+    set_source_files_properties(src/enhance/omniscale.cpp
+        PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+endif()
 # The build ID (src/core/build_id.hpp): hash + commit time, or -dirty + build
 # time.  Regenerated on EVERY build by cmake/build_id.cmake — rewritten only
 # when the text changes, so an unchanged ID costs no relink — and run once at
@@ -361,23 +369,36 @@ if(SDL2_FOUND)
     src/presentation/render/hd_warm.cpp
         src/presentation/render/bg_compose.cpp
         src/presentation/level/level_save.cpp
+        src/presentation/level/level_fx.cpp
         src/presentation/level/level_setup.cpp
+        src/presentation/level/tick_render.cpp
+        src/presentation/level/level_view.cpp
         src/presentation/menu/pause_flow.cpp
         src/presentation/menu/pause_service.cpp
     src/presentation/diag/report_form.cpp
     src/presentation/render/tile_patterns.cpp
         src/presentation/render/screen_tiles.cpp
         src/presentation/game_app.cpp
+        src/presentation/game_session.cpp
         src/presentation/render/hud_render.cpp
         src/presentation/diag/debug_overlay.cpp
+        src/presentation/diag/level_diag.cpp
         src/presentation/sequence/screens.cpp
         src/presentation/menu/cheat_picker.cpp
         src/presentation/render/level_surface.cpp
         src/presentation/render/text_overlay.cpp
         src/presentation/title_menu_flow.cpp
+        src/presentation/sequence/level_end.cpp
+        src/presentation/sequence/screen_change.cpp
+        src/presentation/sequence/secret_slide.cpp
         src/presentation/sequence/transition_players.cpp
         src/presentation/render/widescreen_presenter.cpp
         src/presentation/window_util.cpp
+        src/presentation/boss/boss_diag.cpp
+        src/presentation/boss/boss_ending.cpp
+        src/presentation/boss/boss_fight.cpp
+        src/presentation/boss/boss_pause.cpp
+        src/presentation/boss/boss_view.cpp
         src/presentation/boss_app.cpp
         src/presentation/render/boss_render.cpp
         src/presentation/audio/audio.cpp
@@ -621,7 +642,7 @@ if(SDL2_FOUND)
     # Phase 1 + camera pan for the enhanced "descent-pan" feature (no gameplay;
     # reaching screen 17→18 in game needs a full level run).
     add_executable(descent_pan_shot EXCLUDE_FROM_ALL tools/descent_pan_shot.cpp)
-    target_link_libraries(descent_pan_shot PRIVATE olduvai_presentation)
+    target_link_libraries(descent_pan_shot PRIVATE olduvai_presentation ${OLDUVAI_SDL2})
 else()
     message(WARNING
         "SDL2 not found — building headless (engine library + tests only; "
@@ -749,6 +770,8 @@ add_executable(olduvai_tests EXCLUDE_FROM_ALL
     tests/test_game_files.cpp
     tests/test_hash64.cpp
     tests/test_transition_geometry.cpp
+    tests/test_transition_classify.cpp
+    tests/test_button_layout.cpp
     tests/test_edge_margin_policy.cpp
     tests/test_menu.cpp
     tests/test_menu_model.cpp
@@ -760,6 +783,8 @@ add_executable(olduvai_tests EXCLUDE_FROM_ALL
     tests/test_opl_music.cpp
     tests/test_options_resolve.cpp
     tests/test_options_build.cpp
+    tests/test_config.cpp
+    tests/test_banner_shader.cpp
     tests/test_cli_args.cpp
     tests/test_env_num.cpp
     tests/test_smooth_config.cpp
@@ -830,6 +855,16 @@ target_include_directories(olduvai_tests SYSTEM PRIVATE third_party
                                                         third_party/nuked_opl3)
 target_link_libraries(olduvai_tests PRIVATE olduvai_formats)
 add_test(NAME unit COMMAND olduvai_tests)
+
+# Scaler behavior pin (BACKLOG §3.36): every HD profile through synthetic
+# 64x48 patterns at scales 2-5, hash-pinned.  No game data, always green —
+# runs in every CI job so a platform that renders a scaler differently is
+# named by the failing cell instead of the §4 never-touch rule.
+add_executable(test_scaler_goldens EXCLUDE_FROM_ALL
+    tests/test_scaler_goldens.cpp)
+target_include_directories(test_scaler_goldens PRIVATE src)
+target_link_libraries(test_scaler_goldens PRIVATE olduvai_formats)
+add_test(NAME scaler_goldens COMMAND test_scaler_goldens)
 
 # Pure (no-SDL) settings-apply tier classifier test.
 add_executable(test_settings_apply EXCLUDE_FROM_ALL
@@ -946,9 +981,11 @@ if(SDL2_FOUND)
         tests/test_pause_actions.cpp
         tests/test_hud_render_stride.cpp
         tests/test_smooth_subpixel.cpp
+        tests/test_smooth_fill.cpp
         tests/test_text_overlay_upload.cpp
         tests/test_banners.cpp
         tests/test_rising_balloons.cpp
+        tests/test_boss_arena_bg.cpp
         tests/test_about_info.cpp
         tests/test_sound_card.cpp)
     target_include_directories(olduvai_sdl_tests SYSTEM PRIVATE third_party)
@@ -1126,6 +1163,17 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
+    # L3 trunk descent: the screen 17 -> 18 cinematic on both present paths,
+    # hashed pre-upscale.  Reachable otherwise only by finishing L3.  Skips
+    # (77) without game data.
+    add_test(NAME l3_descent
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/l3_descent.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(l3_descent PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
     # Enhanced: the fly-in balloons float away (owner idea 2026-09-17).
     # Skips (77) without game data.
     add_test(NAME balloon_flyaway
@@ -1178,6 +1226,13 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
                 "${CMAKE_SOURCE_DIR}/game_data"
                 "$<TARGET_FILE:olduvai>")
     set_tests_properties(title_style_apply PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+    add_test(NAME title_style_smooth
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/title_style_smooth.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(title_style_smooth PROPERTIES
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
@@ -1436,6 +1491,27 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
                 "${CMAKE_SOURCE_DIR}/game_data"
                 "$<TARGET_FILE:olduvai>")
     set_tests_properties(aspect_hd_text PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # A live Aspect change shows what a fresh start at that aspect shows,
+    # through Widescreen and out.  A property: the pillarbox bars match.
+    add_test(NAME aspect_live
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/aspect_live.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(aspect_live PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # A display or audio Apply from the pause rebuilds in place: the level is
+    # entered once and the pause stays open (§3.40).  The state round trip is
+    # reinit_smoke's.
+    add_test(NAME reinit_in_place
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/reinit_in_place.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(reinit_in_place PROPERTIES
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
@@ -1800,7 +1876,7 @@ list(LENGTH _olduvai_tests _olduvai_total)
 # register only the two non-SDL gated tests (screen_tiles, sqz_parity) — as do
 # builds with no shell interpreter, since the other 18 are all .sh-driven.
 if(SDL2_FOUND AND _olduvai_shell_tests)
-    set(_olduvai_gated_expected 63)   # +1: boss_pause_midinterp, +1: play_shot_determinism, +1: level_edge_margins, +1: aspect_hd_text, +1: balloon_flyaway, +1: food_gate_transition, +1: boss_report, +1: golden_trace_l5s18_exit, +1: tally_no_flash, +1: hd_text_screens, +2: L4/L6 fights, +1: L6 slam-hd, +2: pause 4:3/stretch, +1: gameover_shot, +10: the adopted oracle scenarios (§3.15 item 2), +2: boss_l2/l6_victory
+    set(_olduvai_gated_expected 67)   # +1: l3_descent, +1: reinit_in_place, +1: aspect_live, +1: title_style_smooth, +1: boss_pause_midinterp, +1: play_shot_determinism, +1: level_edge_margins, +1: aspect_hd_text, +1: balloon_flyaway, +1: food_gate_transition, +1: boss_report, +1: golden_trace_l5s18_exit, +1: tally_no_flash, +1: hd_text_screens, +2: L4/L6 fights, +1: L6 slam-hd, +2: pause 4:3/stretch, +1: gameover_shot, +10: the adopted oracle scenarios (§3.15 item 2), +2: boss_l2/l6_victory
 else()
     set(_olduvai_gated_expected 2)
 endif()
@@ -1874,7 +1950,7 @@ endif()
 set(_olduvai_test_targets olduvai_tests test_settings_apply
     test_settings_session test_settings_flow test_widescreen
     test_boss_widescreen test_confirm_dialog test_screen_tiles
-    test_sqz_parity test_text_editor test_report_templates)
+    test_sqz_parity test_text_editor test_report_templates test_scaler_goldens)
 if(TARGET olduvai_sdl_tests)
     list(APPEND _olduvai_test_targets olduvai_sdl_tests test_text_overlay_edit)
 endif()

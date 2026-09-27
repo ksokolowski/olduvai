@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// FrameStats bookkeeping — moved out of game_app.cpp verbatim so the boss
-// driver can record the same numbers in the same format.  See the header for
-// why that mattered enough to move.
+// FrameStats bookkeeping, shared by the platform and boss drivers.
 #include "presentation/diag/frame_stats.hpp"
 
 #include <algorithm>
@@ -15,13 +13,9 @@
 
 namespace olduvai::presentation {
 
-// OLDUVAI_FRAME_STATS: per-frame timing health — the headless twin of
-// OLDUVAI_AUDIO_STATS.  Measures a frame's WORK (loop top -> just before the
-// pacing wait; the intentional sleep is excluded) at perf-counter
-// resolution, tracking the worst frame vs the ~55 ms tick budget, how many
-// frames blew it, and the present/upload phase within that worst frame.
-// Lets slow-HW frame-budget violations be diagnosed without a display;
-// near-zero cost when the env var is unset.
+// Frame work time (loop top to just before the pacing wait) at perf-counter
+// resolution: the worst frame against the ~55 ms tick, how many overran, and
+// the present/upload share of the worst.  Near-zero cost when unset.
 FrameStats::Timer::Timer(FrameStats* fs, double FrameStats::* field)
     : accum_((fs != nullptr && fs->enabled) ? &(fs->*field) : nullptr),
       perf_ms_(fs != nullptr ? fs->perf_ms : 0.0),
@@ -37,9 +31,7 @@ void FrameStats::note_present() {
     if (!enabled) return;
     ++present_calls;
     const Uint64 now_pc = SDL_GetPerformanceCounter();
-    // The cap is a memory guard, not a sampling window: 200k intervals is a
-    // ~4 hour run at 60 Hz, and dropping the tail is better than growing the
-    // vector without bound in a session someone left running.
+    // A memory guard, not a window: 200k intervals is ~4 h at 60 Hz.
     if (last_present_pc != 0 && present_iv_ms.size() < 200000)
         present_iv_ms.push_back(static_cast<float>(
             static_cast<double>(now_pc - last_present_pc) * perf_ms));
@@ -123,24 +115,14 @@ void FrameStats::end_tick() {
 void FrameStats::report(int display_level) const {
     if (!enabled) return;
     if (present_iv_ms.size() >= 20) {
-        // The standard game-performance set, computed from the per-present
-        // intervals rather than from an average.
-        //
-        // WHY THE LOWS AND NOT THE MEAN.  Mean FPS is the figure that hides
-        // stutter: a run that drops one present in twenty still reports a
-        // healthy average and still looks bad.  The 1% low -- the mean of the
-        // slowest 1% of intervals, expressed as a rate -- is the industry's
-        // answer to that, and it is what corresponds to what a player notices.
-        //
-        // JITTER is separate from both.  Evenly-spaced 30 FPS reads as smooth;
-        // 60 FPS alternating 8 ms and 25 ms reads as judder at twice the frame
-        // rate.  Mean absolute deviation of the intervals catches that, and
-        // nothing else in this block does.
+        // Game-performance figures from the per-present intervals.  The 1% low
+        // (mean of the slowest 1%, as a rate) shows stutter an average hides;
+        // jitter (mean absolute deviation) catches uneven spacing at any rate.
         std::vector<float> iv = present_iv_ms;
         std::sort(iv.begin(), iv.end());
         const std::size_t n = iv.size();
         const auto pct = [&](double q) {
-            std::size_t i = static_cast<std::size_t>(q * (n - 1));
+            const std::size_t i = static_cast<std::size_t>(q * (n - 1));
             return static_cast<double>(iv[i]);
         };
         double sum = 0.0;
@@ -202,11 +184,8 @@ void FrameStats::report(int display_level) const {
                  total_scene_ms,
                  total_glyph_ms,
                  total_compose_ms,
-                 // eff_hz: the ONLY unambiguous failure signal here.  If
-                 // the logic clock is under 18.2 Hz the game literally runs
-                 // slow, and no present-side tuning disguises it.
-                 // Wall time MINUS the transition animations, so this is
-                 // the rate the LOGIC actually held.
+                 // eff_hz: below 18.2 Hz the game runs slow.  Wall time minus
+                 // transition animations, so it is the rate the logic held.
                  (run_t0 != 0 && SDL_GetPerformanceCounter() >
                       run_t0)
                      ? static_cast<double>(frames) * 1000.0 /

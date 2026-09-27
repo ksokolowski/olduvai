@@ -1,14 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Shared SDL window/display helpers for every user-facing surface
-// (gameplay, intro, ending, boss arenas).
-//
-// Sizing matches the reference engine's default gpu display path
-// (the reference run_game: logical game surface + pygame.SCALED): the window
-// opens at the LARGEST INTEGER MULTIPLE of the logical canvas that fits
-// the desktop, and the renderer scales nearest-neighbour onto a fixed
-// logical size — so pixels stay square and crisp at any window size,
-// and fullscreen letterboxes instead of distorting.
+// Shared SDL window/display helpers.  As in the reference: the window opens at
+// the largest integer multiple of the logical canvas that fits the desktop,
+// and the renderer scales nearest-neighbour onto a fixed logical size (square
+// pixels; fullscreen letterboxes).
 
 #pragma once
 
@@ -23,24 +18,14 @@ namespace olduvai::presentation {
 // desktop usable area; never below 1.
 int desktop_integer_scale(int logical_w, int logical_h);
 
-// The logical canvas dimensions fed to SDL_RenderSetLogicalSize for a given
-// render scale and aspect mode:
-//   keep    → (320*scale, 200*scale)  — square pixels, black bars (default)
-//   4:3     → (320*scale, 240*scale)  — CRT-like vertical stretch
-//   stretch → (0, 0)                  — disables logical scaling, fills window
+// Logical canvas for SDL_RenderSetLogicalSize, by aspect mode:
+//   keep    -> (320*scale, 200*scale)  square pixels, black bars (default)
+//   4:3     -> (320*scale, 240*scale)  CRT-like vertical stretch
+//   stretch -> (0, 0)                  logical scaling off, fills the window
 struct LogicalDims { int w; int h; };
-// The directory the executable lives in (inside a macOS bundle:
-// Contents/Resources), with trailing separators stripped — what
-// HdText::load and the asset lookups next to it expect.  "." when SDL cannot
-// answer: two of the three sites already defaulted to that, and the third
-// passed an EMPTY prefix, which turns "<base>/assets/..." into an absolute
-// "/assets/..." — a worse answer than the working directory.
-//
-// Three sites fetched this by hand (the title menu, LevelSurface, the
-// first-run screen) and trimmed it three slightly different ways: one
-// stripped repeated separators of both kinds, the others exactly one '/'.
-// shape_clones.py found them as SDL_GetBasePath -> SDL_free -> pop_back ->
-// load.  The careful version is the shared one.
+// The executable's directory (Contents/Resources in a macOS bundle), trailing
+// separators stripped.  "." when SDL cannot answer (an empty prefix would turn
+// "<base>/assets" into "/assets").
 inline std::string sdl_base_dir() {
     std::string dir;
     if (char* p = SDL_GetBasePath()) {
@@ -54,14 +39,18 @@ inline std::string sdl_base_dir() {
 
 LogicalDims aspect_logical(int scale, const std::string& aspect);
 
-// The default window width for `aspect` at `win_h`, given the desktop's own
-// width/height ratio.  Everything but "widescreen" keeps `base_w` (the
-// integer-scaled DOS window).  Widescreen has nothing to show in a 16:10
-// window — the margin is derived from the OUTPUT aspect, so a DOS-aspect
-// window computes widescreen out of existence with no message saying so
-// (BACKLOG §3.25) — so the default window takes the DESKTOP's aspect, capped
-// at 2.8 where the margin caps too.  desktop_ratio <= 0 (unknown) keeps
-// base_w.  Pure: unit-tested in test_window_util.cpp.
+// The session's picture on `ren`: the logical size for `aspect` at `scale`,
+// and whole-number scaling in classic (scale 1; classic samples uneven
+// nearest columns without it, HD is fine enough).  The flag is inert without
+// a logical size ("stretch"), so it follows the scale alone and a live Aspect
+// change leaves the renderer as a start at that aspect would.
+LogicalDims set_aspect_logical(SDL_Renderer* ren, int scale,
+                               const std::string& aspect);
+
+// Default window width for `aspect` at `win_h`.  Only "widescreen" differs: the
+// margin comes from the output aspect, so a 16:10 window would show none; take
+// the desktop's aspect instead, capped at 2.8 (where the margin caps).
+// desktop_ratio <= 0 (unknown) keeps base_w.
 int widescreen_default_w(const std::string& aspect, int base_w, int win_h,
                          double desktop_ratio);
 
@@ -70,108 +59,80 @@ struct ScaledWindow {
     SDL_Renderer* ren = nullptr;
 };
 
-// A streaming RGBA32 texture of size wxh on `ren` — the pixel format and
-// access every scene / overlay / intro / pause texture uses.  Blend mode is
-// left at the SDL default; callers that need SDL_BLENDMODE_BLEND (overlays)
-// set it themselves after.
+// Streaming RGBA32 texture, w x h.  Default blend mode; overlays set BLEND
+// themselves.
+inline bool window_fullscreen(SDL_Window* win) {
+    return (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+}
+
 inline SDL_Texture* create_stream_tex(SDL_Renderer* ren, int w, int h) {
     return SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32,
                              SDL_TEXTUREACCESS_STREAMING, w, h);
 }
 
-// Set the project icon (the embedded bone logo) on a window.  Launchers get
-// the icon from .desktop/.ico/.icns; this covers the RUNNING window — Linux
-// window managers (alt-tab, taskbar) take it from the window itself, and on
-// macOS SDL applies it to the running process's Dock icon.
-// create_scaled_window calls it; standalone SDL windows (viewer) call it
-// directly.
+// Set the project icon on a running window (Linux WMs read it from the window;
+// on macOS SDL applies it to the Dock icon).  create_scaled_window calls it.
 void set_window_icon(SDL_Window* win);
 
+// The output cleared to black, then `tex` over the whole canvas, or over
+// `dst` (the 320 picture pillarboxed on a wide canvas).  The caller presents.
+void show_texture(SDL_Renderer* ren, SDL_Texture* tex,
+                  const SDL_Rect* dst = nullptr);
+
 // Upload a 320x200 native frame into `tex`, upscaling first when HD is on.
-//
-// The six sites that do this — the two end-sequence holds, the boss
-// loading/tally and pause composes, and the title intro and pause composes —
-// were byte-for-byte the same nine lines.
-//
-// Deliberately NOT general.  Three other upload sites look similar and are
-// excluded: two push an ALREADY-upscaled buffer with no upscale step, one
-// strides by fb.w rather than 320, and frame_presenter interposes the HUD bars
-// between upscale and upload.  Covering those needs a parameter that selects
-// behaviour, and a helper that needs a mode flag is two helpers — the flag
-// becomes the thing that drifts.  320x200-native-in, texture-out, no options.
+// Deliberately narrow: sites that upload an already-upscaled buffer, stride
+// by fb.w or interpose HUD bars are not this.
 void upload_native_frame(SDL_Texture* tex, const FrameBuffer& fb, int hd_scale,
                          const std::string& hd_profile);
 
 
-// Window at the integer-fit size + accelerated renderer (software
-// fallback) with nearest-neighbour scaling onto the logical canvas.
-// The scale-quality hint is set here, BEFORE any texture exists —
-// SDL reads it at texture-creation time.
-//
-// `software` forces SDL_RENDERER_SOFTWARE (the --display-mode cpu path:
-// CPU window scaling instead of the GPU; the reference run_game's
-// `gpu`=hardware / `cpu`=software split).  `vsync` adds
-// SDL_RENDERER_PRESENTVSYNC (off by default — the engine paces via its
-// own clock, and the driver silently ignores the flag if unsupported).
-// win_w/win_h (>0) force an explicit window pixel size (e.g. 1680x720 ≈ 21:9 to
-// simulate an ultrawide viewport for widescreen testing); 0 = integer-scaled
-// default.  The window is RESIZABLE either way.
-ScaledWindow create_scaled_window(const char* title, int logical_w,
-                                  int logical_h, bool software = false,
-                                  bool vsync = false,
-                                  const std::string& aspect = "keep",
-                                  int win_w = 0, int win_h = 0,
-                                  // integer_scale: force whole-number scaling
-                                  // of the logical canvas (classic mode —
-                                  // non-integer fullscreen ratios give uneven
-                                  // nearest-sampled pixel columns at 320x200;
-                                  // HD output is 4x finer so it stays free).
-                                  bool integer_scale = false);
+// A window to create: its title and logical canvas, and how it scales.
+struct WindowSpec {
+    const char* title = "Olduvai";
+    int logical_w = 320;
+    int logical_h = 200;
+    bool software = false;   // SDL_RENDERER_SOFTWARE (--display-mode cpu)
+    bool vsync = false;      // PRESENTVSYNC; off: the engine paces itself
+    std::string aspect = "keep";
+    // > 0: a forced window size (--window, e.g. 1680x720 for ultrawide);
+    // 0: the integer-scaled default.
+    int win_w = 0;
+    int win_h = 0;
+};
 
-// Alt+Enter (main or keypad Enter) ↔ desktop-fullscreen toggle, as in
-// the reference (_is_fullscreen_toggle_event/_toggle_fullscreen).
-// Returns true when the event was consumed — callers must then skip
-// their own handling so Enter-driven screens don't also advance
-// (the reference swallows the event for the same reason).
+// Window at the integer-fit size, accelerated renderer (software fallback),
+// nearest-neighbour onto the logical canvas.  The scale-quality hint is set
+// before any texture exists (SDL reads it at texture creation).  Always
+// resizable.
+ScaledWindow create_scaled_window(const WindowSpec& spec);
+
+// Alt+Enter (main or keypad) toggles desktop fullscreen.  Returns true when
+// consumed; the caller must then skip it (so Enter does not also advance).
 bool handle_fullscreen_toggle(const SDL_Event& ev, SDL_Window* win);
 
-// Drain the queue for a NON-GAMEPLAY screen — the loading card, the score
-// tally, a fade, a transition, the L3 descent.  Alt+Enter toggles fullscreen, a
-// window close ends the screen, and everything else is DISCARDED.  Returns
-// false on a window close.
-//
-// The discard is the point, not a side effect: without it, keys mashed on the
-// previous screen leak into the next one, which is how a key held over the boss
-// tally used to abort the following run to title.
-//
-// ESC is deliberately absent.  It means something different on every screen it
-// reaches — skip on the tally, inert on the loading card and the descent, open
-// the menu during play — so the screens that care handle it themselves and the
-// rest let this drop it.  A shared abort-on-ESC here is exactly the bug that was
-// fixed across the ending.
+// Drain the queue for a non-gameplay screen (loading card, tally, fade,
+// transition, L3 descent): Alt+Enter toggles fullscreen, a window close
+// returns false, everything else is discarded, so keys held from the previous
+// screen do not leak.  ESC is not handled: its meaning differs per screen.
 bool poll_screen_events(SDL_Window* win);
 
 // True while a skip key may read Enter: Alt+Enter belongs to the
 // fullscreen toggle, so held-key skip checks must ignore Enter+Alt.
 bool enter_skip_allowed();
 
-// Auto-hide the OS mouse cursor over the game window: call once per frame
-// from every interactive loop.  Polls the cursor position (no event plumbing)
-// — any motion shows the cursor and stamps a timer; ~1.5 s of stillness hides
-// it again.  The game is keyboard-only, so a parked arrow over the playfield
-// (especially fullscreen) is pure noise.
+// Auto-hide the mouse cursor over the window; call once per frame from every
+// interactive loop.  Motion shows it, ~1.5 s still hides it.
 void cursor_autohide_frame();
 
-// Drift-free DOS tick scheduler.  The EXE runs off the PIT at
-// 1193182/65536 = 18.2065 Hz (54.9254 ms); DOSBox emulates that
-// metronomically, which is why it FEELS smoother than a naive
-// `SDL_Delay(55 - spent)` loop: SDL_Delay oversleeps by scheduler slop
-// (1-10 ms on macOS) and a relative delay never pays the overshoot back,
-// so steps land unevenly (~15-17 Hz with jitter).  This ticker keeps an
-// ABSOLUTE deadline on the SDL performance counter: coarse-sleep to
-// ~1.5 ms before the deadline, spin the remainder, advance by exactly one
-// period.  Falling behind by >2 periods (level load, transition player)
-// resyncs instead of sprinting.  Wall-clock only — no logic/RNG contact.
+// OLDUVAI_AUTO_FULLSCREEN=<frame>: a headless Alt+Enter at that frame.  Unset
+// or malformed = never.
+void maybe_auto_fullscreen(SDL_Window* win, int frame);
+
+// Drift-free DOS tick: the PIT rate 1193182/65536 = 18.2065 Hz (54.9254 ms).
+// A relative SDL_Delay oversleeps 1-10 ms and never pays it back; this keeps
+// an absolute deadline on the performance counter: sleep to ~1.5 ms before,
+// spin the rest, advance one period.  More than 2 periods behind resyncs
+// instead of sprinting.  Wall clock only.
 class DosTicker {
 public:
     DosTicker();
@@ -185,25 +146,28 @@ private:
     unsigned long long freq_ = 0;
 };
 
-// End-of-tick pacing, shared by both drivers.  Three ways to land on the next
-// 18.2065 Hz tick:
-//   * smooth-motion already filled the tick via vsync -> just re-arm;
-//   * --vga-scan classic -> re-present the SAME frame every vblank until the
-//     tick expires (the software twin of VGA scanning VRAM at 70 Hz);
-//   * otherwise -> drift-free absolute-deadline wait.
-//
-// `vga_scan_ok` is in/out: three consecutive sub-1.5 ms presents mean the
-// driver refused vsync, and the scanout disables itself for the rest of the
-// level rather than spinning.  A default has to degrade, not hang.
-//
-// The counters are OPTIONAL and are the only thing that differed between the
-// two copies — game_app reports them under OLDUVAI_PACE_TRACE, the boss does
-// not.  They are output sinks, not a mode: passing nullptr changes what is
-// COUNTED, never what is done.
-void pace_end_of_tick(SDL_Renderer* ren, SDL_Texture* tex, DosTicker& ticker,
-                      bool smooth_vsync_ran, bool vga_scan_enabled, bool hd,
-                      bool& vga_scan_ok,
-                      unsigned long* fill_presents = nullptr,
-                      unsigned long* fill_ticks = nullptr);
+// The end of every logic tick, for both drivers:
+//   * smooth motion's vsync fill already paced the tick -> re-arm;
+//   * --vga-scan classic -> re-present the same frame every vblank until the
+//     tick expires (VGA scanning VRAM at 70 Hz);
+//   * otherwise -> the drift-free DOS tick's absolute-deadline wait.
+// Three sub-1.5 ms presents in a row mean vsync was refused: the scanout
+// turns itself off until the next renderer.
+class TickPacer {
+public:
+    void end_tick(SDL_Renderer* ren, SDL_Texture* tex, bool smooth_vsync_ran,
+                  bool vga_scan, bool hd);
+    // A new renderer (an in-place display rebuild): its vsync is untested.
+    void renderer_changed() { vga_scan_ok_ = true; }
+    // OLDUVAI_PACE_TRACE: the scanout's presents, and the ticks it filled.
+    unsigned long fill_presents() const { return fill_presents_; }
+    unsigned long fill_ticks() const { return fill_ticks_; }
+
+private:
+    DosTicker ticker_;
+    bool vga_scan_ok_ = true;
+    unsigned long fill_presents_ = 0;
+    unsigned long fill_ticks_ = 0;
+};
 
 }  // namespace olduvai::presentation

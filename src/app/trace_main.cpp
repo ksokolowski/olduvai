@@ -6,8 +6,9 @@
 //   frame px py sprite gravity club energy lives food score fireball
 //   death rng_state climbing entity_count
 // The comparison driver lives on the oracle side (private reference repo);
-// 2026-06-10: 300/300 frames identical on first full run.
+// verified: 300/300 frames identical on the first full run.
 #include <cstdio>
+#include <exception>
 #include <fstream>
 #include "parse_num.hpp"
 #include "core/game_tables.hpp"
@@ -18,23 +19,14 @@
 #include "systems/frame_runner.hpp"
 #include "systems/spawning.hpp"
 using namespace olduvai;
-int main(int argc, char** argv) {
-    if (argc != 3) return 2;
-    // Accept a GOG install root (data/PREH layout) like the main binary.
-    const std::string dir =
-        prepare::resolve_game_dir(argv[1]).string();
-    // Not atoi: `olduvai_trace <dir> abc` would run ZERO frames and print an
-    // empty trace, which on the diff side is indistinguishable from an engine
-    // that produced nothing — the most expensive way for this harness to fail.
-    int frames = 0;
-    if (!app::parse_int(argv[2], frames)) {
-        std::fprintf(stderr,
-                     "olduvai_trace: frame count must be a whole number "
-                     "(got '%s')\n",
-                     argv[2]);
-        return 2;
-    }
+
+namespace {
+
+// The harness's start: L1 screen 0 (tiles stamped with LEVEL1.DUR, entities
+// from the object table), the LCG seeded 1, the player at (100, 120).
+systems::SystemsState level1_screen0(const std::string& dir) {
     const auto exe = prepare::load_game_executable(dir);
+    systems::SystemsState st;
     // Runtime gameplay tables (cave widths, secret scores) come from the
     // user's executable, same as the main binary.
     core::GameTables gtables;
@@ -43,10 +35,9 @@ int main(int argc, char** argv) {
     core::install_game_tables(gtables);
 
     // Collision: L1 screen 0 tiles stamped with LEVEL1.DUR.
-    formats::CurArchive fa(olduvai::prepare::slurp_file((dir + "/FILESA.CUR").c_str()));
+    const formats::CurArchive fa(olduvai::prepare::slurp_file((dir + "/FILESA.CUR").c_str()));
     const auto dur = formats::parse_dur(fa.get("LEVEL1.DUR").data);
     const auto tiles = prepare::read_tile_table(exe, 1);
-    systems::SystemsState st;
     for (const auto& tp : tiles.screens[0].tiles) {
         if (tp.sprite_idx >= 0 &&
             tp.sprite_idx < static_cast<int>(dur.tiles.size())) {
@@ -67,27 +58,69 @@ int main(int argc, char** argv) {
     st.player.hit_counter = 0;
     st.current_level = 1; st.current_screen = 0;
     st.timer = 99;
+    return st;
+}
 
+// The fixed input script both engines replay.
+systems::FrameInputs scripted_inputs(int f) {
+    systems::FrameInputs in;
+    if (f >= 10 && f < 60) in.right = true;
+    if (f == 30 || f == 80) in.up = true;
+    if (f >= 60 && f < 90) in.right = true;
+    if (f == 95 || f == 130) in.attack = true;
+    if (f >= 100 && f < 140) in.right = true;
+    if (f >= 150 && f < 190) in.left = true;
+    if (f >= 200 && f < 240) in.right = true;
+    if (f == 222) in.down = true;
+    if (f >= 250 && f < 280) { in.right = true; if (f % 9 == 0) in.up = true; }
+    return in;
+}
+
+void print_frame(const systems::SystemsState& st) {
+    std::printf("%d %d %d %d %d %d %d %d %d %ld %d %d %u %d %d\n",
+                st.frame_counter, st.player.x, st.player.y,
+                st.player.sprite, st.player.gravity_flag,
+                st.player.club_flag, st.player.energy, st.player.lives,
+                st.food_count, st.score, st.fireball_flag,
+                st.player.death_counter, core::global_rng().state(),
+                st.player.climbing,
+                static_cast<int>(st.entities.size()));
+}
+
+int run(int argc, char** argv) {
+    if (argc != 3) return 2;
+    // Accept a GOG install root (data/PREH layout) like the main binary.
+    const std::string dir =
+        prepare::resolve_game_dir(argv[1]).string();
+    // Not atoi: `olduvai_trace <dir> abc` would run ZERO frames and print an
+    // empty trace, which on the diff side is indistinguishable from an engine
+    // that produced nothing — the most expensive way for this harness to fail.
+    int frames = 0;
+    if (!app::parse_int(argv[2], frames)) {
+        std::fprintf(stderr,
+                     "olduvai_trace: frame count must be a whole number "
+                     "(got '%s')\n",
+                     argv[2]);
+        return 2;
+    }
+    systems::SystemsState st = level1_screen0(dir);
     for (int f = 0; f < frames; ++f) {
-        systems::FrameInputs in;
-        if (f >= 10 && f < 60) in.right = true;
-        if (f == 30 || f == 80) in.up = true;
-        if (f >= 60 && f < 90) in.right = true;
-        if (f == 95 || f == 130) in.attack = true;
-        if (f >= 100 && f < 140) in.right = true;
-        if (f >= 150 && f < 190) in.left = true;
-        if (f >= 200 && f < 240) in.right = true;
-        if (f == 222) in.down = true;
-        if (f >= 250 && f < 280) { in.right = true; if (f % 9 == 0) in.up = true; }
-        systems::run_frame(st, in);
-        std::printf("%d %d %d %d %d %d %d %d %d %ld %d %d %u %d %d\n",
-                    st.frame_counter, st.player.x, st.player.y,
-                    st.player.sprite, st.player.gravity_flag,
-                    st.player.club_flag, st.player.energy, st.player.lives,
-                    st.food_count, st.score, st.fireball_flag,
-                    st.player.death_counter, core::global_rng().state(),
-                    st.player.climbing,
-                    static_cast<int>(st.entities.size()));
+        systems::run_frame(st, scripted_inputs(f));
+        print_frame(st);
     }
     return 0;
+}
+
+}  // namespace
+
+// Anything that escapes run() is reported, not a silent abort.
+int main(int argc, char** argv) {
+    try {
+        return run(argc, argv);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "olduvai_trace: %s\n", e.what());
+    } catch (...) {
+        std::fprintf(stderr, "olduvai_trace: an unknown error ended the run\n");
+    }
+    return 1;
 }
