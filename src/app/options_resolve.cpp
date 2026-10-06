@@ -71,6 +71,13 @@ const Key kKeys[] = {
     {"pad_pause",    &PS::pad_pause,    Guard::kNone, nullptr, nullptr},
     {"pad_confirm",  &PS::pad_confirm,  Guard::kNone, nullptr, nullptr},
     {"pad_back",     &PS::pad_back,     Guard::kNone, nullptr, nullptr},
+    {"key_left",     &PS::key_left,     Guard::kNone, nullptr, nullptr},
+    {"key_right",    &PS::key_right,    Guard::kNone, nullptr, nullptr},
+    {"key_up",       &PS::key_up,       Guard::kNone, nullptr, nullptr},
+    {"key_down",     &PS::key_down,     Guard::kNone, nullptr, nullptr},
+    {"key_attack",   &PS::key_attack,   Guard::kNone, nullptr, nullptr},
+    {"key_pause",    &PS::key_pause,    Guard::kNone, nullptr, nullptr},
+    {"key_quit",     &PS::key_quit,     Guard::kNone, nullptr, nullptr},
     {"smooth_subframes", &PS::smooth_subframes, Guard::kNone, nullptr, nullptr},
     {"smooth_vsync", &PS::smooth_vsync, Guard::kNone, nullptr, nullptr},
     // F5 destination ($OLDUVAI_BUG_DIR still overrides; the caller applies
@@ -162,8 +169,8 @@ void apply_device_layout(Config& cfg, const std::string& family) {
         id != nullptr ? presentation::find_button_layout(id) : nullptr;
     if (layout == nullptr) return;
     presentation::PadBindings b = presentation::bindings_of(*layout);
-    for (const char* key : presentation::kPadKeys)
-        cfg[key] = *presentation::binding_for_key(b, key);
+    for (const presentation::PadSlot& s : presentation::kPadSlots)
+        cfg[s.key] = b.*s.field;
 }
 
 }  // namespace

@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.21)
 project(olduvai
-    VERSION 0.9.9
+    VERSION 0.9.10
     DESCRIPTION "Native recreation of the Prehistorik (1991) engine"
     LANGUAGES CXX C)
 
@@ -207,8 +207,10 @@ add_library(olduvai_formats
     src/enhance/mmpx.cpp
     src/enhance/omniscale.cpp
     src/enhance/pixel_scalers.cpp
-    src/enhance/xbr.cpp
+    src/enhance/xbrz_scale.cpp
+    third_party/xbrz/xbrz.cpp
     src/enhance/upscale.cpp
+    src/enhance/incremental_upscale.cpp
     src/enhance/hd_asset_cache.cpp
     src/enhance/hd_text.cpp
     src/presentation/menu/text_editor.cpp
@@ -234,12 +236,23 @@ add_library(olduvai_formats
     src/systems/fluid_bubbles.cpp
     ${CMAKE_BINARY_DIR}/generated/build_id.cpp
 )
-# omniscale is float arithmetic: keep a*b+c unfused so every platform rounds
+# omniscale and xBRZ are float arithmetic: keep a*b+c unfused so every platform rounds
 # alike.  arm64 clang contracts to FMA by default and x86 GCC / MSVC do not;
 # that alone made two test_scaler_goldens cells differ between the Mac and CI.
 if(NOT MSVC)
     set_source_files_properties(src/enhance/omniscale.cpp
         PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+endif()
+# xBRZ is vendored upstream code: unfused for the same reason, and its own
+# warnings (GCC's -Wconversion on olduvai_formats, MSVC's /W4) are not ours to
+# fix, the policy olduvai_silence_vendored_target applies to the other vendored
+# sources.  Per source, because the file is compiled straight into olduvai_formats.
+if(MSVC)
+    set_source_files_properties(third_party/xbrz/xbrz.cpp
+        PROPERTIES COMPILE_OPTIONS "/w")
+else()
+    set_source_files_properties(third_party/xbrz/xbrz.cpp
+        PROPERTIES COMPILE_OPTIONS "-ffp-contract=off;-w")
 endif()
 # The build ID (src/core/build_id.hpp): hash + commit time, or -dirty + build
 # time.  Regenerated on EVERY build by cmake/build_id.cmake — rewritten only
@@ -286,6 +299,7 @@ endif()
 
 target_include_directories(olduvai_formats PUBLIC src)
 target_include_directories(olduvai_formats SYSTEM PUBLIC third_party/stb)
+target_include_directories(olduvai_formats SYSTEM PRIVATE third_party/xbrz)
 
 # HD bake compression (OPTIONAL).  The upscaled cache stores palette art as
 # 32-bit RGBA — ~17 distinct colours in a 4 MB frame — so deflate takes the
@@ -347,14 +361,12 @@ find_package(SDL2 QUIET)
 #
 # OLDUVAI_STATIC_SDL used to be Windows-only.  It is now honoured wherever a
 # static SDL2 is available, because the macOS release wants it too: SDL2 was
-# the LAST third-party dylib in the .app (libmt32emu is vendored, FluidSynth
-# is dlopen'd and staged by hand), and linking it in removes the bundling step
-# altogether — along with dylibbundler, whose install-name rewriting produces
+# the LAST third-party dylib in the .app (libmt32emu and FluidSynth are
+# vendored), and linking it in removes the bundling step altogether — along with dylibbundler, whose install-name rewriting produces
 # a binary that SIGKILLs or hangs on macOS 26.  Measured: byte-identical audio
 # and pixel output, zero third-party dylibs, and a bundle with no
 # Contents/libs at all.  SDL2 is zlib-licensed, so static linking carries no
-# relinking obligation (FluidSynth stays dynamic precisely because LGPL §6
-# does).
+# relinking obligation.
 set(OLDUVAI_SDL2 SDL2::SDL2)
 if(OLDUVAI_STATIC_SDL AND TARGET SDL2::SDL2-static)
     set(OLDUVAI_SDL2 SDL2::SDL2-static)
@@ -364,6 +376,7 @@ if(SDL2_FOUND)
         src/presentation/render/banners.cpp
         src/presentation/diag/viewer.cpp
         src/presentation/input/gamepad.cpp
+        src/presentation/input/actions.cpp
         src/presentation/render/game_render.cpp
         src/presentation/render/sprite_blit.cpp
     src/presentation/render/hd_warm.cpp
@@ -441,8 +454,8 @@ if(SDL2_FOUND)
     # regardless).  Link it unconditionally so the stub case still links.
     find_package(Threads QUIET)
     # olduvai_formats carries enhance/, whose upscalers split their row loops
-    # across a persistent std::thread pool (§3.22).  NOT OpenMP: this tree
-    # already has a libgomp casualty in the dlopen'd FluidSynth.
+    # across a persistent std::thread pool (§3.22).  NOT OpenMP: a libgomp
+    # pool outlives its owner (it crashed a dlopen'd FluidSynth on unload).
     if(TARGET Threads::Threads)
         target_link_libraries(olduvai_formats PUBLIC Threads::Threads)
     endif()
@@ -620,6 +633,50 @@ if(SDL2_FOUND)
         message(STATUS "MT-32 emulation: OFF")
     endif()
 
+    # ── FluidSynth (General MIDI from a SoundFont), vendored and compiled in ─
+    #
+    # Loaded at runtime before, like libmt32emu: a desktop got it only through
+    # a copy the release workflows built and bundled, a handheld only where
+    # the firmware shipped one.  Compiled in, a SoundFont plays everywhere.
+    # Provenance, licence and re-sync: third_party/fluidsynth/OLDUVAI-VENDORING.md
+    #
+    # osal=embedded replaces glib with FluidSynth's own OS layer; every
+    # driver is off (the engine drives the synth and mixes itself).  Set in
+    # the cache before add_subdirectory, as its own option() calls read them.
+    # Added BEFORE enable_testing(), so its test/ registers no ctest tests.
+    # -DOLDUVAI_WITH_FLUIDSYNTH=OFF restores the runtime dlopen of a system
+    # libfluidsynth.
+    option(OLDUVAI_WITH_FLUIDSYNTH
+           "Build vendored FluidSynth (General MIDI from a SoundFont)" ON)
+    if(OLDUVAI_WITH_FLUIDSYNTH AND
+       EXISTS ${CMAKE_SOURCE_DIR}/third_party/fluidsynth/CMakeLists.txt)
+        set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+        set(osal embedded CACHE STRING "" FORCE)
+        foreach(_fs_opt alsa aufile dbus ipv6 jack ladspa libinstpatch
+                libsndfile midishare network oss dsound wasapi waveout winmidi
+                sdl3 pulseaudio pipewire portaudio readline openmp systemd
+                coreaudio coremidi framework dart kai native-dls)
+            set(enable-${_fs_opt} OFF CACHE BOOL "" FORCE)
+        endforeach()
+        add_subdirectory(third_party/fluidsynth EXCLUDE_FROM_ALL)
+        olduvai_silence_vendored_target(libfluidsynth-OBJ)
+        olduvai_silence_vendored_target(libfluidsynth)
+        target_link_libraries(olduvai_presentation PRIVATE libfluidsynth)
+        # Its public headers are #included into OUR translation unit, so
+        # their warnings count against our -Werror; SYSTEM silences them
+        # there (the same mechanism as doctest's, above).
+        get_target_property(_fs_inc libfluidsynth INTERFACE_INCLUDE_DIRECTORIES)
+        set_property(TARGET libfluidsynth APPEND PROPERTY
+                     INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ${_fs_inc})
+        # FLUIDSYNTH_NOT_A_DLL: the header's static-link spelling on Windows,
+        # where it otherwise declares every entry point dllimport.
+        target_compile_definitions(olduvai_presentation PRIVATE
+            OLDUVAI_VENDORED_FLUIDSYNTH=1 FLUIDSYNTH_NOT_A_DLL)
+        message(STATUS "General MIDI: vendored FluidSynth (compiled in)")
+    else()
+        message(STATUS "General MIDI: system libfluidsynth at run time")
+    endif()
+
     # Scenario-authoring atlas (uses the presentation compositor).
     add_executable(screen_atlas EXCLUDE_FROM_ALL tools/screen_atlas.cpp)
     target_link_libraries(screen_atlas PRIVATE olduvai_presentation)
@@ -761,6 +818,7 @@ add_executable(olduvai_tests EXCLUDE_FROM_ALL
     tests/test_post_frame_steps.cpp
     tests/test_screen_topology.cpp
     tests/test_upscale.cpp
+    tests/test_incremental_upscale.cpp
     tests/test_upscale_threading.cpp
     tests/test_upscale_sizes.cpp
     tests/test_hd_asset_cache.cpp
@@ -769,6 +827,7 @@ add_executable(olduvai_tests EXCLUDE_FROM_ALL
     tests/test_fluid_bubbles.cpp
     tests/test_game_files.cpp
     tests/test_hash64.cpp
+    tests/test_dirty_rects.cpp
     tests/test_transition_geometry.cpp
     tests/test_transition_classify.cpp
     tests/test_button_layout.cpp
@@ -987,7 +1046,9 @@ if(SDL2_FOUND)
         tests/test_rising_balloons.cpp
         tests/test_boss_arena_bg.cpp
         tests/test_about_info.cpp
-        tests/test_sound_card.cpp)
+        tests/test_sound_card.cpp
+        tests/test_scaler_table.cpp
+        tests/test_actions.cpp)
     target_include_directories(olduvai_sdl_tests SYSTEM PRIVATE third_party)
     target_compile_definitions(olduvai_sdl_tests PRIVATE
         OLDUVAI_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
@@ -1076,6 +1137,14 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
     # inflate the data-gated ratchet, and drop it from the always-green set on
     # machines where it runs perfectly well.
     set_tests_properties(port_bundle PROPERTIES SKIP_RETURN_CODE 78)
+    # The PortMaster package: layout and port.json as PortMaster's checker
+    # reads them, a launcher that takes device facts from PortMaster, nothing
+    # of the player's.  Needs bash and python3, no game files (skips 78).
+    add_test(NAME portmaster_bundle
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/portmaster_bundle.sh"
+                "${CMAKE_SOURCE_DIR}/packaging/build_port_portmaster.sh"
+                "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(portmaster_bundle PROPERTIES SKIP_RETURN_CODE 78)
     # --version names the exact build (src/core/build_id.hpp).  No game files
     # needed; in a git checkout it also proves the ID is HEAD's, i.e. that the
     # binary is not stale — the trap the build ID exists to expose.
@@ -1361,6 +1430,16 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
                 "${CMAKE_SOURCE_DIR}/game_data"
                 "$<TARGET_FILE:olduvai>")
     set_tests_properties(golden_trace_l5s18_exit PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # The L3 trunk's [0x987e] warp: the descent before the warp and the
+    # per-screen clear after it, both caught cross-engine (§3.43 item 3).
+    add_test(NAME golden_trace_l5s9_trunk_warp
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/golden_trace_l5s9_trunk_warp.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(golden_trace_l5s9_trunk_warp PROPERTIES
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
@@ -1741,6 +1820,16 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
     # Unlike L2's, this one needed the capture hook BUILT: present_l6_victory_wide
     # always presented, so there was nothing to read back.  It was the only boss
     # ending in the tree no test could photograph.
+    # Dirty-rect present: every steady Enhanced present verified against the
+    # same frame composed whole (tests/dirty_verify.sh).
+    add_test(NAME dirty_verify
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/dirty_verify.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(dirty_verify PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
     add_test(NAME boss_l6_victory
         COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/boss_l6_victory.sh"
                 "${CMAKE_SOURCE_DIR}/game_data"
@@ -1771,6 +1860,38 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
                 "${CMAKE_SOURCE_DIR}/game_data"
                 "$<TARGET_FILE:olduvai>")
     set_tests_properties(cave_lerp PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # Enhanced-only animations (teleport arrival, cave emerge, the level-start
+    # arrival) stop game time: replays DOWN held through the L1 cave sign's
+    # arrival and reads the trace (frame counter holds, no early cave entry;
+    # Classic unchanged). Skips (77) without game data or python3.
+    add_test(NAME enhanced_time_stop
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/enhanced_time_stop.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(enhanced_time_stop PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # The Quit key (F10 by default, rebindable) asks "Exit game?" on No; only Yes
+    # quits. Platform level, boss fight and a rebound key. Skips (77) without data.
+    add_test(NAME quit_shortcut
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/quit_shortcut.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(quit_shortcut PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # SIGTERM (a handheld's quit hotkey, a window close) ends the program from a
+    # level at once instead of aborting to the title. Skips (77) without game data.
+    add_test(NAME sigterm_quits
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/sigterm_quits.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(sigterm_quits PROPERTIES
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
@@ -1876,7 +1997,7 @@ list(LENGTH _olduvai_tests _olduvai_total)
 # register only the two non-SDL gated tests (screen_tiles, sqz_parity) — as do
 # builds with no shell interpreter, since the other 18 are all .sh-driven.
 if(SDL2_FOUND AND _olduvai_shell_tests)
-    set(_olduvai_gated_expected 67)   # +1: l3_descent, +1: reinit_in_place, +1: aspect_live, +1: title_style_smooth, +1: boss_pause_midinterp, +1: play_shot_determinism, +1: level_edge_margins, +1: aspect_hd_text, +1: balloon_flyaway, +1: food_gate_transition, +1: boss_report, +1: golden_trace_l5s18_exit, +1: tally_no_flash, +1: hd_text_screens, +2: L4/L6 fights, +1: L6 slam-hd, +2: pause 4:3/stretch, +1: gameover_shot, +10: the adopted oracle scenarios (§3.15 item 2), +2: boss_l2/l6_victory
+    set(_olduvai_gated_expected 72)   # +1: quit_shortcut, +1: sigterm_quits, +1: enhanced_time_stop, +1: golden_trace_l5s9_trunk_warp, +1: dirty_verify, +1: l3_descent, +1: reinit_in_place, +1: aspect_live, +1: title_style_smooth, +1: boss_pause_midinterp, +1: play_shot_determinism, +1: level_edge_margins, +1: aspect_hd_text, +1: balloon_flyaway, +1: food_gate_transition, +1: boss_report, +1: golden_trace_l5s18_exit, +1: tally_no_flash, +1: hd_text_screens, +2: L4/L6 fights, +1: L6 slam-hd, +2: pause 4:3/stretch, +1: gameover_shot, +10: the adopted oracle scenarios (§3.15 item 2), +2: boss_l2/l6_victory
 else()
     set(_olduvai_gated_expected 2)
 endif()

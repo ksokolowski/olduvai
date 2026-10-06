@@ -98,15 +98,7 @@ void tick_ko(Entity& e, const MonsterCtx& c) {
 
 // ── RESET: activate when the player is near the monster's Y ──
 void tick_reset(Entity& e, const MonsterCtx& c) {
-    const int px = c.px, py = c.py;
-    if (px <= 2) return;
-    if (py + 30 <= e.y || py - 15 >= e.y) return;
-    e.state = static_cast<int>(MonsterState::Spawn);
-    e.state_counter = 0;
-    e.ko_counter = 0;
-    e.direction = (e.x + 20 >= px) ? 1 : 0;
-    e.visible = true;
-    e.sprite = e.init_spr;
+    appear_if_player_level(e, c.px, c.py);
 }
 
 // ── SPAWN: 2-frame spawn animation ──
@@ -284,6 +276,18 @@ bool tick_fish_arc(Entity& e, bool mark_visible) {
 }
 
 }  // namespace
+
+bool appear_if_player_level(Entity& e, int px, int py) {
+    if (px <= 2) return false;
+    if (py + 30 <= e.y || py - 15 >= e.y) return false;
+    e.state = static_cast<int>(MonsterState::Spawn);
+    e.state_counter = 0;
+    e.ko_counter = 0;
+    e.direction = (e.x + 20 >= px) ? 1 : 0;
+    e.visible = true;
+    e.sprite = e.init_spr;
+    return true;
+}
 
 void update_monster(Entity& e, const EntityTick& t) {
     // One handler per state; every branch of the old chain already ended in

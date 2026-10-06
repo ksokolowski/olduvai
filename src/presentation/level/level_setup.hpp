@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "presentation/audio/audio.hpp"        // SdlAudio
@@ -48,6 +49,26 @@ void setup_enhanced_glider_water(Loaded& g, bool enhanced, int internal);
 void build_surface_screen_assets(const Loaded& g, int screen,
                                  presentation::LevelRenderAssets& ra,
                                  systems::SystemsState& st);
+
+// Enhanced, a screen entered for the first time: the monsters its first
+// update will show appear from the transition's first frame, in their first
+// emerge frame.  The EXE draws the new page before that update, so they pop
+// in after the pan (Classic keeps that).  The rule is the update's own
+// (systems::appear_if_player_level): one hidden in a cave until the player
+// is level with it stays hidden.  While it lives, those monsters of
+// g.state.entities read as appeared; it restores them exactly, so no
+// simulation sees it.
+class SpawnPostPreview {
+  public:
+    explicit SpawnPostPreview(Loaded& g);
+    ~SpawnPostPreview();
+    SpawnPostPreview(const SpawnPostPreview&) = delete;
+    SpawnPostPreview& operator=(const SpawnPostPreview&) = delete;
+
+  private:
+    Loaded& g_;
+    std::vector<std::pair<std::size_t, core::Entity>> saved_;
+};
 
 std::vector<core::Entity> collect_spawn_post_monsters(const Loaded& g,
                                                       int screen);

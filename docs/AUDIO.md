@@ -16,7 +16,7 @@ way a 1991 player knew it. Each card sets the two knobs below as a pair:
 | Off | `off` | `none` | `none` |
 
 The menu lists only the cards this machine can play: Roland MT-32 needs your
-ROMs, General MIDI a SoundFont and FluidSynth, MIDI out a MIDI output port.
+ROMs, General MIDI a SoundFont, MIDI out a MIDI output port.
 The card is not stored on its own: play.json keeps the two keys, and a pair no
 card names (made under *Audio → Advanced*, or by hand) shows as **Custom**. An
 explicit `--music-device` / `--sfx-backend` beats `--sound-card`.
@@ -36,8 +36,8 @@ samples, with a line on stderr, instead of a silent game.
 |---|---|---|---|
 | `auto` | first available of: MT-32 → GM → OPL | — | best available |
 | `opl` | EXE-faithful AdLib driver on vendored Nuked-OPL3 (`opl_music.cpp`) — plays the container's authored FF 7F voice patches | nothing (built in) | the 1991 AdLib sound; PCM byte-parity with the reference renderer (18/18 tracks via `tools/opl_music_dump`) |
-| `gm-builtin` | FluidSynth (dlopen'd) + a SoundFont | `libfluidsynth` + a `.sf2` (auto-discovery prefers the Roland SC-55 face — `apt install scummvm-data`; see `LINUX_APPIMAGE.md`) | closest to the Windows GS Wavetable sound |
-| `mt32-builtin` | libmt32emu (dlopen'd) | `libmt32emu` + **your own** MT-32/CM-32L ROMs (`--rom-dir`) | the authentic Roland target the composer scored for |
+| `gm-builtin` | FluidSynth (built in) + a SoundFont | a `.sf2` (auto-discovery prefers the Roland SC-55 face — `apt install scummvm-data`; see `LINUX_APPIMAGE.md`) | closest to the Windows GS Wavetable sound |
+| `mt32-builtin` | libmt32emu (built in) | **your own** MT-32/CM-32L ROMs (`--rom-dir`) | the authentic Roland target the composer scored for |
 | `host-midi` / `mt32` | RtMidi → a real MIDI OUT port, raw MT-32 stream | a MIDI device/synth on the port | real hardware |
 | `gm-host` | RtMidi → MIDI OUT with MT-32→GM program translation | a GM synth on the port (e.g. Windows GS Wavetable) | zero-setup GM on Windows |
 | `none` | — | — | silence |

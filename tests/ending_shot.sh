@@ -9,6 +9,9 @@
 # player ever sees, is rendered by code no test executes.  This closes the half
 # of that gap the existing hooks can reach: OLDUVAI_ENDING_SHOT dumps the first
 # composited ending frame (COOL3 backdrop + caveman) and self-quits.
+# A third case covers the Enhanced skip (§3.43 item 4): OLDUVAI_ENDING_SKIP
+# presses mid-climb, and the shot then photographs the fade to black.  It
+# runs Enhanced with mmpx at render scale 2, an integer path like scale 1.
 #
 # The GAME-OVER half is still uncovered and deliberately not attempted here.
 # It needs a hook of its own: reaching it requires game_over==true, and with
@@ -63,19 +66,14 @@ export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}"
 CFG_DIR="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
 # --level 8 is past the last playable level: run_game goes straight to the win
 # ending.  The hook self-quits after the first frame; timeout is a hang net.
-check_one() {   # <frame-arg ""> <golden> <label>
-    _f="$1"; _g="$2"; _label="$3"
+check_one() {   # <golden> <label> <env assignments> <extra args>
+    _g="$1"; _label="$2"; _env="$3"; _args="$4"
     CFG_DIR="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
-    if [ -n "${_f}" ]; then
-        XDG_CONFIG_HOME="${CFG_DIR}" OLDUVAI_ENDING_SHOT="${SHOT}" \
-            OLDUVAI_ENDING_SHOT_FRAME="${_f}" \
-            timeout 60 "${BINARY}" --play --level 8 --render-scale 1 \
-            --window 640x400 --game-dir "${GAME_DIR}" >/dev/null 2>&1
-    else
-        XDG_CONFIG_HOME="${CFG_DIR}" OLDUVAI_ENDING_SHOT="${SHOT}" \
-            timeout 60 "${BINARY}" --play --level 8 --render-scale 1 \
-            --window 640x400 --game-dir "${GAME_DIR}" >/dev/null 2>&1
-    fi
+    rm -f "${SHOT}"
+    # shellcheck disable=SC2086
+    env XDG_CONFIG_HOME="${CFG_DIR}" OLDUVAI_ENDING_SHOT="${SHOT}" ${_env} \
+        timeout 60 "${BINARY}" --play --level 8 --window 640x400 \
+        --game-dir "${GAME_DIR}" ${_args} >/dev/null 2>&1
     rm -rf "${CFG_DIR}"
     if [ ! -s "${SHOT}" ]; then
         echo "ending_shot: FAIL — no shot produced (${_label})"
@@ -89,17 +87,42 @@ check_one() {   # <frame-arg ""> <golden> <label>
     echo "  shot=${SHOT}  golden=${_g}"
     FAIL=1
 }
-
 FAIL=0
-
-# Frame 0: the historical golden — caveman at y=198, first composited frame.
-check_one "" "${GOLDEN}" "first frame"
-
-# Rise step 30 (y ≈ 138): mid-climb, the phase nothing photographed before
-# 2026-08-24 (OLDUVAI_ENDING_SHOT_FRAME).  Classic mode, deterministic.
-RISE_GOLDEN="$(dirname "$0")/fixtures/ending_rise30_golden.sha256"
-check_one 30 "${RISE_GOLDEN}" "rise step 30"
-
+FIX="$(dirname "$0")/fixtures"
+check_one "${GOLDEN}" "first frame" "" "--render-scale 1"
+check_one "${FIX}/ending_rise30_golden.sha256" "rise step 30" \
+    "OLDUVAI_ENDING_SHOT_FRAME=30" "--render-scale 1"
+# The Enhanced skip (BACKLOG §3.43 item 4): a press at rise step 20 fades
+# that frame to black with the music; fade frame 27 of 54 is half way.  mmpx: an
+# integer scaler, so the hash is stable.  --transitions classic keeps
+# Enhanced but turns smooth motion off: with it on, the climb's sub-frames
+# are vsync-paced wherever the driver grants vsync (sdl-floor's dummy driver
+# did), so the frame the skip leaves on screen follows the wall clock.
+check_one "${FIX}/ending_skip_fade_half_golden.sha256" "Enhanced skip, fade frame 27" \
+    "OLDUVAI_ENDING_SKIP=20 OLDUVAI_ENDING_SHOT_FRAME=27" \
+    "--enhanced --transitions classic --hd-profile mmpx --render-scale 2"
+# The HD ending repaints only where the caveman moved (EndingCanvas over
+# DirtyFrame).  Mid-climb, that frame must equal the one composed whole
+# (OLDUVAI_DIRTY=0): a rect the dirty path missed shows here.
+shot_hash() {   # <env assignments>
+    CFG_DIR="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
+    rm -f "${SHOT}"
+    # shellcheck disable=SC2086
+    env XDG_CONFIG_HOME="${CFG_DIR}" OLDUVAI_ENDING_SHOT="${SHOT}" $1 \
+        timeout 60 "${BINARY}" --play --level 8 --window 640x400 \
+        --game-dir "${GAME_DIR}" --enhanced --transitions classic \
+        --hd-profile mmpx --render-scale 2 >/dev/null 2>&1
+    rm -rf "${CFG_DIR}"
+    [ -s "${SHOT}" ] && sha256 "${SHOT}"
+}
+DIRTY_HASH="$(shot_hash "OLDUVAI_ENDING_SHOT_FRAME=30")"
+WHOLE_HASH="$(shot_hash "OLDUVAI_DIRTY=0 OLDUVAI_ENDING_SHOT_FRAME=30")"
+if [ -z "${DIRTY_HASH}" ] || [ "${DIRTY_HASH}" != "${WHOLE_HASH}" ]; then
+    echo "ending_shot: FAIL — the HD rise's dirty frame differs from the whole one"
+    FAIL=1
+else
+    echo "ending_shot: PASS (HD rise, dirty = whole)"
+fi
 [ ${FAIL} -eq 0 ] && rm -f "${SHOT}"
 [ ${FAIL} -eq 0 ] || exit 1
 exit 0

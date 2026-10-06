@@ -8,6 +8,7 @@
 #pragma once
 
 #include "presentation/menu/cheat_picker.hpp"
+#include "presentation/render/dirty_frame.hpp"
 #include "presentation/render/level_surface.hpp"
 #include "presentation/render/logical_size.hpp"
 
@@ -61,6 +62,13 @@ struct FramePresenter {
 
     void present(FrameBuffer& f, bool with_hud = true, bool do_present = true);
 
+    // The steady HD gameplay frame with nothing beside it (no widescreen
+    // margins): `f` composed whole from `blits` over the background `bg_key`
+    // names, uploaded only where it changed since the last steady present
+    // (dirty_frame.hpp).  Takes `blits`' contents.
+    void present_steady(FrameBuffer& f, std::vector<BlitRecord>& blits,
+                        std::uint64_t bg_key);
+
     // The paused frame: the frozen scene (no state advance), wrapped wide on
     // the widescreen present path, the menu or its confirm over it,
     // presented.  `shot`: OLDUVAI_PAUSE_SHOT's path, or null.
@@ -83,8 +91,13 @@ struct FramePresenter {
     // One output-resolution text pass: HUD text, cheat rows, pause menu or
     // confirm (a second begin/flush would not composite).
     void draw_text_pass(const enhance::EnhancedHudLayout* hud);
+    // After the upload: the canvas, the text pass, a pending shot, the flip.
+    void finish(bool wide_frame, const enhance::EnhancedHudLayout* hud,
+                bool do_present);
 
     FrameBuffer hud_scratch_;   // native 320x200 — state-mutation scratch
+    BlitDiff steady_diff_;      // present_steady's last present
+    std::vector<DirtyRect> hud_rects_;
     // The pause menu for the text pass; set only inside present_paused.
     const Menu* menu_ = nullptr;
     const ConfirmDialog* confirm_ = nullptr;

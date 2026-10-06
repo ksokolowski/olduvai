@@ -17,22 +17,32 @@ const std::vector<std::string>& supported_hd_profiles();
 // True iff `profile` is one of supported_hd_profiles().
 bool is_supported_hd_profile(const std::string& profile);
 
+// A saved or typed profile name in its current spelling: "xbr", the simple edge
+// blender this build no longer has, is now xBRZ.  Anything else is unchanged.
+std::string canonical_hd_profile(const std::string& profile);
+
 // The profile's scaler copies whole source pixels (palette and binary alpha
 // kept), so sprite transparency is re-stamped as a nearest upscale of the
-// source mask.  False for blending scalers (omniscale, xbr), whose
+// source mask.  False for blending scalers (omniscale, xbrz), whose
 // anti-aliased edge is kept.  Every scaler must be classified here: a missing
 // palette-preserving one leaves a partial-alpha halo that no gameplay trace
 // catches.  Unknown profile: false.
 bool profile_preserves_palette(const std::string& profile);
 
-// RGBA w x h in, (w*scale) x (h*scale) out, by profile:
-//   native     identity (HD off upstream)
-//   retro      nearest-neighbour
-//   smooth     Scale2x (x2) / Scale3x (x3) / Scale2x twice (x4)
-//   eagle      Eagle 2x (x2; chained for x4; x3 -> Scale3x)
-//   xbr        xBR-style 2x (x2; chained for x4; x3 -> Scale3x)
-//   mmpx       MMPX (x2, doubled for x4)
-//   omniscale  OmniScale (x2/x3/x4)
+// What upscale_rgba actually runs for this profile and scale, in words
+// ("Scale3x (MMPX has no 3x form)", "MMPX, two passes"): the profile names
+// describe a look, and at x3 three of them are the same scaler.
+std::string describe_hd_scaler(const std::string& profile, int scale);
+
+// The Options menu's name for a profile ("Off", "Scale2x/3x", "xBRZ"); empty
+// for an unknown one.  assets/data/menus.json carries the same names, and a test
+// holds the two together.
+std::string hd_profile_label(const std::string& profile);
+
+// RGBA w x h in, (w*scale) x (h*scale) out.  Each profile reaches each factor
+// by the route its entry in upscale.cpp's table gives (the scaler itself, its 2x
+// twice, Scale3x where it has no 3x form, or replication); describe_hd_scaler()
+// words that same entry.
 // scale 1 returns the input.  An unknown profile throws std::invalid_argument;
 // validate with is_supported_hd_profile() at startup.
 std::vector<std::uint8_t> upscale_rgba(const std::vector<std::uint8_t>& px,

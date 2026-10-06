@@ -5,6 +5,7 @@
 // store) is not one.
 #pragma once
 
+#include <cstdlib>
 #include <functional>
 #include <map>
 #include <utility>
@@ -13,11 +14,14 @@
 
 #include <SDL.h>
 
+#include "enhance/upscale.hpp"                    // describe_hd_scaler
 #include "presentation/audio/audio.hpp"             // SdlAudio
 #include "presentation/audio/sound_card.hpp"        // the Sound card row
+#include "presentation/input/actions.hpp"           // the keyboard mapping
 #include "presentation/input/button_layout.hpp"     // the Button layout row
 #include "presentation/input/gamepad.hpp"           // the live pad mapping
 #include "presentation/menu/menu.hpp"              // MenuBindings
+#include "presentation/menu/profile_table.hpp"     // family_button_layout
 #include "presentation/menu/settings_apply.hpp"    // ApplyTier, classify_change,
                                               // DisplaySettings, apply_preset
 #include "presentation/menu/settings_flow.hpp"     // SettingsFlow::Hooks
@@ -50,6 +54,8 @@ struct StagingBindings : MenuBindings {
     // Which Sound card choices this machine can play (probe_sound_cards);
     // the row offers only those.  Default: the always-present cards.
     SoundCardAvail sound_avail;
+    // The layout "Reset" returns the pad to: the device family's.
+    std::string default_layout = "xbox";
     // Live preview beyond the cheap keys; null = staged only (boss).
     std::string* live_hd_profile = nullptr;   // same-scale hd_profile swap
     std::function<void(const std::string&)> apply_aspect;   // logical size only
@@ -69,9 +75,12 @@ struct StagingBindings : MenuBindings {
             settings_seed_of(o, o.enhance, window_fullscreen(w));
         enhanced = seed.enhanced;
         seed_settings_mem(*this, seed);
-        // The pad mapping as it is now (a previous Apply may have moved it
-        // since launch).
-        for (const char* k : kPadKeys) mem[k] = gamepad::binding(k);
+        // The pad and keyboard mappings as they are now (a previous Apply
+        // may have moved them since launch).
+        for (const PadSlot& s : kPadSlots) mem[s.key] = gamepad::binding(s.key);
+        for (const KeyAction& k : kKeyActions) mem[k.key] = key_binding(k.key);
+        if (const char* id = family_button_layout(o.profile_family))
+            default_layout = id;
     }
 
     // After an adopt replaced the pipeline: its audio and window, and the
@@ -116,6 +125,19 @@ struct StagingBindings : MenuBindings {
         return out;
     }
 
+    // The Upscaler's "Runs" row: what the staged profile and scale will
+    // actually execute, a view of three keys and never stored.
+    std::string hd_runs_text() const {
+        const auto at = [&](const char* k, const std::string& dflt) {
+            const auto i = mem.find(k);
+            return i == mem.end() ? dflt : i->second;
+        };
+        const std::string profile = at("hd_profile", cur.hd_profile);
+        const bool on = at("enhanced", cur.enhanced ? "true" : "false") == "true";
+        const int rs = std::atoi(at("render_scale", std::to_string(cur.render_scale)).c_str());
+        return enhance::describe_hd_scaler(profile, hd_scale_for(on, profile, rs));
+    }
+
     std::string get(const std::string& k) final {
         std::string special;
         if (get_special(k, special)) return special;
@@ -123,6 +145,7 @@ struct StagingBindings : MenuBindings {
         if (k == "sound_card")
             return sound_card_for(get("music_device"), get("sfx_backend"));
         if (k == "button_layout") return button_layout_for(pad_bindings());
+        if (k == "hd_runs") return hd_runs_text();
         const auto it = mem.find(k);
         return it == mem.end() ? std::string{} : it->second;
     }
@@ -155,13 +178,7 @@ struct StagingBindings : MenuBindings {
             pad_key = rebind_action(pad, k, v);
         }
         if (pad_key) {
-            const PadBindings now = pad_bindings();
-            const std::string* const next[] = {&pad.jump, &pad.attack, &pad.confirm,
-                                         &pad.back, &pad.pause};
-            const std::string* const was[] = {&now.jump, &now.attack, &now.confirm,
-                                        &now.back, &now.pause};
-            for (std::size_t i = 0; i < std::size(kPadKeys); ++i)
-                if (*next[i] != *was[i]) stage(kPadKeys[i], *next[i]);
+            stage_pad(pad);
             return;
         }
         if (k == "preset") {
@@ -178,6 +195,59 @@ struct StagingBindings : MenuBindings {
             return;
         }
         stage(k, v);
+    }
+
+    // A binding row's slot, by the rules of its device: the pad's contexts
+    // (rebind_action), or the keyboard's play actions as one group.
+    bool set_binding(const std::string& key, int slot,
+                     const std::string& name) override {
+        if (key.rfind("pad_", 0) == 0) {
+            PadBindings pad = pad_bindings();
+            if (!rebind_action(pad, key, name, slot)) return false;
+            stage_pad(pad);
+            return true;
+        }
+        std::vector<BindingList> lists;
+        std::vector<BindingList*> group;
+        std::size_t target = std::size(kKeyActions);
+        for (const KeyAction& k : kKeyActions) {
+            if (key == k.key) target = lists.size();
+            lists.push_back(split_binding(get(k.key)));
+        }
+        if (target == std::size(kKeyActions))
+            return MenuBindings::set_binding(key, slot, name);
+        for (BindingList& l : lists) group.push_back(&l);
+        if (!rebind_in_group(group, target, slot, name)) return false;
+        for (std::size_t i = 0; i < lists.size(); ++i) {
+            const std::string v = join_binding(lists[i]);
+            if (v != get(kKeyActions[i].key)) stage(kKeyActions[i].key, v);
+        }
+        return true;
+    }
+
+    void clear_alternate(const std::string& key) override {
+        PadBindings pad = pad_bindings();
+        if (presentation::clear_alternate(pad, key))
+            stage_pad(pad);
+        else if (key.rfind("pad_", 0) != 0)
+            MenuBindings::clear_alternate(key);
+    }
+
+    // The Reset rows: the pad back to the device's layout, the keyboard to
+    // its defaults, or both.
+    bool run_action(const std::string& action) override {
+        const bool all = action == "reset_controls";
+        if (!all && action != "reset_pad" && action != "reset_keys")
+            return false;
+        if (all || action == "reset_pad")
+            if (const ButtonLayout* l = find_button_layout(default_layout))
+                stage_pad(bindings_of(*l));
+        if (all || action == "reset_keys")
+            for (const KeyAction& k : kKeyActions) {
+                const std::string v = default_key_setting(k.action);
+                if (v != get(k.key)) stage(k.key, v);
+            }
+        return true;
     }
 
     // Discard: the change's value and live preview back to baseline.
@@ -201,12 +271,19 @@ struct StagingBindings : MenuBindings {
   private:
     // The staged pad mapping, from mem.
     PadBindings pad_bindings() const {
-        const auto val = [this](const char* k) {
-            const auto it = mem.find(k);
-            return it == mem.end() ? std::string{} : it->second;
-        };
-        return {val("pad_jump"), val("pad_attack"), val("pad_confirm"),
-                val("pad_back"), val("pad_pause")};
+        PadBindings out;
+        for (const PadSlot& s : kPadSlots) {
+            const auto it = mem.find(s.key);
+            if (it != mem.end()) out.*s.field = it->second;
+        }
+        return out;
+    }
+
+    // Stage each pad_* key `pad` moves.
+    void stage_pad(const PadBindings& pad) {
+        const PadBindings now = pad_bindings();
+        for (const PadSlot& s : kPadSlots)
+            if (pad.*s.field != now.*s.field) stage(s.key, pad.*s.field);
     }
 
     // Stage one key: play.json sees nothing until Apply.  Cheap keys preview
@@ -249,6 +326,7 @@ inline SettingsFlow::Hooks staging_flow_hooks(StagingBindings& b,
     h.persist = [&b](const std::string& k, const std::string& v) {
         b.save(k, v);
         gamepad::apply_binding(k, v);   // a pad_* key: from now on
+        apply_key_binding(k, v);        // a key_* key
     };
     h.classify = [&b, &session](const std::string& k, const std::string& v) {
         return classify_staged(b, session, k, v);

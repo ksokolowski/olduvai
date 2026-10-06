@@ -128,3 +128,39 @@ TEST_CASE("sound card row: offers only what will sound, never Custom") {
           std::vector<std::string>{"auto", "sb", "adlib", "mt32", "midi",
                                    "off"});
 }
+
+// ── The Upscaler's "Runs" row ───────────────────────────────────────────────
+
+TEST_CASE("upscaler row: Runs shows what the staged profile and scale execute") {
+    Bind b;
+    b.mem["enhanced"] = "true";
+    b.mem["hd_profile"] = "mmpx";
+    b.mem["render_scale"] = "2";
+    CHECK(b.get("hd_runs") == "MMPX");
+    b.mem["render_scale"] = "4";
+    CHECK(b.get("hd_runs") == "MMPX, two passes");
+    b.mem["hd_profile"] = "xbrz";
+    CHECK(b.get("hd_runs") == "xBRZ");
+    b.mem["hd_profile"] = "omniscale";
+    CHECK(b.get("hd_runs") == "OmniScale");
+    b.mem["enhanced"] = "false";            // Classic: nothing is upscaled
+    CHECK(b.get("hd_runs") == "none");
+    b.mem["enhanced"] = "true";
+    b.mem["hd_profile"] = "native";         // Off
+    CHECK(b.get("hd_runs") == "none");
+}
+
+TEST_CASE("upscaler row: the menu names every profile and carries the Runs row") {
+    const MenuModel m = built_in_menu_model();
+    const auto& items = m.screens.at("video").items;
+    const auto pick = std::find_if(items.begin(), items.end(),
+        [](const MenuItem& it) { return it.id == "hd_profile"; });
+    REQUIRE(pick != items.end());
+    CHECK(pick->label == "Upscaler");
+    CHECK(pick->value_labels.size() == pick->values.size());
+    const auto runs = std::find_if(items.begin(), items.end(),
+        [](const MenuItem& it) { return it.id == "hd_runs"; });
+    REQUIRE(runs != items.end());
+    CHECK(runs->type == "readout");
+    CHECK(runs->key == "hd_runs");
+}

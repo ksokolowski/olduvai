@@ -6,6 +6,84 @@ candidates for 1.0.0.
 
 ## Unreleased
 
+## 0.9.10 — 2026-10-06
+
+**PortMaster, a sharper upscaler, and animations that stop the clock.**
+Olduvai now installs on the handhelds PortMaster supports, the Enhanced
+upscaler got a much better scaler and an honest menu, and the Enhanced-only
+animations no longer let the game run underneath them.
+
+- **Added: a PortMaster package** (`olduvai-<version>-portmaster.zip`, 64-bit
+  and 32-bit ARM).  Drop it into PortMaster's `autoinstall` folder; the game
+  files go in `ports/olduvai/game/`.  It starts Enhanced HD at the largest scale that fits the
+  panel (x2 from 400 lines, x3 from 600, x4 from 800), filling a 4:3 panel
+  at 4:3, and Classic on panels shorter than 400 lines, and keeps your settings, saves and bug reports inside the port
+  folder so an update leaves them alone.  Played on the TrimUI Smart Pro and
+  the Powkiddy A12 (KNULLI) and on a 640x480 R36S clone (ArkOS).  Steps:
+  [docs/HANDHELD.md](https://github.com/ksokolowski/olduvai/blob/main/docs/HANDHELD.md).
+- **Added: the xBRZ upscaler** (`--hd-profile xbrz`, *Options → Video →
+  Upscaler*), native at x2, x3 and x4 and aware of transparency, so sprite
+  outlines round off like the rest.  It replaces the old simple `xbr` blender
+  (a saved `xbr` now reads as `xbrz`) and uses every core: a full 320x200
+  frame takes about 10 to 13 ms on the Powkiddy A12 and about 6 ms on the
+  TrimUI, against 45 to 50 ms and 16 to 19 ms on one core.  **It is now the
+  scaler of the handheld Enhanced profiles** (x3 on 720p and 600p panels, x2
+  on 640x480).  Measured on the R36S, the A12 and the TrimUI it costs the
+  steady frame what Scale2x/3x does and about 1% of the effective rate; the
+  price is a longer burst when a new screen's graphics are built.
+- **Changed: the Powkiddy A12 now starts in Enhanced HD** (xBRZ x3), in the
+  KNULLI package and through PortMaster alike.  It was Classic while Enhanced
+  there ran well under the original's pace; with the cheaper present and the
+  xBRZ scaler it is very playable, a little slower than the original.  Classic
+  is one menu choice away.
+- **Changed: honest upscaler names.**  *HD profile* is now *Upscaler*, with
+  plain names (Off, Nearest, Scale2x/3x, Eagle, xBRZ, MMPX, OmniScale), and a
+  *Runs* row under *Render scale* says what is really running: at x3, Eagle
+  and MMPX use Scale3x because they have no 3x form, and at x4 the 2x scalers
+  run twice.  `--help` and [docs/SETTINGS.md](https://github.com/ksokolowski/olduvai/blob/main/docs/SETTINGS.md) say the same.
+- **Added: controls round 2.**  Two buttons per action (a primary and an
+  alternate), a capture row for each under *Options → Controls*, L2 and R2,
+  and Select-held shortcuts: quicksave, quickload, cheats and the bug report.
+  On a Nintendo-style layout B also backs out of menus.  A **Quit** key (F10,
+  rebindable under *Options → Controls → Keyboard*) asks "Exit game?" and
+  opens on No, so no single key press ends a run.
+- **Added: 640x480 handheld profiles** (`dos-handheld-43`, `hd-handheld-43`):
+  Enhanced HD fills the 4:3 panel at x2 with no black bars.
+- **Added: handheld profiles by panel height** (`dos-handheld-x2`,
+  `hd-handheld-x2`, `dos-handheld-x4`, `hd-handheld-x4`): PortMaster starts a
+  wide panel of 400 lines and up at x2 and of 800 lines and up at x4, both with
+  xBRZ; a 1280x800 panel is exactly 4x.  Neither is tried yet on a device of
+  its class; a 1280x720 handheld measured at x4 costs the scaler under 2 ms a
+  tick more than at x3.
+- **Fixed (Enhanced): the teleport clouds, the cave emerge and the level-start
+  arrival stop game time.**  They used to freeze only the caveman, so the
+  timer, the monsters and any held key kept going: pressing DOWN just after
+  the first teleport of level 1 dropped you into the next cave before the
+  arrival had finished.  Now nothing moves until the animation is done, and
+  the timer holds.  Classic is unchanged.
+- **Improved (Enhanced): less work per frame.**  The steady frame uploads only
+  what changed, including the boss victories, the pan strip, the L3 trunk
+  descent and the ending rise; on the Powkiddy A12 the present work fell from
+  23 to 12 ms, and the boss fights run at the game's full speed there.
+- **Fixed: the quit signal ends the program from a level.**  A handheld's
+  PortMaster quit hotkey (Start + Select) and a window's close button used
+  to abort the level to the "THE END" screen first and only left on a second
+  press; now one press leaves, in the levels and the boss fights alike.  ESC
+  still opens the pause menu.
+- **Fixed:** the L3 and L7 warps play their descent and the L7 fake cave is
+  staged; a first visit's monsters show through the pan with the cave
+  dwellers hidden; in Enhanced, skipping the ending fades out over 3 seconds.
+- **Changed: FluidSynth is compiled in**, like the MT-32 emulation, so
+  General MIDI needs only a SoundFont and no separate library.
+- **Changed: the video start-up falls back driver by driver** and says which
+  one it ended on, so a handheld with an unusual display stack still starts.
+- **Licence note:** the xBRZ scaler is GPL-3.0 only, so the binaries are
+  conveyed under GPL-3.0; the project's own files stay GPL-3.0-or-later.  See
+  [THIRD-PARTY-NOTICES.md](https://github.com/ksokolowski/olduvai/blob/main/THIRD-PARTY-NOTICES.md).
+- **Under the hood:** CI runs on Node 24 actions and a single MSVC toolset;
+  one scaler table now states what every profile runs, and the menu, the
+  docs and the tests are held to it.
+
 ## 0.9.9 — 2026-09-27
 
 **Controls, and an engine to match.** The handhelds now play with the

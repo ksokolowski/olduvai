@@ -46,7 +46,17 @@ audio device.
 - `run_tick`: the inputs (flight physics steers from them), a deferred
   cave-sign teleport, the cave-entrance descent, then `run_frame(...)`.  The
   cheat picker pauses the world: no teleport and no `run_frame`; the descent
-  still ticks.
+  still ticks.  An Enhanced-only animation stops game time the same way
+  (`enhanced_fx_stops_time`: the teleport clouds, the Enhanced cave emerge,
+  and the level start's arrival, which uses the same clouds; Classic's 2-tick
+  emerge stays draw-only): no `run_frame`, so the frame counter, the level
+  timer, the monsters, the RNG and every input wait, whatever the keys are
+  bound to.  The shell's `wrap_frame_counter` waits too
+  (`time_stops_this_tick`, which also covers the deferred teleport about to
+  start the arrival): a wrap already due, and the timer tick with it, happens
+  on the first tick that runs, so the cycle keeps its length.  Their
+  counters tick down with the draw, so the world resumes at zero; a death
+  cancels the emerge so the stop cannot wedge it.
 - `end_tick`: the `--god` refill, then `run_post_frame_steps(...)`, **6b
   through 8a below**.  The order inside that function is this contract.
 - **6b** death halo init/tick.
@@ -77,7 +87,8 @@ audio device.
   one-frame walk/gravity skip for the next frame.
 - Render.  Three draw-timed counters tick once per tick around it, never
   per smooth sub-frame: `tick_teleport_fx` before the HUD draw,
-  `tick_get_ready` after it (draw-then-decrement), `tick_cave_emerge`
+  `tick_get_ready` after it (draw-then-decrement; it waits while
+  `time_stopped`, so a frozen frame counter cannot drain it), `tick_cave_emerge`
   after the tick's last present, so every present path saw one value.
 - Trace snapshot is **post-render** (the reference captures at
   the frame top, i.e. after the previous frame's render, so render-side

@@ -48,12 +48,56 @@ inline constexpr ProfilePin kHdPins[] = {
     {"render_scale", "4"},
     {"aspect", "widescreen"},
 };
-// hd-handheld: measured on the TrimUI Smart Pro and Powkiddy A12: smooth x3
-// fits 1280x720 and 1024x600, discrete path with 2 sub-frames.
+// hd-handheld: measured on the TrimUI Smart Pro and Powkiddy A12: x3 fits
+// 1280x720 and 1024x600, discrete path with 2 sub-frames.  xBRZ is the scaler:
+// the same steady frame cost as Scale2x/3x, 0.15 ms a tick more, and a worse
+// burst when a screen's graphics are built.
 inline constexpr ProfilePin kHdHandheldPins[] = {
     {"enhanced", "true"},
-    {"hd_profile", "smooth"},
+    {"hd_profile", "xbrz"},
     {"render_scale", "3"},
+    {"aspect", "widescreen"},
+    {"smooth_subframes", "2"},
+    {"smooth_vsync", "off"},
+};
+
+// The 4:3 handheld family (640x480 on the R36S): both fill the panel at the
+// DOS 4:3 aspect; Enhanced at x2, the panel's own width, measured on the R36S,
+// with xBRZ (close to free there: a 53 ms burst against 11 ms for Scale2x).
+inline constexpr ProfilePin kDosHandheld43Pins[] = {
+    {"enhanced", "false"},
+    {"enhance", ""},
+    {"hd_profile", "native"},
+    {"aspect", "4:3"},
+};
+inline constexpr ProfilePin kHdHandheld43Pins[] = {
+    {"enhanced", "true"},
+    {"hd_profile", "xbrz"},
+    {"render_scale", "2"},
+    {"aspect", "4:3"},
+    {"smooth_subframes", "2"},
+    {"smooth_vsync", "off"},
+};
+
+// The handheld scale follows the panel: the largest scale whose frame fits its
+// height, a step every 200 lines (x2 from 400, x3 from 600, x4 from 800).  A
+// 16:10 panel of 800 lines takes x4 as exactly 1280x800.  hd-handheld above is
+// x3; these are the x2 and x4 pairs for wide panels.  Neither is verified on a
+// device of its class: the R36S at x2 and the TrimUI at render scale 4 are the
+// stand-ins (x4 costs xBRZ 1.9 ms a tick over x3 there, and the pool uses up
+// to 8 threads on a bigger chip).
+inline constexpr ProfilePin kHdHandheldX2Pins[] = {
+    {"enhanced", "true"},
+    {"hd_profile", "xbrz"},
+    {"render_scale", "2"},
+    {"aspect", "widescreen"},
+    {"smooth_subframes", "2"},
+    {"smooth_vsync", "off"},
+};
+inline constexpr ProfilePin kHdHandheldX4Pins[] = {
+    {"enhanced", "true"},
+    {"hd_profile", "xbrz"},
+    {"render_scale", "4"},
     {"aspect", "widescreen"},
     {"smooth_subframes", "2"},
     {"smooth_vsync", "off"},
@@ -68,6 +112,18 @@ inline constexpr ProfileDef kProfiles[] = {
      std::size(kDosPins)},
     {"hd-handheld", "handheld", ProfileRole::Enhanced, kHdHandheldPins,
      std::size(kHdHandheldPins)},
+    {"dos-handheld-43", "handheld-43", ProfileRole::Classic,
+     kDosHandheld43Pins, std::size(kDosHandheld43Pins)},
+    {"hd-handheld-43", "handheld-43", ProfileRole::Enhanced, kHdHandheld43Pins,
+     std::size(kHdHandheld43Pins)},
+    {"dos-handheld-x2", "handheld-x2", ProfileRole::Classic, kDosPins,
+     std::size(kDosPins)},
+    {"hd-handheld-x2", "handheld-x2", ProfileRole::Enhanced, kHdHandheldX2Pins,
+     std::size(kHdHandheldX2Pins)},
+    {"dos-handheld-x4", "handheld-x4", ProfileRole::Classic, kDosPins,
+     std::size(kDosPins)},
+    {"hd-handheld-x4", "handheld-x4", ProfileRole::Enhanced, kHdHandheldX4Pins,
+     std::size(kHdHandheldX4Pins)},
 };
 
 // A session with no profile at all behaves as this family.
@@ -78,7 +134,7 @@ inline constexpr const char* kDefaultFamily = "desktop";
 // Style switch (which would reset a player's own mapping).  nullptr: the
 // engine default (xbox).
 inline const char* family_button_layout(const std::string& family) {
-    return family == "handheld" ? "nintendo" : nullptr;
+    return family.rfind("handheld", 0) == 0 ? "nintendo" : nullptr;
 }
 
 inline const ProfileDef* find_profile(const std::string& name) {

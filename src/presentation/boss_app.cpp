@@ -362,7 +362,7 @@ BossRunResult run_boss_level(GameOptions& opts, int internal_level,
         pacer.end_tick(pipe.sw.ren, surface.tex(), smooth_vsync_ran,
                        opts.vga_scan, surface.hd());
     }
-    // Reported at the end of the fight; victory/fade/tally are not paced by it.
+    // Reported at the end of the fight; the victory reports on its own.
     fstats.report(internal_level);
 
     // Boss music plays through the victory until the tally's BONUS.MDI replaces
@@ -379,7 +379,8 @@ BossRunResult run_boss_level(GameOptions& opts, int internal_level,
                             view.screen(),     view.text_deps(), view.present(),
                             assets,            fight.player,     view.fb(),
                             opts.screenshot,   frame_ms,         res,
-                            pipe.audio.get(),  opts.game_dir,    opts.enhanced};
+                            pipe.audio.get(),  opts.game_dir,    opts.enhanced,
+                            &fstats};
     play_boss_ending(ending, fight, boss_ops.render_victory_sprites,
                      l2_last_flash, smooth, view.pacer(), view.smooth_pos(),
                      opts.frames <= 0 &&

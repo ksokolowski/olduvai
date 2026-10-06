@@ -27,9 +27,11 @@ void show_game_over_screen(const std::filesystem::path& game_dir,
 // the scroll), then holds for a key press+release.  Missing assets → silent
 // return (§F6).  OLDUVAI_ENDING_SHOT dumps the first frame + sets
 // `quit_requested` (headless verify).  `hd_scale`/`hd_profile` drive the upscale.
+// `enhanced`: a press fades the frame and the music out together instead of
+// cutting; classic keeps the cut.
 void show_win_ending(const std::filesystem::path& game_dir, SdlAudio& audio,
                      ScaledWindow& sw, int hd_scale,
                      const std::string& hd_profile, bool smooth_motion,
-                     bool& quit_requested);
+                     bool enhanced, bool& quit_requested);
 
 }  // namespace olduvai::presentation

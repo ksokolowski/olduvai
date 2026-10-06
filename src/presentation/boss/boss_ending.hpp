@@ -44,6 +44,8 @@ struct BossEnding {
     SdlAudio* audio;
     const std::filesystem::path& game_dir;
     bool enhanced;
+    // The victory frames' ticks (boss_app starts their own stats phase).
+    FrameStats* stats;
     RenderTarget target(FrameBuffer& b) const {
         return make_render_target(b, surface, hd_cache);
     }

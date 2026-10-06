@@ -7,6 +7,7 @@
 
 #include "core/constants.hpp"
 #include "core/rng.hpp"
+#include "systems/cave_logic.hpp"   // kCaveEmergeTicksEnhanced
 
 namespace olduvai::systems {
 
@@ -230,6 +231,12 @@ void check_l7_transition(SystemsState& state) {
         if (state.current_screen == 0xD) {   // teleport entry, no scroll
             p.x = 0x30;
             p.y = 130;
+            // Leaving the fake cave: the EXE drops the player into the exit
+            // door, on the lava spring, which fires at once.  Enhanced lets
+            // him emerge from the door like from a real cave first; the
+            // spring waits for it (apply_spring_launch).
+            if (state.enhanced_active)
+                state.cave_emerge_frames = kCaveEmergeTicksEnhanced;
         }
         state.screen_change = true;
     }
@@ -248,9 +255,15 @@ void check_screen_transition(SystemsState& state) {
 void check_cave_warp_animation(SystemsState& state) {
     if (state.current_level != 3 && state.current_level != 7) return;
     PlayerState& p = state.player;
-    if ((p.cave_warp_freeze & 3) == 0) return;
-    p.cave_warp_freeze >>= 2;
-    if (p.cave_warp_freeze != 0x3E8) return;   // animate until 1000
+    // The main loop leaves for the warp dispatch only once the descent has
+    // stepped the low bits to 3 (L7 +0x07e5..0x07f3 then +0x0412; L3
+    // +0x0e02..0x0e10 then +0x0963), after update_player showed the third
+    // pose (the restored frame, see update_player).
+    if ((p.cave_warp_freeze & 3) != 3 || !state.cave_descent_third_shown)
+        return;
+    state.cave_descent_third_shown = false;
+    p.cave_warp_freeze >>= 2;                  // +0x0814..0x0818
+    if (p.cave_warp_freeze != 0x3E8) return;   // +0x081c
     if (state.current_level == 3) {
         state.current_screen = 0xA;
         p.x = 0x64;

@@ -64,7 +64,7 @@ inline TextScreenHd make_text_screen_hd(const TextScreenDeps& d,
         // A black scene (the tally) skips the upload (~4 MB at 1280x800 per
         // counting step).
         if (!hd_px.empty())
-            SDL_UpdateTexture(d.tex, nullptr, hd_px.data(), w * 4);
+            d.surface->upload(hd_px, w / d.hd_scale, LevelSurface::Res::kHd);
         show_texture(ren, hd_px.empty() ? nullptr : d.tex);
         if (!rows.empty())
             d.overlay->pass(ren, *d.hd_text, d.lsz->w(), d.lsz->h(),

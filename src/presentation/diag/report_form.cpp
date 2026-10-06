@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "presentation/diag/bug_capture.hpp"
+#include "presentation/input/actions.hpp"   // key_is
 #include "presentation/menu/menu_render.hpp"
 #include "presentation/diag/report_templates.hpp"
 #include "presentation/menu/settings_session.hpp"
@@ -65,12 +66,12 @@ void ReportFormService::on_edit_event_(const SDL_Event& ev) {
 }
 
 void ReportFormService::on_confirm_key_(SDL_Keycode sym) {
-    if (sym == SDLK_LEFT || sym == SDLK_RIGHT || sym == SDLK_UP ||
-        sym == SDLK_DOWN || sym == SDLK_a || sym == SDLK_d) {
+    if (key_is(sym, Action::kLeft) || key_is(sym, Action::kRight) ||
+        key_is(sym, Action::kUp) || key_is(sym, Action::kDown)) {
         confirm_.move(1);
-    } else if (sym == SDLK_ESCAPE) {
+    } else if (key_is(sym, Action::kBack)) {
         confirm_.close();                        // back to the form
-    } else if (sym == SDLK_RETURN || sym == SDLK_SPACE) {
+    } else if (key_is(sym, Action::kConfirm)) {
         if (confirm_.apply_selected())
             save_pending_ = true;                // freeze block writes
         else
@@ -80,15 +81,15 @@ void ReportFormService::on_confirm_key_(SDL_Keycode sym) {
 }
 
 void ReportFormService::on_form_key_(SDL_Keycode sym) {
-    if (sym == SDLK_UP || sym == SDLK_w) {
+    if (key_is(sym, Action::kUp)) {
         menu_.move(-1);
-    } else if (sym == SDLK_DOWN || sym == SDLK_s) {
+    } else if (key_is(sym, Action::kDown)) {
         menu_.move(+1);
-    } else if (sym == SDLK_LEFT || sym == SDLK_a) {
+    } else if (key_is(sym, Action::kLeft)) {
         menu_.adjust(-1);
-    } else if (sym == SDLK_RIGHT || sym == SDLK_d) {
+    } else if (key_is(sym, Action::kRight)) {
         menu_.adjust(+1);
-    } else if (sym == SDLK_RETURN || sym == SDLK_SPACE) {
+    } else if (key_is(sym, Action::kConfirm)) {
         if (menu_.activate().rfind("__edit_text:", 0) == 0) {
             edit_.editor.set_text(bind_.get("report.description"));
             edit_.title = "Description";
@@ -98,7 +99,7 @@ void ReportFormService::on_form_key_(SDL_Keycode sym) {
         } else if (!menu_.is_open()) {
             open_confirm_();                     // 'Back' left the form
         }
-    } else if (sym == SDLK_ESCAPE) {
+    } else if (key_is(sym, Action::kBack)) {
         open_confirm_();
     }
 }

@@ -55,7 +55,7 @@ TEST_CASE("upscale row-band threading is bit-identical to serial") {
     // that grows a cross-row dependency later cannot slip through on the one
     // combination nobody covered.
     for (const std::string profile :
-         {"retro", "smooth", "eagle", "xbr", "mmpx", "omniscale"}) {
+         {"retro", "smooth", "eagle", "xbrz", "mmpx", "omniscale"}) {
         for (const int scale : {2, 3, 4}) {
             CAPTURE(profile);
             CAPTURE(scale);

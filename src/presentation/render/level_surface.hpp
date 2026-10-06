@@ -17,12 +17,16 @@
 #include "enhance/enhanced_hud.hpp"
 #include "enhance/hd_asset_cache.hpp"
 #include "enhance/hd_text.hpp"
+#include "presentation/diag/frame_stats.hpp"
+#include "presentation/render/dirty_rects.hpp"
 #include "presentation/render/game_render.hpp"
 #include "presentation/render/logical_size.hpp"
 #include "presentation/render/text_overlay.hpp"
 #include "presentation/window_util.hpp"   // LogicalDims, show_texture
 
 namespace olduvai::presentation {
+
+class LevelSurface;
 
 // What a full-screen text presenter borrows from its driver
 // (sequence/text_screen_present.hpp); LevelSurface::text_screen builds one.
@@ -36,6 +40,8 @@ struct TextScreenDeps {
     int hd_scale;
     const std::string* hd_profile;   // HD upscale profile name
     Uint32 frame_ms;
+    // Uploads go through the surface, which tracks what its textures hold.
+    LevelSurface* surface;
 };
 
 class LevelSurface {
@@ -82,6 +88,25 @@ public:
     // Into the texture for that width (320: tex(); wider: wide_tex()).
     SDL_Texture* upload(const std::vector<std::uint8_t>& px, int native_w,
                         Res res);
+    // An HD frame (native_w x 200 at the surface's scale) from a present that
+    // restores only what changed (dirty_rects.hpp): only `rects` of it go up,
+    // or all of it when `rects` is null.  The rects are honoured only while
+    // the texture still holds `owner`'s last upload; any other write since
+    // (upload(), a new texture) makes this a whole upload, so no other path
+    // can leave stale pixels on screen.
+    void upload_dirty(const std::vector<std::uint8_t>& px, int native_w,
+                      const std::vector<DirtyRect>* rects, const void* owner);
+    // OLDUVAI_DIRTY=0 turns the dirty path off: every present copies the
+    // whole background and uploads the whole frame.
+    static bool dirty_on();
+    // OLDUVAI_DIRTY_VERIFY=1: each texture's contents are tracked on the CPU
+    // from every upload, and verify_dirty compares them with `ref`, the same
+    // frame composed whole.  A mismatch is a pixel the dirty path left stale;
+    // the counts print when the surface goes.
+    bool verifying_dirty() const { return verify_; }
+    void verify_dirty(const std::vector<std::uint8_t>& ref, int native_w);
+    // FrameStats for the dirty-upload counters; null leaves them off.
+    void set_stats(FrameStats* fs) { stats_ = fs; }
     // The output cleared to black and `tex` over the whole canvas.
     void show(SDL_Texture* tex) { show_texture(ren_, tex); }
     // The 320 texture as the centre of a wide canvas, black either side:
@@ -103,7 +128,8 @@ public:
     TextScreenDeps text_screen(Uint32 frame_ms) {
         return TextScreenDeps{ren_,      win_,        tex_,
                               &hd_text_, &overlay_,   &lsz_,
-                              hd_scale_, hd_profile_, frame_ms};
+                              hd_scale_, hd_profile_, frame_ms,
+                              this};
     }
 
 private:
@@ -118,6 +144,24 @@ private:
     SDL_Texture* tex_ = nullptr;
     SDL_Texture* wide_tex_ = nullptr;
     int wide_w_ = 0;
+
+    // Per texture: whose upload_dirty it last took (null after any other
+    // write) and, under verify, a CPU copy of what it holds.
+    struct TexState {
+        const void* owner = nullptr;
+        std::vector<std::uint8_t> shadow;
+        bool shadow_ok = false;
+    };
+    TexState tex_state_, wide_state_;
+    TexState& state_of(SDL_Texture* t) {
+        return t == tex_ ? tex_state_ : wide_state_;
+    }
+    // A whole-texture write: the texture holds `px`, and nobody's rects.
+    void note_whole(SDL_Texture* t, const std::uint8_t* px, std::size_t n,
+                    const void* owner);
+    bool verify_ = false;
+    unsigned long verify_checked_ = 0, verify_bad_ = 0, verify_partial_ = 0;
+    FrameStats* stats_ = nullptr;
 };
 
 // RenderTarget over `b`: the HD per-asset path only for a buffer that is

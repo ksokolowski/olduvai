@@ -114,19 +114,6 @@ void run_frame(SystemsState& state, const FrameInputs& inputs) {
     // the player.  The invulnerability tick runs first, unconditionally, where
     // the reference has it (the expiry frame shifts otherwise).
     tick_post_hit_invuln(state.player);
-    // Enhanced #20 — the teleport cloud phases own the player (hidden +
-    // frozen; the ghost-paced anim must not be walked out of invisibly).
-    if (state.teleport_out_ticks > 0 || state.teleport_in_ticks > 0)
-        state.skip_player_update = true;
-    // Enhanced cave emerge also freezes the player (classic's 2-tick emerge
-    // stays draw-only).  A hit or death cancels it so the freeze cannot wedge:
-    // hit_player clears the counter on any hit; other deaths are caught here.
-    if (state.cave_emerge_frames > 0 && state.enhanced_active) {
-        if (state.player.death_counter > 0)
-            state.cave_emerge_frames = 0;
-        else
-            state.skip_player_update = true;
-    }
     if (state.skip_player_update || state.transition_skip) {
         state.skip_player_update = false;
         state.transition_skip = false;
@@ -157,7 +144,7 @@ void run_frame(SystemsState& state, const FrameInputs& inputs) {
 }
 
 void wrap_frame_counter(SystemsState& state, bool god) {
-    if (state.frame_counter <= 0x3D) return;
+    if (state.frame_counter <= 0x3D || time_stops_this_tick(state)) return;
     state.frame_counter = 0;
     if (state.timer > 0)
         --state.timer;
@@ -175,11 +162,28 @@ void set_bird_bounds(SystemsState& state, int margin) {
         }
 }
 
+bool enhanced_fx_stops_time(const SystemsState& state) {
+    return state.teleport_out_ticks > 0 || state.teleport_in_ticks > 0 ||
+           (state.cave_emerge_frames > 0 && state.enhanced_active &&
+            state.player.death_counter == 0);
+}
+
+bool time_stops_this_tick(const SystemsState& state) {
+    return enhanced_fx_stops_time(state) ||
+           (state.pending_sign_teleport && state.teleport_out_ticks == 0);
+}
+
 void run_tick(SystemsState& state, const FrameInputs& inputs, bool paused) {
     apply_inputs(state, inputs);
+    // A death cancels the Enhanced emerge, so a stopped world cannot wedge the
+    // player's death animation (hit_player clears the counter on any hit).
+    if (state.cave_emerge_frames > 0 && state.enhanced_active &&
+        state.player.death_counter > 0)
+        state.cave_emerge_frames = 0;
     if (!paused) try_complete_sign_teleport(state);
     state.skip_player_update = tick_cave_descent(state);
-    if (!paused) run_frame(state, inputs);
+    state.time_stopped = !paused && enhanced_fx_stops_time(state);
+    if (!paused && !state.time_stopped) run_frame(state, inputs);
 }
 
 void end_tick(SystemsState& state, bool god) {
@@ -195,6 +199,7 @@ void tick_teleport_fx(SystemsState& state) {
 }
 
 void tick_get_ready(SystemsState& state) {
+    if (state.time_stopped) return;
     if (state.get_ready_counter >= 2 && state.get_ready_counter <= 17 &&
         (state.frame_counter & 1) == 0)
         --state.get_ready_counter;

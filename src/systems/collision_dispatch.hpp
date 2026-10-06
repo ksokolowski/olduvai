@@ -40,4 +40,9 @@ bool try_complete_sign_teleport(SystemsState& state);
 
 void process_entity_collisions(SystemsState& state);
 
+// The spring and lava-spring launch from one frame's collision result (part
+// of process_entity_collisions; public for its tests).
+void apply_spring_launch(SystemsState& state,
+                         const core::CollisionResult& result);
+
 }  // namespace olduvai::systems

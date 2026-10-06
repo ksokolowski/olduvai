@@ -1,0 +1,8 @@
+{"time_ms":2200,"key":"left","action":"press"}
+{"time_ms":2960,"key":"left","action":"release"}
+{"time_ms":3300,"key":"up","action":"press"}
+{"time_ms":5600,"key":"up","action":"release"}
+{"time_ms":5800,"key":"right","action":"press"}
+{"time_ms":6500,"key":"right","action":"release"}
+{"time_ms":6800,"key":"down","action":"press"}
+{"time_ms":7400,"key":"down","action":"release"}

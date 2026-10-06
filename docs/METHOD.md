@@ -54,7 +54,10 @@ independent tools, with a strict arbitration order:
 4. **Capstone** (as a library, 16-bit x86 mode): the **byte-level
    arbitrator**. When tools disagree, or whenever a concrete numeric
    value is about to enter the engine, the raw instruction bytes are
-   disassembled and read directly. Capstone wins every dispute.
+   disassembled and read directly. Capstone settles disputes between
+   the decompilers; its reading must still agree with the raw bytes
+   and the address mapping (step 5) and, for behaviour, with what the
+   game is seen to do (step 6).
 5. **Raw file bytes**: for data tables, seeds, palette indices:
    computed file offsets, read with a hex viewer, cross-checked
    against the segment arithmetic. (One recurring trap this catches:

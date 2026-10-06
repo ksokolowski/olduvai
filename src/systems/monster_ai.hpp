@@ -47,6 +47,11 @@ UpdateEntitiesResult update_entities(std::vector<core::Entity>& entities,
 void refresh_entity_sprites_on_screen_bind(
     std::vector<core::Entity>& entities, int l3a_phase_counter);
 
+// RESET's step: a hidden monster appears (SPAWN, its first emerge frame)
+// once the player is level with it, y within [e.y - 30, e.y + 15); one in
+// a cave wall stays hidden until then.  True when it appeared.
+bool appear_if_player_level(core::Entity& e, int px, int py);
+
 // Individual handlers (exposed for scenario tests).
 void update_monster(core::Entity& e, const EntityTick& t);
 void update_fish(core::Entity& e);

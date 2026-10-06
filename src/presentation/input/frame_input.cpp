@@ -4,6 +4,7 @@
 
 #include <SDL.h>
 
+#include "presentation/input/actions.hpp"
 #include "presentation/input/gamepad.hpp"
 
 namespace olduvai::presentation {
@@ -13,7 +14,6 @@ systems::FrameInputs gather_frame_inputs(InputReplay& replay, int frame,
                                          Autofire& autofire,
                                          const systems::PlayerState& player,
                                          bool& running) {
-    const Uint8* keys = SDL_GetKeyboardState(nullptr);
     systems::FrameInputs in;
     if (replay.active()) {
         // The reference reads key state for the NEXT frame (its oracle injects
@@ -22,13 +22,13 @@ systems::FrameInputs gather_frame_inputs(InputReplay& replay, int frame,
         in = replay.at(frame + 1);
         if (frame > replay.last_frame() + 18) running = false;
     } else {
-        in.left = keys[SDL_SCANCODE_LEFT] != 0 || gamepad::left();
-        in.right = keys[SDL_SCANCODE_RIGHT] != 0 || gamepad::right();
-        in.up = keys[SDL_SCANCODE_UP] != 0 || gamepad::up();
-        in.down = keys[SDL_SCANCODE_DOWN] != 0 || gamepad::down();
-        const bool attack_held = keys[SDL_SCANCODE_SPACE] != 0 ||
-                                 keys[SDL_SCANCODE_LCTRL] != 0 ||
-                                 gamepad::attack_held();
+        in.left = key_held(Action::kLeft) || gamepad::left();
+        in.right = key_held(Action::kRight) || gamepad::right();
+        in.up = key_held(Action::kUp) || key_held(Action::kJump) ||
+                gamepad::up();
+        in.down = key_held(Action::kDown) || gamepad::down();
+        const bool attack_held =
+            key_held(Action::kAttack) || gamepad::attack_held();
         // Autofire reads the PRE-frame latch/club state — exactly what this
         // frame's latch check will see — and must stay ahead of input_rec so
         // recordings hold the resolved pulses.

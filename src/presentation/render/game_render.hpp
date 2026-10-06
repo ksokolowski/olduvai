@@ -14,6 +14,7 @@
 #include "enhance/hd_asset_cache.hpp"
 #include "formats/mat.hpp"
 #include "formats/pc1.hpp"
+#include "presentation/render/dirty_rects.hpp"
 #include "systems/player.hpp"
 
 namespace olduvai::presentation {
@@ -103,6 +104,13 @@ struct RenderTarget {
     // Player sub-pixel render position (use_float_pos only).  Not on
     // PlayerState, which is memcpy'd into the POD save header.
     float player_fx = 0.0f, player_fy = 0.0f;
+    // The dirty present's two passes (render/dirty_frame.hpp).  `blits`
+    // non-null: every HD block blit appends its record; `record_only` then
+    // writes nothing.  `clip` non-null: blits write only inside those
+    // disjoint rects.
+    std::vector<BlitRecord>* blits = nullptr;
+    bool record_only = false;
+    const std::vector<DirtyRect>* clip = nullptr;
 };
 
 // Decode a sprite to RGBA as the HD path does: palette lookup, magenta for an
@@ -223,13 +231,21 @@ struct WidePeek {
     std::uint64_t generation = 0;
 };
 
+// The key of the current screen's static background (bg + tiles) at `scale`:
+// the same key, the same pixels in draw_background's HD copy.
+std::uint64_t static_bg_key(const systems::SystemsState& state,
+                            const LevelRenderAssets& assets, int scale,
+                            const std::string& profile);
+
 // Upscaled wide static background (centre bg + tiles + margins),
 // (320+2*margin)*scale x 200*scale, cached per screen / margin / neighbours /
 // backdrop / profile.  The caller copies it and draws sprites and HUD bars on
 // top.  Surface peek screens only (secret-room bubbles need the live path).
+// `key_out`, if given, receives the cache key: the same key, the same pixels.
 const std::vector<std::uint8_t>& get_static_wide_bg_hd(
     systems::SystemsState& state, const LevelRenderAssets& assets, int scale,
-    const std::string& profile, int margin, const WidePeek& peek);
+    const std::string& profile, int margin, const WidePeek& peek,
+    std::uint64_t* key_out = nullptr);
 
 // Neighbour tiles re-blitted across a seam so a straddling object is drawn
 // whole: the left neighbour's x=320 straddlers at -320, the right's x=0 ones

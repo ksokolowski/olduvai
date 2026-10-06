@@ -356,6 +356,7 @@ bool WidescreenPresenter::present_path() const {
 // RNG or collision; the spawn-post anchor keeps entry pop-free.  L3A alternates
 // follow the global phase counter.
 void WidescreenPresenter::tick_margin_monsters() {
+    if (ctx_.state->time_stopped) return;   // they wait with the world
     auto tick_margin = [&](std::vector<core::Entity>& v,
                            bool face_left) {
         for (auto& m : v) {
@@ -478,6 +479,10 @@ void WidescreenPresenter::flip() const {
 // (get_static_wide_bg_hd), with only sprites and HUD bars drawn at HD per
 // frame (omniscale 36 ms -> ~3 ms).  Secret rooms too: bubbles over the
 // cached bg, then redraw_bg_tiles puts the floor back on top.
+//
+// The frame is kept between presents and repainted only where its blits
+// changed (dirty_frame.hpp); a new background, a secret room or
+// OLDUVAI_DIRTY=0 takes the whole frame.
 void WidescreenPresenter::present_fast(
     const std::function<void(RenderTarget&)>& bubbles,
     const enhance::EnhancedHudLayout* hud) {
@@ -489,35 +494,49 @@ void WidescreenPresenter::present_fast(
                         right_ok_ ? &right_ : nullptr, right_screen_,
                         ws_bd, &left_seam_, &right_seam_, &left_bridge_,
                         &right_bridge_, peek_generation_};
+    std::uint64_t bg_key = 0;
     const std::vector<std::uint8_t>& bg_hd = presentation::get_static_wide_bg_hd(
-        *ctx_.state, *ctx_.render, hd_scale(), *hd_profile(), margin_, peek);
+        *ctx_.state, *ctx_.render, hd_scale(), *hd_profile(), margin_, peek,
+        &bg_key);
     const int uw = native_w_ * hd_scale(), uh = 200 * hd_scale();
-    const std::size_t n = static_cast<std::size_t>(uw) * uh * 4;
-    if (frame_hd_.size() != n) frame_hd_.resize(n);
-    {
-        FrameStats::Timer bgc(stats, &FrameStats::bg_copy_ms);
-        std::memcpy(frame_hd_.data(), bg_hd.data(), std::min(n, bg_hd.size()));
-    }
-    {
-        RenderTarget wrt = foreground_target(frame_hd_.data(), uw, uh,
-                                             hd_scale(), ctx_.hd_cache,
-                                             hd_profile());
-        // Secret room: bubbles over the cached bg, then the floor tiles on
-        // top (draw_background's base -> bubbles -> tiles order), both before
-        // the floor clip.
+    const auto target = [&](std::uint8_t* px) {
+        return foreground_target(px, uw, uh, hd_scale(), ctx_.hd_cache,
+                                 hd_profile());
+    };
+    // Every blit of the frame.  Secret room: bubbles over the cached bg, then
+    // the floor tiles on top (draw_background's base -> bubbles -> tiles
+    // order), both before the floor clip.
+    const auto draw = [&](RenderTarget& wrt) {
         if (bubbles) {
             bubbles(wrt);
             presentation::redraw_bg_tiles(wrt, *ctx_.state, *ctx_.render);
         }
         clip_foreground(wrt);
         draw_wide_foreground(wrt);
+    };
+    // The bars at HD, shifted to the centre: opaque, drawn after the blits.
+    const auto bars = [&](std::vector<std::uint8_t>& buf) {
+        if (hud != nullptr)
+            enhance::draw_enhanced_hud_bars({buf, uw, uh}, hd_scale(), *hud,
+                                            margin_);
+    };
+    hud_rects_.clear();
+    if (hud != nullptr)
+        add_hud_rects(hud_rects_, *hud, hd_scale(), margin_, uw, uh);
+    // The bubbles and the floor tiles over them record no blits: a secret
+    // room takes the whole frame.
+    const std::vector<DirtyRect>* region = dirty_.compose(
+        {bg_hd, bg_key, uw, uh}, target, draw, hud_rects_, !bubbles, stats);
+    std::vector<std::uint8_t>& frame = dirty_.frame();
+    bars(frame);
+    dump_steady_wide(frame.data(), uw, uh);
+    {
+        FrameStats::Timer ut(stats, &FrameStats::upload_ms);
+        ctx_.surface->upload_dirty(frame, native_w_, region, this);
     }
-    if (hud != nullptr)   // the bars at HD, shifted to the centre
-        enhance::draw_enhanced_hud_bars({frame_hd_, uw, uh}, hd_scale(), *hud,
-                                        margin_);
-    dump_steady_wide(frame_hd_.data(), uw, uh);
-    FrameStats::Timer ut(stats, &FrameStats::upload_ms);
-    ctx_.surface->upload(frame_hd_, native_w_, LevelSurface::Res::kHd);
+    if (ctx_.surface->verifying_dirty())
+        ctx_.surface->verify_dirty(dirty_.reference(bg_hd, target, draw, bars),
+                                   native_w_);
 }
 
 // The centre gets background and tiles only (this pass mutates nothing),

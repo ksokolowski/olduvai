@@ -20,6 +20,7 @@
 #include "formats/pc1.hpp"
 #include "prepare/game_files.hpp"
 #include "presentation/audio/game_music.hpp"
+#include "presentation/input/actions.hpp"   // key_is, key_held
 #include "presentation/diag/menu_script_util.hpp"
 #include "presentation/image_out.hpp"
 #include "presentation/input/gamepad.hpp"
@@ -62,7 +63,8 @@ struct TitlePresenter {
                 ctx.quit_requested = true;
                 return false;
             }
-            if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) {
+            if (ev.type == SDL_KEYDOWN &&
+                key_is(ev.key.keysym.sym, Action::kBack)) {
                 to_menu = true;
                 return false;
             }
@@ -77,10 +79,9 @@ struct TitlePresenter {
 };
 
 bool fire_held() {
-    const Uint8* k = SDL_GetKeyboardState(nullptr);
-    return k[SDL_SCANCODE_SPACE] != 0 ||
-           (k[SDL_SCANCODE_RETURN] != 0 && enter_skip_allowed()) ||
-           k[SDL_SCANCODE_LCTRL] != 0 || gamepad::fire_held();
+    return key_held(Action::kAttack) ||
+           (key_held(Action::kConfirm) && enter_skip_allowed()) ||
+           gamepad::fire_held();
 }
 
 // The publisher logo, the title cards and the BULLE dream hold.  The hold
@@ -179,8 +180,7 @@ struct TitleScript {
             std::snprintf(name, sizeof name, "%03d.png", shots++);
             shot_path = dir + "/" + name;
         } else if (tok != "wait") {
-            const SDL_Keycode sym = menu_token_sym(tok);
-            if (sym != SDLK_UNKNOWN) push_menu_key(sym);
+            run_input_token(tok);
         }
     }
 };

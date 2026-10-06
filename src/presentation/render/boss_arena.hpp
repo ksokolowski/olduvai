@@ -13,6 +13,7 @@
 
 #include <SDL.h>
 
+#include "presentation/render/dirty_frame.hpp"
 #include "presentation/render/game_render.hpp"
 #include "presentation/render/level_surface.hpp"
 #include "presentation/render/logical_size.hpp"
@@ -111,18 +112,27 @@ public:
     // the sprites at origin_x = M.  Returned rather than shown, for the
     // screenshot.
     std::vector<std::uint8_t> build_wide_up();
-    // Show an already-upscaled wide buffer (with HUD).
+    // The same over the clean arena with `draw` for the sprites (the
+    // victory's last frame, which the fade darkens).
+    std::vector<std::uint8_t> build_wide_hd(
+        const std::function<void(RenderTarget&)>& draw);
+    // Show an already-upscaled wide buffer (with HUD).  `owner` non-null:
+    // upload through LevelSurface::upload_dirty with `rects`.
     void show_wide_up(const std::vector<std::uint8_t>& up, bool draw_lives,
-                      bool do_present);
+                      bool do_present, bool draw_hud = true,
+                      const std::vector<DirtyRect>* rects = nullptr,
+                      const void* owner = nullptr);
     // One wide native frame (wide_w() x 200) from the clean arena, `draw`
-    // painting sprites at origin M.  Native: the fade darkens it per frame and
-    // the pause wants a FrameBuffer.  Empty when widescreen is inactive.
+    // painting sprites at origin M.  Native: the pause wants a FrameBuffer.
+    // Empty when widescreen is inactive.
     std::vector<std::uint8_t> compose_wide_native(
         const std::function<void(RenderTarget&)>& draw);
-    // Upscale one such frame and show it; draw_hud=false for the fade.
-    void show_wide_native(const std::vector<std::uint8_t>& wide,
-                          bool draw_lives = true, bool do_present = true,
-                          bool draw_hud = true);
+    // The steady wide present over the cached HD arena, `draw` painting the
+    // sprites at origin M at HD: the fight, and the victories, which draw
+    // over the same clean arena.  Only what changed is restored and uploaded
+    // (dirty_rects.hpp).  Needs wide_ready().
+    void present_wide_hd(const std::function<void(RenderTarget&)>& draw,
+                         bool draw_lives = true, bool do_present = true);
     // Make SDL's logical canvas the wide one (and lsz with it).
     void use_wide_logical();
     // The last native frame shown wide, for the post-victory fade.  Sequences
@@ -188,6 +198,15 @@ private:
     std::vector<std::uint8_t> bg_hd_;
     int bg_hd_M_ = -1;
     std::string bg_hd_profile_;
+    std::uint64_t bg_hd_gen_ = 0;   // bumped on every rebuild
+
+    // The steady wide frame, kept between presents and repainted only where
+    // it changed (dirty_frame.hpp).
+    DirtyFrame dirty_;
+
+    void ensure_bg_hd();
+    // The HD wide target over `px`: origin M, the fight's smooth position.
+    RenderTarget wide_target(std::uint8_t* px) const;
 };
 
 }  // namespace olduvai::presentation

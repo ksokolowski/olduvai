@@ -9,9 +9,11 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 
 #include "presentation/diag/report_form.hpp"          // ReportFormService
 #include "presentation/display.hpp"
+#include "presentation/level/level_setup.hpp"    // SpawnPostPreview
 #include "presentation/level/level_view_deps.hpp"
 #include "presentation/level/tick_render.hpp"
 #include "presentation/pipeline.hpp"
@@ -59,6 +61,11 @@ public:
     // compose; no banner over a moving screen.
     void play_transition(const PrevFrame& pf, const TickRender::Bubbles& bubbles,
                          const TransitionEnv& env);
+
+    // Enhanced with a transition pending: a first visit's monsters show
+    // through it (SpawnPostPreview).  Hold it over the compose, the
+    // transition and the present; drop it before the trace.
+    std::optional<SpawnPostPreview> first_visit_preview(bool enhanced);
 
     // The L3 trunk descent's context, for step 9 (change_screen fills the
     // per-frame fields).  `running`: a window close mid-descent clears it.

@@ -53,19 +53,58 @@
       "header": "CONTROLS",
       "items": [
         { "id": "button_layout", "type": "choice", "label": "Button layout", "key": "button_layout", "values": ["xbox", "nintendo", "custom"], "value_labels": ["Xbox", "Nintendo", "Custom"], "hint": "applies now" },
-        { "id": "pad_jump", "type": "choice", "label": "Jump", "key": "pad_jump", "values": ["a", "b", "x", "y", "leftshoulder", "rightshoulder", "back", "start"], "value_labels": ["Bottom", "Right", "Left", "Top", "L1", "R1", "Select", "Start"] },
-        { "id": "pad_attack", "type": "choice", "label": "Attack", "key": "pad_attack", "values": ["a", "b", "x", "y", "leftshoulder", "rightshoulder", "back", "start"], "value_labels": ["Bottom", "Right", "Left", "Top", "L1", "R1", "Select", "Start"] },
-        { "id": "pad_back", "type": "choice", "label": "Menu back", "key": "pad_back", "values": ["a", "b", "x", "y", "leftshoulder", "rightshoulder", "back", "start"], "value_labels": ["Bottom", "Right", "Left", "Top", "L1", "R1", "Select", "Start"] },
-        { "id": "pad_pause", "type": "choice", "label": "Pause", "key": "pad_pause", "values": ["a", "b", "x", "y", "leftshoulder", "rightshoulder", "back", "start"], "value_labels": ["Bottom", "Right", "Left", "Top", "L1", "R1", "Select", "Start"] },
+        { "id": "controls_pad", "type": "submenu", "label": "Gamepad", "target": "controls_pad" },
+        { "id": "controls_keys", "type": "submenu", "label": "Keyboard", "target": "controls_keys" },
+        { "id": "controls_shortcuts", "type": "submenu", "label": "Shortcuts", "target": "controls_shortcuts" },
+        { "id": "reset_controls", "type": "action", "label": "Reset all", "action": "reset_controls" },
+        { "id": "back", "type": "back", "label": "Back" }
+      ]
+    },
+    "controls_pad": {
+      "header": "GAMEPAD",
+      "items": [
+        { "id": "pad_jump", "type": "binding", "label": "Jump", "key": "pad_jump", "values": ["a", "b", "x", "y", "leftshoulder", "rightshoulder", "lefttrigger", "righttrigger", "back", "start", "leftstick", "rightstick"], "value_labels": ["Bottom", "Right", "Left", "Top", "L1", "R1", "L2", "R2", "Select", "Start", "L3", "R3"] },
+        { "id": "pad_attack", "type": "binding", "label": "Attack", "key": "pad_attack", "values": ["a", "b", "x", "y", "leftshoulder", "rightshoulder", "lefttrigger", "righttrigger", "back", "start", "leftstick", "rightstick"], "value_labels": ["Bottom", "Right", "Left", "Top", "L1", "R1", "L2", "R2", "Select", "Start", "L3", "R3"] },
+        { "id": "pad_pause", "type": "binding", "label": "Pause", "key": "pad_pause", "values": ["a", "b", "x", "y", "leftshoulder", "rightshoulder", "lefttrigger", "righttrigger", "back", "start", "leftstick", "rightstick"], "value_labels": ["Bottom", "Right", "Left", "Top", "L1", "R1", "L2", "R2", "Select", "Start", "L3", "R3"] },
+        { "id": "pad_back", "type": "binding", "label": "Menu back", "key": "pad_back", "values": ["a", "b", "x", "y", "leftshoulder", "rightshoulder", "lefttrigger", "righttrigger", "back", "start", "leftstick", "rightstick"], "value_labels": ["Bottom", "Right", "Left", "Top", "L1", "R1", "L2", "R2", "Select", "Start", "L3", "R3"] },
+        { "id": "reset_pad", "type": "action", "label": "Reset to layout", "action": "reset_pad" },
+        { "id": "back", "type": "back", "label": "Back" }
+      ]
+    },
+    "controls_shortcuts": {
+      "header": "SHORTCUTS",
+      "items": [
+        { "id": "sc0", "type": "readout", "label": "Hold Select, then press:" },
+        { "id": "sc1", "type": "readout", "label": "R1      Quicksave" },
+        { "id": "sc2", "type": "readout", "label": "L1      Quickload" },
+        { "id": "sc3", "type": "readout", "label": "Top     Cheats, if on" },
+        { "id": "sc4", "type": "readout", "label": "Left    Bug report" },
+        { "id": "sc5", "type": "readout", "label": "Keyboard: F6 save, F9 load," },
+        { "id": "sc6", "type": "readout", "label": "F7 cheats, F5 bug report" },
+        { "id": "back", "type": "back", "label": "Back" }
+      ]
+    },
+    "controls_keys": {
+      "header": "KEYBOARD",
+      "items": [
+        { "id": "key_left", "type": "binding", "label": "Left", "key": "key_left" },
+        { "id": "key_right", "type": "binding", "label": "Right", "key": "key_right" },
+        { "id": "key_up", "type": "binding", "label": "Jump", "key": "key_up" },
+        { "id": "key_down", "type": "binding", "label": "Down", "key": "key_down" },
+        { "id": "key_attack", "type": "binding", "label": "Attack", "key": "key_attack" },
+        { "id": "key_pause", "type": "binding", "label": "Pause", "key": "key_pause" },
+        { "id": "key_quit", "type": "binding", "label": "Quit", "key": "key_quit" },
+        { "id": "reset_keys", "type": "action", "label": "Reset to defaults", "action": "reset_keys" },
         { "id": "back", "type": "back", "label": "Back" }
       ]
     },
     "video": {
       "header": "VIDEO",
       "items": [
-        { "id": "hd_profile", "type": "choice", "label": "HD profile", "key": "hd_profile", "values": ["native", "retro", "smooth", "eagle", "xbr", "mmpx", "omniscale"], "value_labels": ["Native", "Retro", "Smooth", "Eagle", "xBR", "MMPX", "OmniScale"], "hint": "live" },
+        { "id": "hd_profile", "type": "choice", "label": "Upscaler", "key": "hd_profile", "values": ["native", "retro", "smooth", "eagle", "xbrz", "mmpx", "omniscale"], "value_labels": ["Off", "Nearest", "Scale2x/3x", "Eagle", "xBRZ", "MMPX", "OmniScale"], "hint": "live" },
         { "id": "aspect", "type": "choice", "label": "Aspect", "key": "aspect", "values": ["keep","widescreen","4:3","stretch"], "value_labels": ["Keep","Widescreen","4:3","Stretch"], "hint": "live" },
         { "id": "render_scale", "type": "choice", "label": "Render scale", "key": "render_scale", "values": [2, 4], "restart": true, "hint": "applies now" },
+        { "id": "hd_runs", "type": "readout", "label": "Runs", "key": "hd_runs" },
         { "id": "fullscreen", "type": "toggle", "label": "Fullscreen", "key": "fullscreen" },
         { "id": "back", "type": "back", "label": "Back" }
       ]

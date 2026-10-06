@@ -166,6 +166,66 @@ TEST_CASE("run_tick paused: no run_frame (the frame counter holds)") {
     CHECK(s.frame_counter == 6);
 }
 
+// Enhanced teleport clouds and cave emerge stop game time.  Every action is
+// pressed at once, so no binding can act underneath them.
+TEST_CASE("run_tick: an Enhanced animation stops game time, whatever is pressed") {
+    olduvai::systems::FrameInputs all;
+    all.left = all.right = all.up = all.down = all.attack = all.jump = true;
+    const auto frozen = [&](SystemsState& s) {
+        const int fc = s.frame_counter, px = s.player.x, py = s.player.y;
+        const int timer = s.timer;
+        olduvai::systems::run_tick(s, all, /*paused=*/false);
+        return s.frame_counter == fc && s.player.x == px && s.player.y == py &&
+               s.timer == timer && s.player.club_flag == 0 &&
+               s.cave_entrance_mask == 0 && !s.screen_change;
+    };
+    SUBCASE("the departure and arrival clouds") {
+        SystemsState out = quiet_state();
+        out.frame_counter = 5;
+        out.teleport_out_ticks = 4;
+        CHECK(frozen(out));
+        SystemsState in = quiet_state();
+        in.frame_counter = 5;
+        in.teleport_in_ticks = 4;
+        CHECK(frozen(in));
+    }
+    SUBCASE("the Enhanced cave emerge") {
+        SystemsState s = quiet_state();
+        s.frame_counter = 5;
+        s.enhanced_active = true;
+        s.cave_emerge_frames = 9;
+        CHECK(frozen(s));
+    }
+    SUBCASE("Classic's 2-tick emerge is draw-only: the world runs") {
+        SystemsState s = quiet_state();
+        s.frame_counter = 5;
+        s.enhanced_active = false;
+        s.cave_emerge_frames = 2;
+        CHECK_FALSE(frozen(s));
+        CHECK(s.frame_counter == 6);
+    }
+    SUBCASE("a death cancels the emerge, so the world cannot wedge") {
+        SystemsState s = quiet_state();
+        s.frame_counter = 5;
+        s.enhanced_active = true;
+        s.cave_emerge_frames = 9;
+        s.player.death_counter = 3;
+        olduvai::systems::run_tick(s, all, /*paused=*/false);
+        CHECK(s.cave_emerge_frames == 0);
+        CHECK(s.frame_counter == 6);
+    }
+    SUBCASE("it resumes when the counters reach zero") {
+        SystemsState s = quiet_state();
+        s.frame_counter = 5;
+        s.teleport_in_ticks = 1;
+        CHECK(frozen(s));
+        olduvai::systems::tick_teleport_fx(s);
+        olduvai::systems::run_tick(s, olduvai::systems::FrameInputs{},
+                                   /*paused=*/false);
+        CHECK(s.frame_counter == 6);
+    }
+}
+
 TEST_CASE("end_tick: --god tops up and masks game over before the steps") {
     SystemsState s = quiet_state();
     s.player.energy = 1;
@@ -210,6 +270,52 @@ TEST_CASE("tick_get_ready: even frames inside [2,17] only") {
     s.get_ready_counter = 1;          // below it: held
     olduvai::systems::tick_get_ready(s);
     CHECK(s.get_ready_counter == 1);
+}
+
+TEST_CASE("time_stops_this_tick: the animations, and the teleport that starts them") {
+    using olduvai::systems::time_stops_this_tick;
+    SystemsState s = quiet_state();
+    CHECK_FALSE(time_stops_this_tick(s));
+    s.teleport_out_ticks = 3;
+    CHECK(time_stops_this_tick(s));
+    s.teleport_out_ticks = 0;
+    s.teleport_in_ticks = 1;
+    CHECK(time_stops_this_tick(s));
+    s.teleport_in_ticks = 0;
+
+    // The deferred cave-sign teleport run_tick completes into the arrival:
+    // the shell's wrap (which runs first) must already wait.
+    s.pending_sign_teleport = true;
+    CHECK(time_stops_this_tick(s));
+    s.pending_sign_teleport = false;
+
+    // Enhanced emerge stops time; Classic's draw-only emerge does not; a
+    // death cancels it.
+    s.cave_emerge_frames = 9;
+    s.enhanced_active = true;
+    CHECK(time_stops_this_tick(s));
+    s.player.death_counter = 2;
+    CHECK_FALSE(time_stops_this_tick(s));
+    s.player.death_counter = 0;
+    s.enhanced_active = false;
+    CHECK_FALSE(time_stops_this_tick(s));
+}
+
+TEST_CASE("tick_get_ready: waits while an Enhanced animation stops time") {
+    SystemsState s = quiet_state();
+    s.get_ready_counter = 17;
+    s.frame_counter = 4;   // an even value would drain it every tick
+    s.teleport_in_ticks = 3;
+    olduvai::systems::run_tick(s, olduvai::systems::FrameInputs{},
+                               /*paused=*/false);
+    olduvai::systems::tick_get_ready(s);
+    CHECK(s.get_ready_counter == 17);
+    s.teleport_in_ticks = 0;
+    olduvai::systems::run_tick(s, olduvai::systems::FrameInputs{},
+                               /*paused=*/false);
+    s.frame_counter = 4;
+    olduvai::systems::tick_get_ready(s);
+    CHECK(s.get_ready_counter == 16);
 }
 
 TEST_CASE("tick_cave_emerge: counts down to zero and stops") {

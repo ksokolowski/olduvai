@@ -223,3 +223,34 @@ TEST_CASE("egg and rock hit-point sprites; zero HP deactivates") {
     update_entities(ents2, at(0, 0, 0));
     CHECK(ents2[0].sprite == 143);
 }
+
+// RESET's rule, shared with the Enhanced pan preview: a hidden monster
+// appears, in its first emerge frame, only once the player is level with it.
+TEST_CASE("appear_if_player_level: level appears, a cave dweller waits") {
+    Entity mon;
+    mon.obj_type = ObjType::RedDino;
+    mon.x = 200; mon.y = 120;
+    mon.state = static_cast<int>(MonsterState::Reset);
+    mon.init_spr = 48; mon.spr_num = 50;
+    mon.visible = false;
+
+    Entity above = mon;   // player 40 px higher: out of the band
+    CHECK_FALSE(appear_if_player_level(above, 100, 80));
+    CHECK_FALSE(above.visible);
+    CHECK(above.state == static_cast<int>(MonsterState::Reset));
+    Entity edge = mon;    // player at the screen edge: not yet
+    CHECK_FALSE(appear_if_player_level(edge, 2, 120));
+
+    Entity level = mon;   // band is y in [e.y - 30, e.y + 15)
+    REQUIRE(appear_if_player_level(level, 100, 134));
+    CHECK(level.visible);
+    CHECK(level.state == static_cast<int>(MonsterState::Spawn));
+    CHECK(level.sprite == 48);   // the emerge's first frame
+    CHECK(level.direction == 1);   // player to its left
+    Entity low = mon;
+    CHECK_FALSE(appear_if_player_level(low, 100, 135));
+    Entity high = mon;
+    CHECK(appear_if_player_level(high, 100, 91));
+    Entity too_high = mon;
+    CHECK_FALSE(appear_if_player_level(too_high, 100, 90));
+}

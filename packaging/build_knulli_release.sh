@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Krzysztof Sokołowski
-# The two KNULLI release zips, built on the Mac with zig — one command for the
+# The handheld release zips, built on the Mac with zig — one command for the
 # release cut (docs/internal/RELEASE_CUT_RUNBOOK.md, "Handheld bundles").
 #
 #   olduvai-<version>-knulli-trimui.zip   TrimUI Smart Pro   aarch64
 #   olduvai-<version>-knulli-a12.zip      Powkiddy A12       armhf
+#   olduvai-<version>-portmaster.zip      PortMaster         both binaries
 #
-# Each: cross-build from --src (RUN IT ON THE EXPORT TREE, so the build ID is
-# the public commit's), strip, build_port_knulli.sh --public, zip.  Prints the
-# SHA-256 lines to append to the release's SHA256SUMS.txt.
+# Cross-build each arch from --src (RUN IT ON THE EXPORT TREE, so the build ID
+# is the public commit's) and strip it; build_port_knulli.sh --public makes a
+# KNULLI zip per device, build_port_portmaster.sh --release-zip the PortMaster
+# one from the same two binaries.  Prints the SHA-256 lines to append to the
+# release's SHA256SUMS.txt.
 #
 # Needs zig and the per-arch sysroot + wrapper tools the zig toolchain files
 # expect (cmake/toolchains/{aarch64,armhf}-zig.cmake; set up once per machine,
@@ -63,6 +66,12 @@ build() {   # device arch sysroot xtool
 echo "Olduvai ${VER} KNULLI bundles from ${SRC}:"
 build trimui aarch64 sysroot       xtool
 build a12    armhf   sysroot-armhf xtool-armhf
+PM="olduvai-${VER}-portmaster.zip"
+rm -rf "${OUT:?}/portmaster" "${OUT:?}/${PM:?}"
+bash "$SRC/packaging/build_port_portmaster.sh" \
+    --binary-aarch64 "$OUT/olduvai.aarch64" --binary-armhf "$OUT/olduvai.armhf" \
+    --out "$OUT/portmaster" --release-zip "$OUT/$PM" >/dev/null
+echo "  $PM  ($(wc -c < "$OUT/$PM" | tr -d ' ') bytes)"
 # No `grep -m1` / `head` here: under pipefail, closing the pipe early kills
 # `strings` with SIGPIPE and the script with it — silently, after the zips.
 # A dirty tree reads "<hash>-dirty, built <time>" — and a release must not be
@@ -74,4 +83,4 @@ case "$bid" in *-dirty*)
     echo "  WARNING: built from uncommitted changes — not a release build." >&2 ;;
 esac
 echo "SHA-256 (append to SHA256SUMS.txt):"
-(cd "$OUT" && shasum -a 256 "olduvai-${VER}-knulli-"*.zip)
+(cd "$OUT" && shasum -a 256 "olduvai-${VER}-knulli-"*.zip "$PM")

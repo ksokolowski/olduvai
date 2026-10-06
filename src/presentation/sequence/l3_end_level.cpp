@@ -17,8 +17,10 @@
 
 #include "enhance/enhanced_hud.hpp"           // compute/draw_enhanced_hud_*
 #include "enhance/hd_text.hpp"                // enhance::HdText
+#include "enhance/incremental_upscale.hpp"    // IncrementalUpscaler
 #include "enhance/upscale.hpp"                // upscale_rgba
 #include "presentation/diag/bug_capture.hpp"       // bug_report_root
+#include "presentation/input/actions.hpp"     // key_held
 #include "presentation/game_app.hpp"          // GameOptions
 #include "presentation/render/game_render.hpp"
 #include "presentation/image_out.hpp"   // capture_renderer_output/save_rgba_image
@@ -517,8 +519,7 @@ private:
     // The descent's own poll consumes F5, so read the key state, rising
     // edge only (one press, one capture).
     void latch_f5() {
-        const Uint8* ks = SDL_GetKeyboardState(nullptr);
-        const bool f5 = ks != nullptr && ks[SDL_SCANCODE_F5] != 0;
+        const bool f5 = key_held(Action::kBugReport);
         if (f5 && !f5_prev_) shot_ = true;
         f5_prev_ = f5;
     }
@@ -536,7 +537,12 @@ private:
         // Seam overhangs the 320 copy covered (none for Phase 2 or the pan).
         wsp.reapply_seam_bands(wide);
         dump_frame(wide.data(), w);
-        wsp.present_transition(wide, with_hud, /*pre_upscaled=*/false,
+        // Upscaled incrementally: the platform and the player move over a
+        // still backdrop, and a whole wide upscale per frame is 48 ms at 4x
+        // Omniscale on a desktop.  A copy: the HUD splice writes into it.
+        std::vector<std::uint8_t> hd = upscaler_.upscale(
+            wide, w, 200, c_.surface->hd_scale(), *c_.surface->hd_profile());
+        wsp.present_transition(hd, with_hud, /*pre_upscaled=*/true,
                                /*do_present=*/!shot_);
         if (shot_) {
             save_shot();
@@ -560,6 +566,7 @@ private:
 
     const DescentCtx& c_;
     const bool wide_;
+    enhance::IncrementalUpscaler upscaler_;
     bool f5_prev_ = false;
     bool shot_ = false;
     int shot_seq_ = 0;

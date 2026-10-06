@@ -17,7 +17,7 @@ int hd_scale_for(bool enhanced, const std::string& hd_profile, int render_scale)
     // The largest scale that fits the output.  3 matters: on a 1280x720
     // handheld (356x200 logical widescreen) x2 is a soft 1.8x stretch, x4
     // renders 1424x800 and throws pixels away, x3 (1068x600) is a 1.2x stretch.
-    // smooth has a real scale3x; eagle and xbr fall back to it with a warning.
+    // smooth has a real scale3x; eagle and mmpx fall back to it with a note.
     if (!hd_active(enhanced, hd_profile)) return 1;
     if (render_scale < 2) return 2;
     if (render_scale > 4) return 4;
@@ -30,8 +30,10 @@ ApplyTier classify_change(const std::string& key, const std::string& new_value,
         key == "aspect")
         return ApplyTier::Live;
 
-    // The pad mapping: applied with the Apply (StagingBindings persist hook).
-    if (key.rfind("pad_", 0) == 0) return ApplyTier::Live;
+    // The pad and keyboard mappings: applied with the Apply (StagingBindings
+    // persist hook).
+    if (key.rfind("pad_", 0) == 0 || key.rfind("key_", 0) == 0)
+        return ApplyTier::Live;
 
     // Smooth-present keys: the persist hook feeds them to the pacing config
     // every frame loop reads at its start; live.

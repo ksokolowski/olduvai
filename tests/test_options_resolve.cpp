@@ -34,9 +34,16 @@ TEST_CASE("options: empty config leaves every default in place") {
     CHECK(s.config_game_dir == false);
 }
 
+TEST_CASE("options: key_quit comes from the config like the other key_*") {
+    PlaySettings s;
+    merge_config(s, {{"key_pause", "P"}, {"key_quit", "F9"}});
+    CHECK(s.key_pause == "P");
+    CHECK(s.key_quit == "F9");
+}
+
 TEST_CASE("options: config fills what the CLI left") {
     PlaySettings s;
-    Config c = {{"enhanced", "true"},   {"hd_profile", "xbr"},
+    Config c = {{"enhanced", "true"},   {"hd_profile", "xbrz"},
                 {"render_scale", "2"},  {"aspect", "widescreen"},
                 {"vga_scan", "false"},  {"autofire", "fast"},
                 {"music_device", "opl"},{"game_dir", "/tmp/prehistorik"},
@@ -44,7 +51,7 @@ TEST_CASE("options: config fills what the CLI left") {
                 {"audio_rate", "44100"},{"bug_report_dir", "/tmp/bugs"}};
     merge_config(s, c);
     CHECK(s.enhanced == true);
-    CHECK(s.hd_profile == "xbr");
+    CHECK(s.hd_profile == "xbrz");
     CHECK(s.render_scale == 2);
     CHECK(s.aspect == "widescreen");
     CHECK(s.vga_scan == false);
@@ -76,7 +83,7 @@ TEST_CASE("options: CLI flags beat config on every flagged key") {
     s.vga_scan = false;  s.cli.vga_scan = true;
     s.autofire = "slow"; s.cli.autofire = true;
     s.game_dir = "/cli"; s.cli.game_dir = true;
-    merge_config(s, {{"enhanced", "false"}, {"hd_profile", "xbr"},
+    merge_config(s, {{"enhanced", "false"}, {"hd_profile", "xbrz"},
                      {"render_scale", "4"}, {"vga_scan", "true"},
                      {"autofire", "off"},   {"game_dir", "/cfg"}});
     CHECK(s.enhanced == true);
@@ -372,7 +379,7 @@ TEST_CASE("layers: --default-profile seeds below play.json") {
     const LayeredConfig lc = layer_config({{"render_scale", "2"}}, "", "hd-handheld");
     CHECK(lc.family == "handheld");
     CHECK(lc.merged.at("render_scale") == "2");       // play.json wins
-    CHECK(lc.merged.at("hd_profile") == "smooth");    // the default fills the rest
+    CHECK(lc.merged.at("hd_profile") == "xbrz");      // the default fills the rest
     CHECK(lc.merged.at("smooth_subframes") == "2");
     CHECK(lc.warnings.empty());
 }
@@ -399,12 +406,15 @@ TEST_CASE("layers: --profile beats play.json and sets the family") {
 TEST_CASE("layers: a handheld device defaults to the Nintendo button layout") {
     // Both handhelds print Nintendo labels on SDL's positions, so the
     // device default puts jump and confirm on the right button (printed A).
-    for (const char* dev : {"hd-handheld", "dos-handheld"}) {
+    for (const char* dev :
+         {"hd-handheld", "dos-handheld", "hd-handheld-43", "dos-handheld-43",
+          "hd-handheld-x2", "dos-handheld-x2", "hd-handheld-x4",
+          "dos-handheld-x4"}) {
         const LayeredConfig lc = layer_config({}, "", dev);
         CHECK(lc.merged.at("pad_jump") == "b");
         CHECK(lc.merged.at("pad_attack") == "a");
         CHECK(lc.merged.at("pad_confirm") == "b");
-        CHECK(lc.merged.at("pad_back") == "back");
+        CHECK(lc.merged.at("pad_back") == "a");   // B: menus only
         CHECK(lc.merged.at("pad_pause") == "start");
     }
     // A desktop default sets no pad keys: the engine default (Xbox) stands.
@@ -416,7 +426,7 @@ TEST_CASE("layers: the player's own mapping beats the device layout") {
         layer_config({{"pad_jump", "y"}, {"pad_attack", "x"}}, "", "hd-handheld");
     CHECK(lc.merged.at("pad_jump") == "y");      // play.json wins
     CHECK(lc.merged.at("pad_attack") == "x");
-    CHECK(lc.merged.at("pad_back") == "back");   // the default fills the rest
+    CHECK(lc.merged.at("pad_back") == "a");   // the default fills the rest
 }
 
 TEST_CASE("layers: --profile does not touch the button layout") {
@@ -433,7 +443,7 @@ TEST_CASE("layers: CLI flags still beat every layer") {
     s.cli.scale = true;
     merge_config(s, layer_config({}, "", "hd-handheld").merged);
     CHECK(s.render_scale == 2);
-    CHECK(s.hd_profile == "smooth");
+    CHECK(s.hd_profile == "xbrz");
 }
 
 TEST_CASE("layers: an unknown --default-profile warns and plays desktop defaults") {
@@ -473,6 +483,38 @@ TEST_CASE("profiles: dos-handheld pins exactly what dos pins") {
     CHECK(builtin_profile("dos-handheld") == builtin_profile("dos"));
 }
 
+TEST_CASE("profiles: the 4:3 handheld pair fills the panel, Style stays in it") {
+    using olduvai::presentation::resolve_preset;
+    CHECK(std::string(resolve_preset("handheld-43", "hd").name) ==
+          "hd-handheld-43");
+    CHECK(std::string(resolve_preset("handheld-43", "dos").name) ==
+          "dos-handheld-43");
+    for (const char* p : {"hd-handheld-43", "dos-handheld-43"})
+        CHECK(builtin_profile(p).at("aspect") == "4:3");
+    CHECK(builtin_profile("hd-handheld-43").at("render_scale") == "2");
+    CHECK(layer_config({}, "", "hd-handheld-43").family == "handheld-43");
+}
+
+TEST_CASE("profiles: the handheld scale pairs are xBRZ at x2 and x4, Style stays in them") {
+    using olduvai::presentation::resolve_preset;
+    const struct { const char* family; const char* hd; const char* dos; const char* scale; } pairs[] = {
+        {"handheld-x2", "hd-handheld-x2", "dos-handheld-x2", "2"},
+        {"handheld-x4", "hd-handheld-x4", "dos-handheld-x4", "4"},
+    };
+    for (const auto& p : pairs) {
+        CAPTURE(p.family);
+        CHECK(std::string(resolve_preset(p.family, "hd").name) == p.hd);
+        CHECK(std::string(resolve_preset(p.family, "dos").name) == p.dos);
+        CHECK(builtin_profile(p.hd).at("hd_profile") == "xbrz");
+        CHECK(builtin_profile(p.hd).at("render_scale") == p.scale);
+        CHECK(builtin_profile(p.hd).at("aspect") == "widescreen");
+        CHECK(builtin_profile(p.dos) == builtin_profile("dos"));
+        CHECK(layer_config({}, "", p.hd).family == p.family);
+    }
+    // the family steps: x2 below, x3 in hd-handheld, x4 above
+    CHECK(builtin_profile("hd-handheld").at("render_scale") == "3");
+}
+
 TEST_CASE("save-config: every setting the command line stated, as --help says") {
     // It wrote six of the fifteen once: `--music-device opl --save-config`
     // saved nothing about the device.
@@ -500,7 +542,7 @@ TEST_CASE("save-config then merge: every CLI-stated setting round-trips") {
     s.render_scale = 2;              s.cli.scale = true;
     s.vga_scan = false;              s.cli.vga_scan = true;
     s.autofire = "medium";           s.cli.autofire = true;
-    s.hd_profile = "xbr";            s.cli.hd = true;
+    s.hd_profile = "xbrz";            s.cli.hd = true;
     s.music_device = "gm-builtin";   s.cli.music_device = true;
     s.sfx_backend = "sb-dac";        s.cli.sfx_backend = true;
     s.display_mode = "cpu";          s.cli.display_mode = true;

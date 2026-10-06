@@ -175,13 +175,22 @@ fi
 if ! grep -q "XDG_RUNTIME_DIR" "$A/Olduvai.sh"; then
     echo "FAIL: A12 launcher lacks the XDG_RUNTIME_DIR default"; fail=1
 fi
-# The A12 starts in Classic: Enhanced there runs below the original's 18.2 Hz.
-if ! grep -q -- "--default-profile dos-handheld" "$A/Olduvai.sh"; then
-    echo "FAIL: A12 launcher does not pass --default-profile dos-handheld"; fail=1
+# The A12 starts in Enhanced HD, like the TrimUI (owner, 2026-10-04).
+if ! grep -q -- "--default-profile hd-handheld" "$A/Olduvai.sh"; then
+    echo "FAIL: A12 launcher does not pass --default-profile hd-handheld"; fail=1
 fi
 if ! grep -q "Powkiddy A12" "$A/olduvai/README.txt"; then
     echo "FAIL: A12 README does not name the device"; fail=1
 fi
+
+# 11. Player state lives in the port (settings, saves, bug reports, the log),
+#     and an old /userdata/system/.config/olduvai is copied in once, never
+#     over an existing one.
+for want in 'XDG_CONFIG_HOME="$PWD/conf"' 'OLDUVAI_BUG_DIR="$PWD/bug_reports"' \
+            '[ ! -d ./conf/olduvai ] && [ -d /userdata/system/.config/olduvai ]' \
+            '> ./log.txt'; do
+    grep -qF -- "$want" "$A/Olduvai.sh" || { echo "FAIL: launcher lacks: $want"; fail=1; }
+done
 
 [ "$fail" -eq 0 ] && echo "port_bundle: OK"
 exit "$fail"

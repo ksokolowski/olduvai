@@ -12,6 +12,8 @@
 #include <sstream>
 #include <vector>
 
+#include "presentation/window_util.hpp"   // init_sdl_video
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -193,7 +195,7 @@ void wait_for_any_button(SDL_Renderer* ren, SDL_Texture* tex) {
 }
 
 bool show_text_screen(const std::vector<std::string>& lines) {
-    if (SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK) != 0) return false;
+    if (!olduvai::presentation::init_sdl_video(SDL_INIT_JOYSTICK)) return false;
     SDL_Window* win = SDL_CreateWindow(
         "Olduvai", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
         SDL_WINDOW_FULLSCREEN_DESKTOP);

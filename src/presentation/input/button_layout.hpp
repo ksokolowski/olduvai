@@ -12,14 +12,19 @@
 // handhelds print B A Y X, so the same layout reads rotated on them, which
 // is what the Nintendo layout corrects.
 // A player rebinds four actions (kRebindableKeys); confirm follows jump.
+// Pad presses reach menus by context (gamepad::Context): in play a face
+// button only jumps or attacks, so back may share one with attack.
 //
 // Pure and header-only: no SDL.
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <iterator>
 #include <string>
 #include <vector>
+
+#include "presentation/input/binding_slots.hpp"
 
 namespace olduvai::presentation {
 
@@ -42,20 +47,39 @@ struct ButtonLayout {
 };
 
 // In menu order.  xbox is the engine default.  nintendo puts jump and
-// confirm on the right face button (printed A) and attack on the bottom one
-// (printed B); back moves to Select, since B now attacks and back opens the
-// pause menu.
+// confirm on the right face button (printed A), attack and back on the
+// bottom one (printed B): back acts only in menus and attack only in play
+// (gamepad::Context), so they share it as a console's B does.
 inline constexpr ButtonLayout kButtonLayouts[] = {
-    {"xbox",     "a", "x", "a", "b",    "start"},
-    {"nintendo", "b", "a", "b", "back", "start"},
+    {"xbox",     "a", "x", "a", "b", "start"},
+    {"nintendo", "b", "a", "b", "a", "start"},
 };
+
+// Round 1's nintendo, which had to put back on Select while back also
+// paused in play.  A play.json holding it reads as today's nintendo.
+inline void upgrade_round1_nintendo(PadBindings& b) {
+    if (b.jump == "b" && b.attack == "a" && b.confirm == "b" &&
+        b.back == "back" && b.pause == "start")
+        b.back = "a";
+}
 
 inline constexpr const char* kCustomButtonLayout = "custom";
 
-// The pad_* keys, in PadBindings order.
-inline constexpr const char* kPadKeys[] = {"pad_jump", "pad_attack",
-                                           "pad_confirm", "pad_back",
-                                           "pad_pause"};
+// Each pad_* key and the PadBindings field it sets, in field order.
+struct PadSlot {
+    const char* key;
+    std::string PadBindings::*field;
+};
+inline constexpr PadSlot kPadSlots[] = {
+    {"pad_jump", &PadBindings::jump},       {"pad_attack", &PadBindings::attack},
+    {"pad_confirm", &PadBindings::confirm}, {"pad_back", &PadBindings::back},
+    {"pad_pause", &PadBindings::pause},
+};
+
+inline bool same_bindings(const PadBindings& a, const PadBindings& b) {
+    return std::all_of(std::begin(kPadSlots), std::end(kPadSlots),
+                       [&](const PadSlot& s) { return a.*s.field == b.*s.field; });
+}
 
 inline PadBindings bindings_of(const ButtonLayout& l) {
     return {l.jump, l.attack, l.confirm, l.back, l.pause};
@@ -64,9 +88,7 @@ inline PadBindings bindings_of(const ButtonLayout& l) {
 // The layout whose bindings these are, else "custom".
 inline std::string button_layout_for(const PadBindings& b) {
     for (const ButtonLayout& l : kButtonLayouts)
-        if (b.jump == l.jump && b.attack == l.attack &&
-            b.confirm == l.confirm && b.back == l.back && b.pause == l.pause)
-            return l.id;
+        if (same_bindings(b, bindings_of(l))) return l.id;
     return kCustomButtonLayout;
 }
 
@@ -79,11 +101,8 @@ inline const ButtonLayout* find_button_layout(const std::string& id) {
 
 // The binding a pad_* key names, or nullptr for another key.
 inline std::string* binding_for_key(PadBindings& b, const std::string& key) {
-    if (key == "pad_jump") return &b.jump;
-    if (key == "pad_attack") return &b.attack;
-    if (key == "pad_confirm") return &b.confirm;
-    if (key == "pad_back") return &b.back;
-    if (key == "pad_pause") return &b.pause;
+    for (const PadSlot& s : kPadSlots)
+        if (key == s.key) return &(b.*s.field);
     return nullptr;
 }
 
@@ -93,38 +112,118 @@ inline std::string* binding_for_key(PadBindings& b, const std::string& key) {
 inline constexpr const char* kRebindableKeys[] = {"pad_jump", "pad_attack",
                                                   "pad_back", "pad_pause"};
 
-// Bind `key` (one of kRebindableKeys) to `button`, keeping the bindings
-// playable: jump, attack, back and pause each need their own button (back
-// and pause open the pause menu, which on jump or attack would fire on every
-// press).  A clash gives the other action this one's old button, so every
-// pick is reachable.  False for any other key.
+// Whether the bindings play: jump, attack and pause on buttons of their own
+// (play), and confirm apart from back (menus).  Back may share a button with
+// a play action: it acts only in menus.  Each key may hold two buttons.
+inline bool playable(const PadBindings& b) {
+    const BindingList jump = split_binding(b.jump);
+    const BindingList attack = split_binding(b.attack);
+    const BindingList pause = split_binding(b.pause);
+    const BindingList back = split_binding(b.back);
+    const BindingList confirm = split_binding(b.confirm);
+    return group_ok({&jump, &attack, &pause}) && group_ok({&confirm, &back});
+}
+
+namespace detail {
+
+// After jump moved: a back button jump now holds takes the one jump gave
+// up, or goes when there is none.  False when back would be left empty.
+inline bool back_off_jump(BindingList& back, const BindingList& jump_before,
+                          const BindingList& jump) {
+    std::string given_up;
+    for (const std::string& n : jump_before)
+        if (!holds(jump, n)) given_up = n;
+    for (auto it = back.begin(); it != back.end();) {
+        if (!holds(jump, *it)) { ++it; continue; }
+        if (!given_up.empty() && !holds(back, given_up)) {
+            *it = given_up;
+            ++it;
+        } else {
+            it = back.erase(it);
+        }
+    }
+    return !back.empty();
+}
+
+}  // namespace detail
+
+// Bind `button` in `slot` (0 primary, 1 alternate) of `key`, one of
+// kRebindableKeys, keeping the bindings playable.  A clash inside a context
+// gives the other action this slot's old button, so every primary pick is
+// reachable; confirm follows jump.  False, with nothing changed, for any
+// other key, or when the pick would leave an action with no button.
 inline bool rebind_action(PadBindings& b, const std::string& key,
-                   const std::string& button) {
-    std::string* const actions[] = {&b.jump, &b.attack, &b.back, &b.pause};
-    std::string* target = nullptr;
-    for (std::size_t i = 0; i < std::size(kRebindableKeys); ++i)
-        if (key == kRebindableKeys[i]) target = actions[i];
-    if (target == nullptr) return false;
-    const std::string old = *target;
-    const std::string jump_before = b.jump;
-    for (std::string* other : actions)
-        if (other != target && *other == button) *other = old;
-    *target = button;
-    // Confirm follows a moved jump, and never shares with back or pause
-    // (the pad sends Enter or Esc for a button, not both).
-    if (b.jump != jump_before || b.confirm == b.back || b.confirm == b.pause)
-        b.confirm = b.jump;
+                          const std::string& button, int slot = 0) {
+    BindingList jump = split_binding(b.jump);
+    BindingList attack = split_binding(b.attack);
+    BindingList pause = split_binding(b.pause);
+    BindingList back = split_binding(b.back);
+    const BindingList jump_before = jump;
+    const std::vector<BindingList*> play = {&jump, &attack, &pause};
+    if (key == "pad_back") {
+        // Onto a button jump (so confirm) holds: that jump slot takes back's
+        // old button, through the play rules.
+        const auto j = std::find(jump.begin(), jump.end(), button);
+        if (j != jump.end()) {
+            const auto s = static_cast<std::size_t>(slot);
+            const std::string old = s < back.size() ? back[s] : std::string{};
+            if (old.empty() ||
+                !rebind_in_group(play, 0, static_cast<int>(j - jump.begin()),
+                                 old))
+                return false;
+        }
+        if (!rebind_in_group({&back}, 0, slot, button)) return false;
+    } else {
+        std::size_t target = play.size();
+        if (key == "pad_jump") target = 0;
+        if (key == "pad_attack") target = 1;
+        if (key == "pad_pause") target = 2;
+        if (target == play.size() ||
+            !rebind_in_group(play, target, slot, button) ||
+            !detail::back_off_jump(back, jump_before, jump))
+            return false;
+    }
+    PadBindings next{join_binding(jump), join_binding(attack),
+                     b.confirm, join_binding(back), join_binding(pause)};
+    const BindingList confirm = split_binding(b.confirm);
+    if (next.jump != b.jump || !group_ok({&confirm, &back}))
+        next.confirm = next.jump;
+    if (!playable(next)) return false;
+    b = next;
     return true;
 }
 
-// The buttons a binding row offers, in its cycle order.
+// Empty the alternate slot of `key`.  False for a key with none, or another
+// key.
+inline bool clear_alternate(PadBindings& b, const std::string& key) {
+    std::string* const v = binding_for_key(b, key);
+    if (v == nullptr || key == "pad_confirm") return false;
+    BindingList l = split_binding(*v);
+    if (l.size() < 2) return false;
+    l.pop_back();
+    *v = join_binding(l);
+    if (key == "pad_jump") b.confirm = b.jump;
+    return true;
+}
+
+// The buttons a binding can hold (SDL's controller names): the triggers are
+// axes, read as pressed past half.  Guide is never offered: the firmware
+// owns it.
 inline std::vector<std::string> bindable_buttons() {
-    return {"a", "b", "x", "y", "leftshoulder", "rightshoulder", "back",
-            "start"};
+    return {"a", "b", "x", "y", "leftshoulder", "rightshoulder",
+            "lefttrigger", "righttrigger", "back", "start", "leftstick",
+            "rightstick"};
 }
 
 // Which letters a pad prints on its four face buttons.
 enum class PadFamily { kXbox, kNintendo, kPlayStation };
+
+// A button name a binding row can hold.
+inline bool is_pad_button(const std::string& name) {
+    for (const std::string& b : bindable_buttons())
+        if (name == b) return true;
+    return false;
+}
 
 // What a binding row shows for an SDL button name: a face button as its
 // printed name and position ("A - right": the game font draws parentheses
@@ -152,6 +251,10 @@ inline std::string pad_button_label(const std::string& button, PadFamily f) {
     }
     if (button == "leftshoulder") return "L1";
     if (button == "rightshoulder") return "R1";
+    if (button == "lefttrigger") return "L2";
+    if (button == "righttrigger") return "R2";
+    if (button == "leftstick") return "L3";
+    if (button == "rightstick") return "R3";
     if (button == "back") return "Select";
     if (button == "start") return "Start";
     return button;

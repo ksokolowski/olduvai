@@ -38,7 +38,7 @@ std::vector<std::uint8_t> src(int w, int h) {
 TEST_CASE("upscale_rgba honours w*scale x h*scale for every profile and scale") {
     const int w = 11, h = 7;          // deliberately not multiples of any scale
     const auto in = src(w, h);
-    for (const char* profile : {"native", "retro", "smooth", "eagle", "xbr",
+    for (const char* profile : {"native", "retro", "smooth", "eagle", "xbrz",
                                 "mmpx", "omniscale"}) {
         for (int scale : {1, 2, 3, 4}) {
             CAPTURE(std::string(profile));

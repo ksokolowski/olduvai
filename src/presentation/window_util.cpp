@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <string>
 #include <cstdlib>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -220,6 +221,33 @@ ScaledWindow create_scaled_window(const WindowSpec& spec) {
     if (std::getenv("OLDUVAI_FRAME_STATS") != nullptr) log_renderer_info(sw.ren);
     set_aspect_logical(sw.ren, spec.logical_w / 320, spec.aspect);
     return sw;
+}
+
+bool init_sdl_video(Uint32 extra_flags) {
+    const Uint32 flags = SDL_INIT_VIDEO | extra_flags;
+    if (SDL_InitSubSystem(flags) != 0) {
+        const std::string first = SDL_GetError();
+        const char* asked = SDL_getenv("SDL_VIDEODRIVER");
+        std::fprintf(stderr, "video: driver %s did not start (%s); trying each\n",
+                     asked != nullptr ? asked : "(default)", first.c_str());
+        bool up = false;
+        // SDL reads SDL_VIDEODRIVER at init in every SDL2 version (the hint
+        // only from 2.0.22).
+        for (int i = 0; i < SDL_GetNumVideoDrivers() && !up; ++i) {
+            const std::string name = SDL_GetVideoDriver(i);
+            if (name == "dummy" || name == "offscreen" || name == "evdev")
+                continue;   // no display
+            SDL_setenv("SDL_VIDEODRIVER", name.c_str(), 1);
+            up = SDL_InitSubSystem(flags) == 0;
+        }
+        if (!up) {
+            std::fprintf(stderr, "video: no driver started: %s\n", first.c_str());
+            return false;
+        }
+    }
+    const char* driver = SDL_GetCurrentVideoDriver();
+    std::printf("video: driver %s\n", driver != nullptr ? driver : "?");
+    return true;
 }
 
 bool poll_screen_events(SDL_Window* win) {

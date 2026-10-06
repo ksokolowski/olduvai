@@ -5,14 +5,14 @@
 # numbers and keeps the reasons.  A gain is locked in the same way.
 #
 # file function metric=value ...  # reason
-src/app/cli_args.cpp flag_table lines=240  # data: one entry per flag (spelling, --help text, action), CCN 6; it replaced the hand-kept usage text and four parse tables
+src/app/cli_args.cpp flag_table lines=243  # data: one entry per flag (spelling, --help text, action), CCN 6; it replaced the hand-kept usage text and four parse tables
 src/enhance/mmpx.cpp lambda cognitive=162  # algorithm: MMPX's per-pixel rule tree, as published; pinned by test_scaler_goldens
 src/enhance/mmpx.cpp mmpx_2x cognitive=193  # algorithm: MMPX (the kernel lambda above, and its setup); pinned by test_scaler_goldens
 src/enhance/omniscale.cpp lambda cognitive=263  # algorithm: OmniScale's per-pixel pattern tree, as published; pinned by test_scaler_goldens
 src/enhance/omniscale.cpp omniscale branches=47 cognitive=303 lines=271 statements=233  # algorithm: OmniScale (the kernel lambda above, and its setup); pinned by test_scaler_goldens
 src/enhance/pixel_scalers.cpp scale3x cognitive=62  # algorithm: Scale3x's nine-rule kernel, as published; pinned by test_scaler_goldens
 src/formats/mdi.cpp parse_mdi_track cognitive=56  # format: one decision over one byte (running status, meta, sysex, channel events) — the SMF grammar; fuzzed
-src/presentation/boss_app.cpp run_boss_level cognitive=75 lines=337 statements=204 variables=46  # driver: the EXE boss main's tick loop (update, post-render ticks, win and death) and the in-place reinit's orchestration; its display is BossView
+src/presentation/boss_app.cpp run_boss_level cognitive=75 lines=338 statements=204 variables=46  # driver: the EXE boss main's tick loop (update, post-render ticks, win and death) and the in-place reinit's orchestration; its display is BossView. 337 -> 338 is one aggregate field: BossEnding carries the stats pointer so the victory reports its own phase (play_boss_ending starts and reports it, not this function).
 src/presentation/diag/viewer.cpp run_viewer cognitive=53  # tool: the dev-only asset viewer's load-and-browse loop
-src/presentation/game_app.cpp run_platform_level cognitive=69 lines=335 variables=41  # driver: the EXE level main's frame loop in FRAME_LOOP.md order; §3.35-E/F moved out what is not the driver's. 334 -> 335 is a wrap, not growth: load_menu_model took the profile family (§3.34 phase 0) and the call no longer fits 80 columns. No new statement, branch or prologue name; cognitive and variables unchanged.
+src/presentation/game_app.cpp run_platform_level cognitive=70 lines=337 variables=42  # driver: the EXE level main's frame loop in FRAME_LOOP.md order; §3.35-E/F moved out what is not the driver's. What stays besides the loop: the first-visit spawn preview's scope (it spans this loop's compose, transition and present and ends before the trace; its condition is LevelView::first_visit_preview) and the program quit on SDL_QUIT, folded into the script-quit test (+1 cognitive).
 src/systems/spawning.cpp spawn_screen_entities lines=235 statements=212  # contract: one case per EXE object-record type (33), each with its citation; kept a switch (§3.35-D)

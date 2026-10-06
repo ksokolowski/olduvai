@@ -148,6 +148,8 @@ void draw_bg_tiles(RenderTarget& t, systems::SystemsState& state,
     }
 }
 
+}  // namespace
+
 // Cache key: every input that changes the static layer's pixels.  Cheap, so a
 // hit never recomposes or rehashes the layer.
 std::uint64_t static_bg_key(const systems::SystemsState& state,
@@ -172,6 +174,8 @@ std::uint64_t static_bg_key(const systems::SystemsState& state,
     }
     return key.value();
 }
+
+namespace {
 
 struct StaticBgEntry { std::uint64_t key; std::vector<std::uint8_t> hd; };
 std::deque<StaticBgEntry> g_static_bg_cache;   // front = most-recently-used
@@ -475,7 +479,8 @@ void compose_static_wide_bg_native(
 
 const std::vector<std::uint8_t>& get_static_wide_bg_hd(
     systems::SystemsState& state, const LevelRenderAssets& a, int scale,
-    const std::string& profile, int margin, const WidePeek& peek) {
+    const std::string& profile, int margin, const WidePeek& peek,
+    std::uint64_t* key_out) {
     static const std::vector<LevelRenderAssets::TileDraw> kNoTiles;
     const FrameBuffer* left = peek.left;
     const int left_screen = peek.left_screen;
@@ -511,6 +516,7 @@ const std::vector<std::uint8_t>& get_static_wide_bg_hd(
                 static_cast<std::uint32_t>(t.y));
         }
     }
+    if (key_out != nullptr) *key_out = key;   // margin is mixed in above
     for (auto& e : g_static_wide_bg_cache) {
         if (e.key == key && e.margin == margin) return e.hd;
     }

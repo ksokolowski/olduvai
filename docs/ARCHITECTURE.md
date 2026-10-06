@@ -13,7 +13,7 @@ src/
   systems/        — player physics, monster AI, spawning, collisions,
                     screen transitions, cave/secret logic, the frame step
                     (frame_runner).  Headless.
-  enhance/        — the optional HD layer: pixel upscalers (MMPX, xBR,
+  enhance/        — the optional HD layer: pixel upscalers (xBRZ, MMPX,
                     OmniScale, the Scale2x/3x and Eagle family), the HD
                     asset cache, vector text and the vector HUD, and the
                     RGBA draw target they share (canvas.hpp).  No SDL.
@@ -116,6 +116,11 @@ Profiles (`presentation/menu/profile_table.hpp`):
   audio picks the best available backend and degrades gracefully.
 - `dos-handheld`, `hd-handheld`: the same two families, the enhanced one
   tuned for handheld screens and CPUs.
+- `dos-handheld-43`, `hd-handheld-43`: the handheld pair for 4:3 panels,
+  filling them at 4:3 (Enhanced at x2).
+- `dos-handheld-x2`, `hd-handheld-x2` and `dos-handheld-x4`,
+  `hd-handheld-x4`: the handheld pairs for wide panels of 400 and of 800 lines
+  and up (Enhanced at x2 and x4); `hd-handheld` is the x3 step between them.
 
 The in-game Options menu stages every change and writes `play.json` on
 Apply; it is the only settings surface on handhelds.
@@ -143,5 +148,5 @@ fails a new entry or any moved number.
 
 C++17 is the language ceiling (handheld toolchains). Dependencies: SDL2 and
 vendored in-tree libraries (`third_party/`: doctest, stb, RtMidi,
-Nuked-OPL3, libmt32emu; fonts under `assets/fonts/`), no git submodules.
-FluidSynth is loaded at run time when present.
+Nuked-OPL3, libmt32emu, FluidSynth, xBRZ; fonts under `assets/fonts/`), no git
+submodules.

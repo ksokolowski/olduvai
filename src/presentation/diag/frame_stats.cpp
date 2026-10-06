@@ -43,6 +43,15 @@ void FrameStats::begin_run() {
     perf_ms = 1000.0 / static_cast<double>(SDL_GetPerformanceFrequency());
 }
 
+void FrameStats::begin_phase() {
+    if (!enabled) return;
+    const double pm = perf_ms, budget = budget_ms;
+    *this = FrameStats{};
+    enabled = true;
+    perf_ms = pm;
+    budget_ms = budget;
+}
+
 void FrameStats::begin_tick() {
     if (!enabled) return;
     present_ms = 0.0;
@@ -54,6 +63,9 @@ void FrameStats::begin_tick() {
     ov_upload_ms = 0.0;
     ov_blit_ms = 0.0;
     ov_hash_ms = 0.0;
+    dirty_partial = 0;
+    dirty_calls = 0;
+    dirty_mpx = 0.0;
     fg_ms = 0.0;
     bg_copy_ms = 0.0;
     scene_ms = 0.0;
@@ -103,6 +115,9 @@ void FrameStats::end_tick() {
     total_ov_upload_ms += ov_upload_ms;
     total_ov_blit_ms += ov_blit_ms;
     total_ov_hash_ms += ov_hash_ms;
+    total_dirty_partial += dirty_partial;
+    total_dirty_calls += dirty_calls;
+    total_dirty_mpx += dirty_mpx;
     total_fg_ms += fg_ms;
     total_bg_copy_ms += bg_copy_ms;
     total_scene_ms += scene_ms;
@@ -112,8 +127,10 @@ void FrameStats::end_tick() {
     total_present_calls += present_calls;
 }
 
-void FrameStats::report(int display_level) const {
+void FrameStats::report(int display_level, const char* phase) const {
     if (!enabled) return;
+    const char* const sep = phase != nullptr ? " " : "";
+    const char* const tag = phase != nullptr ? phase : "";
     if (present_iv_ms.size() >= 20) {
         // Game-performance figures from the per-present intervals.  The 1% low
         // (mean of the slowest 1%, as a rate) shows stutter an average hides;
@@ -141,29 +158,31 @@ void FrameStats::report(int display_level) const {
         for (const float v : iv) mad += std::fabs(static_cast<double>(v) - mean);
         mad /= static_cast<double>(n);
         std::fprintf(stderr,
-                     "render-stats L%d: fps=%.2f (1%%low=%.2f 0.1%%low=%.2f) "
+                     "render-stats L%d%s%s: fps=%.2f (1%%low=%.2f 0.1%%low=%.2f) "
                      "frame_ms p50=%.2f p95=%.2f p99=%.2f max=%.2f "
                      "jitter_mad=%.2fms samples=%zu\n",
-                     display_level, mean > 0.0 ? 1000.0 / mean : 0.0,
+                     display_level, sep, tag, mean > 0.0 ? 1000.0 / mean : 0.0,
                      low_rate(0.01), low_rate(0.001),
                      pct(0.50), pct(0.95), pct(0.99),
                      static_cast<double>(iv[n - 1]), mad, n);
     }
     if (frames == 0) return;
     std::fprintf(stderr,
-                 "frame-stats L%d: frames=%llu overruns=%llu(>%.1fms) "
+                 "frame-stats L%d%s%s: frames=%llu overruns=%llu(>%.1fms) "
                  "worst_work=%.2fms (present=%.2fms upscale=%.2fms/%luc) "
                  "upscale_peak=%.2fms upscale_total=%.1fms "
                  "present_peak=%.2fms present_total=%.1fms "
                  "swap_total=%.1fms present_work=%.1fms "
                  "upload_total=%.1fms present_calls=%lu "
                  "ov_clear=%.1fms ov_upload=%.1fms ov_blit=%.1fms "
-                 "ov_hash=%.1fms ov_skipped=%lu fg=%.1fms bg_copy=%.1fms scene=%.1fms glyph=%.1fms "
+                 "ov_hash=%.1fms ov_skipped=%lu "
+                 "dirty_partial=%lu dirty_calls=%lu dirty_mpx=%.1f "
+                 "fg=%.1fms bg_copy=%.1fms scene=%.1fms glyph=%.1fms "
                  "compose=%.1fms "
                  "| PACING eff_hz=%.2f late_total=%.1fms late_max=%.1fms "
                  "subframes=%.2f paused=%.1fms/%lluticks "
                  "budget=%.2fms\n",
-                 display_level,
+                 display_level, sep, tag,
                  static_cast<unsigned long long>(frames),
                  static_cast<unsigned long long>(overruns), budget_ms,
                  worst_ms, worst_present_ms,
@@ -179,6 +198,9 @@ void FrameStats::report(int display_level) const {
                  total_ov_blit_ms,
                  total_ov_hash_ms,
                  total_ov_skipped,
+                 total_dirty_partial,
+                 total_dirty_calls,
+                 total_dirty_mpx,
                  total_fg_ms,
                  total_bg_copy_ms,
                  total_scene_ms,

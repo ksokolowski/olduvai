@@ -54,6 +54,11 @@ struct FrameStats {
         // Overlay skip-check cost, and how often it paid off (near-zero
         // ov_skipped = the hash is pure overhead).
         double ov_hash_ms = 0.0, total_ov_hash_ms = 0.0;
+        // Dirty-rect uploads (LevelSurface::upload_dirty): presents that sent
+        // only their rects, the upload calls those took, and the pixels sent.
+        unsigned long dirty_partial = 0, total_dirty_partial = 0;
+        unsigned long dirty_calls = 0, total_dirty_calls = 0;
+        double dirty_mpx = 0.0, total_dirty_mpx = 0.0;
         double fg_ms = 0.0, total_fg_ms = 0.0;
         double bg_copy_ms = 0.0, total_bg_copy_ms = 0.0;
         double scene_ms = 0.0, total_scene_ms = 0.0;
@@ -116,8 +121,13 @@ struct FrameStats {
     // sleep).
     void end_tick();
 
+    // Start a new accounting phase (a boss victory after its fight): every
+    // total back to zero, the run clock restarted.
+    void begin_phase();
+
     // The two report lines (render-stats, then frame-stats) on stderr.
-    void report(int display_level) const;
+    // `phase` tags them ("L6 victory:"); null for the level itself.
+    void report(int display_level, const char* phase = nullptr) const;
 
     // Whether this instance is recording.  Presenters take it as `stats_on`.
     bool enabled = false;

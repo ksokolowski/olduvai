@@ -65,6 +65,10 @@ struct GameOptions {
     std::string pad_jump = "a", pad_attack = "x", pad_pause = "start",
                 pad_confirm = "a", pad_back = "b";
     int pad_deadzone = 8000;
+    // Keyboard play bindings (play.json key_*, SDL key names, "" = the
+    // action's defaults), read by presentation/input/actions.
+    std::string key_left, key_right, key_up, key_down, key_attack, key_pause,
+        key_quit;
     // --vga-scan (classic): re-present the held frame every refresh between
     // logic ticks (VGA scanning VRAM at 70 Hz).  Same pixels; implies vsync.
     bool vga_scan = false;

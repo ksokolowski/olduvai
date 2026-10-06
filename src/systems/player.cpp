@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "systems/player.hpp"
 
+#include "systems/cave_logic.hpp"   // kSprCaveDescent1
+
 namespace olduvai::systems {
 
 void PlayerState::reset_for_level(int start_x, int start_y) {
@@ -241,6 +243,23 @@ void update_player(SystemsState& state) {
     if (p.cave_warp_freeze > 0 && !warp_active) {
         --p.cave_warp_freeze;
         p.halo_spr = 1 - p.halo_spr;
+    }
+    // The warp's descent (FUN_27f7_1b51 +0x1b63..0x1b9c): while the low bits
+    // are set, draw pose 0x2c + bits at x + 4, step the bits up to 3 and skip
+    // the rest of the update.  The level main warps only once they read 3
+    // (L7 +0x07e5..0x07f3, L3 +0x0e02..0x0e10; check_cave_warp_animation).
+    // As for caves (tick_cave_descent), the third pose is restored for one
+    // tick: the EXE's order leaves it unpresented.
+    if (warp_active) {
+        const int bits = p.cave_warp_freeze & 3;
+        p.sprite = kSprCaveDescent1 + (bits - 1);
+        p.dx = 4;   // FUN_27f7_1b51 +0x1b7f: add ax, 4
+        p.dy = 0;
+        if (bits != 3)
+            ++p.cave_warp_freeze;   // +0x1b9c
+        else
+            state.cave_descent_third_shown = true;
+        return;
     }
 
     p.dx = 0;

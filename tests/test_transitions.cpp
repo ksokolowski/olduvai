@@ -22,6 +22,7 @@
 #include "core/constants.hpp"
 #include "core/rng.hpp"
 #include "systems/cave_logic.hpp"
+#include "systems/collision_dispatch.hpp"
 #include "systems/frame_runner.hpp"
 #include "systems/player.hpp"
 #include "systems/transitions.hpp"
@@ -145,19 +146,22 @@ TEST_CASE("L3 11->12 trunk-cave exit raises cave_warp_pending (fade signal)") {
     CHECK(state.player.cave_warp_freeze == 0);
 }
 
-TEST_CASE("L7-style screen-9 cave entry raises cave_warp_pending (fade signal)") {
+TEST_CASE("L7 screen-9 hole: Enhanced fades the hop, Classic cuts as the EXE") {
     using olduvai::core::kCaveTransitionMarker;
     using olduvai::systems::enter_cave;
-    SystemsState state;
-    state.current_level = 7;
-    state.current_screen = 9;
+    for (const bool enhanced : {true, false}) {
+        SystemsState state;
+        state.current_level = 7;
+        state.current_screen = 9;
+        state.enhanced_active = enhanced;
 
-    enter_cave(state, kCaveTransitionMarker);
+        enter_cave(state, kCaveTransitionMarker);
 
-    CHECK(state.current_screen == 10);        // warped
-    CHECK(state.screen_change == true);
-    CHECK(state.player.cave_warp_pending == true);   // fade selected
-    CHECK(state.player.cave_warp_freeze == 0);       // not via freeze counter
+        CHECK(state.current_screen == 10);        // warped
+        CHECK(state.screen_change == true);
+        CHECK(state.player.cave_warp_pending == enhanced);   // fade in Enhanced
+        CHECK(state.player.cave_warp_freeze == 0);  // not via freeze counter
+    }
 }
 
 // ── Cave-EMERGE reveal (Enhanced #18 v2) — pacing arm + freeze/cancel ──
@@ -217,41 +221,128 @@ TEST_CASE("a real hit during the enhanced emerge cancels it cleanly") {
     }
 }
 
-TEST_CASE("enhanced emerge freezes the player; classic does not") {
+TEST_CASE("enhanced emerge stops game time; classic does not") {
     using olduvai::systems::FrameInputs;
-    using olduvai::systems::run_frame;
+    using olduvai::systems::run_tick;
     SystemsState state;
     state.current_level = 1;
     state.current_screen = 1;
     state.player.x = 180;
     state.player.y = 126;
     state.player.energy = 10;
+    state.frame_counter = 7;
     FrameInputs in;
     in.right = true;
 
-    SUBCASE("enhanced: frozen for the whole reveal (stop game time)") {
+    SUBCASE("enhanced: the world waits for the whole reveal (stop game time)") {
         state.enhanced_active = true;
         state.cave_emerge_frames = 9;
-        for (int i = 0; i < 9; ++i) run_frame(state, in);
+        for (int i = 0; i < 9; ++i) run_tick(state, in, /*paused=*/false);
         CHECK(state.player.x == 180);
         CHECK(state.player.y == 126);
+        CHECK(state.frame_counter == 7);   // the timer's clock holds too
         // The counter itself is presentation-owned (game_app end-of-tick
-        // decrement), so run_frame must NOT consume it.
+        // decrement), so run_tick must NOT consume it.
         CHECK(state.cave_emerge_frames == 9);
     }
-    SUBCASE("classic: draw-only — gameplay unaffected (EXE timing)") {
+    SUBCASE("classic: draw-only, gameplay unaffected (EXE timing)") {
         state.enhanced_active = false;
         state.cave_emerge_frames = 2;
-        run_frame(state, in);
+        run_tick(state, in, /*paused=*/false);
         const bool moved =
             state.player.x != 180 || state.player.y != 126;
         CHECK(moved);
     }
-    SUBCASE("death during the frozen ticks cancels the emerge") {
+    SUBCASE("death during the stopped ticks cancels the emerge") {
         state.enhanced_active = true;
         state.cave_emerge_frames = 5;
         state.player.death_counter = 1;
-        run_frame(state, in);
+        run_tick(state, in, /*paused=*/false);
         CHECK(state.cave_emerge_frames == 0);
+    }
+}
+
+// ── The lava spring / trunk warp descent (FUN_27f7_1b51 +0x1b63..0x1b9c,
+// L7 +0x07e5..0x07f3, L3 +0x0e02..0x0e10) ──
+// The trigger frame only arms 0xFA1; the next frames draw the descent poses
+// while the low bits step to 3, and the warp waits for them (plus the
+// restored third pose, as for caves).
+TEST_CASE("L7 spring: three descent poses, then the level exit") {
+    using olduvai::systems::check_cave_warp_animation;
+    using olduvai::systems::check_screen_transition;
+    using olduvai::systems::kSprCaveDescent1;
+    using olduvai::systems::update_player;
+    SystemsState state;
+    state.current_level = 7;
+    state.current_screen = 18;
+    state.screen_clear_of_monsters = true;
+    state.food_count = 0x2D;
+    state.input.down = true;
+    state.player.x = 0xF0;
+    state.player.y = 0x7F;
+
+    // Trigger frame: the post-frame transition arms the warp, nothing moves.
+    check_screen_transition(state);
+    CHECK(state.player.cave_warp_freeze == 0xFA1);
+    check_cave_warp_animation(state);
+    CHECK(state.current_screen == 18);
+    CHECK_FALSE(state.level_complete);
+
+    const int want_freeze[] = {0xFA2, 0xFA3, 0xFA3};
+    for (int f = 0; f < 3; ++f) {
+        update_player(state);
+        CHECK(state.player.sprite == kSprCaveDescent1 + f);
+        CHECK(state.player.dx == 4);
+        CHECK(state.player.cave_warp_freeze == want_freeze[f]);
+        check_screen_transition(state);   // no re-trigger mid-warp
+        check_cave_warp_animation(state);
+        if (f < 2) {
+            CHECK(state.current_screen == 18);
+            CHECK_FALSE(state.level_complete);
+        }
+    }
+    // After the third pose: 0xFA3 >> 2 = 1000, screen 19, level over.
+    CHECK(state.player.cave_warp_freeze == 0x3E8);
+    CHECK(state.current_screen == 19);
+    CHECK(state.level_complete);
+    CHECK_FALSE(state.cave_descent_third_shown);
+}
+
+// ── The fake cave's exit (L7 12 -> 13): Enhanced emerges before the spring ──
+TEST_CASE("L7 fake cave exit: Enhanced arms the emerge, Classic does not") {
+    using olduvai::systems::check_screen_transition;
+    using olduvai::systems::kCaveEmergeTicksEnhanced;
+    for (const bool enhanced : {true, false}) {
+        SystemsState state;
+        state.current_level = 7;
+        state.current_screen = 12;
+        state.enhanced_active = enhanced;
+        state.player.x = 0x128;   // past the right edge (0x127)
+        state.player.y = 100;
+        check_screen_transition(state);
+        CHECK(state.current_screen == 0xD);
+        CHECK(state.player.x == 0x30);
+        CHECK(state.player.y == 130);
+        CHECK(state.cave_emerge_frames ==
+              (enhanced ? kCaveEmergeTicksEnhanced : 0));
+    }
+}
+
+TEST_CASE("an emerging player is not launched by a spring (Enhanced)") {
+    using olduvai::systems::apply_spring_launch;
+    olduvai::core::CollisionResult r;
+    r.peak_l7_spring = true;
+    r.peak_l7_y_vel = -20;
+    for (const bool enhanced : {true, false}) {
+        SystemsState state;
+        state.enhanced_active = enhanced;
+        state.cave_emerge_frames = 5;
+        apply_spring_launch(state, r);
+        // Classic launches at once, as the EXE; Enhanced waits.
+        CHECK(state.player.gravity_flag == (enhanced ? 0 : 1));
+        state.cave_emerge_frames = 0;
+        state.player.gravity_flag = 0;
+        apply_spring_launch(state, r);
+        CHECK(state.player.gravity_flag == 1);   // after the emerge: launched
     }
 }

@@ -48,6 +48,25 @@ void PauseService::esc_pressed() {
     }
 }
 
+void PauseService::quit_shortcut() {
+    if (!menu_ok_) return;
+    open_ = true;
+    menu_.open("pause");   // the dialog is drawn over the pause menu
+    make_pause_actions(&actions_deps_).at("quit_desktop")();
+}
+
+void PauseService::quicksave() {
+    const auto actions = make_pause_actions(&actions_deps_);
+    actions.at("save_game")();
+    if (x_.pipe->audio) x_.pipe->audio->play_sfx("SFX_GENERIC");
+}
+
+void PauseService::quickload() {
+    const auto actions = make_pause_actions(&actions_deps_);
+    actions.at("load_game")();
+    if (want_load_) open_ = true;   // verdict() reads intents only while open
+}
+
 void PauseService::handle_keydown(SDL_Keycode sym) {
     routing_.keydown(sym);
 }

@@ -117,8 +117,13 @@ public:
     void set_mix_balance(bool enhanced, float music = -1.0f, float sfx = -1.0f);
     // Ramp the music to silence over ~1.8 s and leave it muted (EXE
     // MDI_FadeStop 1f75:00e4); the next play_music() restores it.  Used before
-    // the tally's BONUS.MDI.
+    // the tally's BONUS.MDI.  Ramps from the current gain: after a
+    // set_music_fade() to silence it returns at once.
     void fade_out_music();
+    // Set the music gain directly (1 = full, 0 = silent), for a fade the
+    // caller paces: the ending fades picture and music together.  Host MIDI
+    // has no gain, so this does nothing there.
+    void set_music_fade(float gain);
 
     void mix(std::int16_t* out, int frames);       // audio-thread callback
 

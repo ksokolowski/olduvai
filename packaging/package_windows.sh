@@ -21,23 +21,9 @@ for dll in "${BUILD_DIR}"/*.dll; do
     [ -e "${dll}" ] && cp "${dll}" "${stage}/olduvai/"
 done
 
-# Assert the ARTIFACT, not the build host.  General MIDI is dlopen'd, so
-# nothing in the build system knows whether it shipped: for four releases the
-# Windows zip carried no synth at all and users silently fell back to OPL,
-# which is indistinguishable from "you have no SoundFont".  The DLL name must
-# be exactly what audio.cpp's load_fluidsynth() asks for.
-# OLDUVAI_REQUIRE_FLUIDSYNTH=1 (set by the release job) makes its absence
-# fatal; a plain local build only warns, so `package_windows.sh` still works
-# on a machine that has not built FluidSynth.
-if [ -f "${stage}/olduvai/libfluidsynth-3.dll" ]; then
-    echo "package_windows: bundled libfluidsynth-3.dll"
-elif [ "${OLDUVAI_REQUIRE_FLUIDSYNTH:-0}" = "1" ]; then
-    echo "package_windows: FAIL — libfluidsynth-3.dll missing from the zip." >&2
-    echo "  Run packaging/build_fluidsynth_windows.cmd into ${BUILD_DIR} first." >&2
-    exit 1
-else
-    echo "package_windows: NOTE — no libfluidsynth-3.dll; GM will be unavailable" >&2
-fi
+# FluidSynth is compiled in (third_party/fluidsynth): a libfluidsynth DLL
+# left in the build directory by an older build must not ride along.
+rm -f "${stage}"/olduvai/libfluidsynth*.dll
 cp "${BUILD_DIR}"/fonts/*.ttf "${BUILD_DIR}"/fonts/*LICENSE* "${stage}/olduvai/fonts/"
 # Menu model beside the exe (searched first at runtime; the embedded copy
 # is only the lone-binary fallback — shipping the file keeps it user-
@@ -53,6 +39,11 @@ cp third_party/nuked_opl3/LICENSE "${stage}/olduvai/licenses/Nuked-OPL3-LICENSE.
 cp third_party/mt32emu/COPYING.LESSER.txt \
    "${stage}/olduvai/licenses/libmt32emu-LICENSE.txt"
 cp third_party/rtmidi/LICENSE "${stage}/olduvai/licenses/RtMidi-LICENSE.txt"
+# FluidSynth (LGPL-2.1) and the gcem headers it builds with (Apache-2.0),
+# vendored and compiled in (third_party/fluidsynth/OLDUVAI-VENDORING.md).
+cp third_party/fluidsynth/LICENSE "${stage}/olduvai/licenses/FluidSynth-LICENSE.txt"
+cp third_party/fluidsynth/gcem/LICENSE "${stage}/olduvai/licenses/gcem-LICENSE.txt"
+cp third_party/fluidsynth/gcem/NOTICE.txt "${stage}/olduvai/licenses/gcem-NOTICE.txt"
 cat > "${stage}/olduvai/README-windows.txt" <<'EOF'
 Olduvai - portable Windows build
 ================================

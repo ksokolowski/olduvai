@@ -17,6 +17,29 @@ namespace olduvai::presentation {
 
 namespace {
 
+namespace {
+
+// One victory frame as one FrameStats tick.  end() before the frame's own
+// delay, so worst_work excludes the sleep as the fight's ticks do.
+class VictoryTick {
+public:
+    explicit VictoryTick(FrameStats* fs) : fs_(fs) {
+        if (fs_ != nullptr) fs_->begin_tick();
+    }
+    ~VictoryTick() { end(); }
+    VictoryTick(const VictoryTick&) = delete;
+    VictoryTick& operator=(const VictoryTick&) = delete;
+    void end() {
+        if (fs_ != nullptr) fs_->end_tick();
+        fs_ = nullptr;
+    }
+
+private:
+    FrameStats* fs_;
+};
+
+}  // namespace
+
 // L2 victory: the 18-frame defeated-T-Rex flash.  `last_flash` keeps the last
 // frame shown, for the fade source.
 void play_l2_victory(const BossEnding& c, int& last_flash) {
@@ -25,10 +48,10 @@ void play_l2_victory(const BossEnding& c, int& last_flash) {
     constexpr int kVictoryFrames = 18;
     constexpr Uint32 kFlashExtraMs = 388;   // 1000 * 7 / 18 ≈ 388
     for (int vf = 0; vf < kVictoryFrames && !c.res.quit; ++vf) {
+        VictoryTick tick(c.stats);
         last_flash = vf;   // remember for the post-victory fade parity
-        // Widescreen: render at native 320 and present wide, matching
-        // the fight.
-        FrameBuffer vnat;   // native 320 for the wide victory path
+        // The native frame: the fade source, and the resize fallback.
+        FrameBuffer vnat;
         if (c.arena.wide_on()) {
             RenderTarget rt{vnat.px.data(), 320, 200, 1, nullptr,
                             nullptr};
@@ -45,23 +68,27 @@ void play_l2_victory(const BossEnding& c, int& last_flash) {
             if (std::getenv("OLDUVAI_REAL_SHOT") != nullptr && c.arena.wide_on() &&
                 vf == 8 && !c.shot.empty()) {
                 // Debug: capture a mid-flash victory frame (real
-                // output).
-                c.arena.present_wide_native(vnat, /*draw_lives=*/false,
-                                    /*do_present=*/false);
+                // output), through the path the flash presents on.
+                c.arena.present_wide_hd(
+                    [&](RenderTarget& wrt) {
+                        render_l2_victory_sprites(wrt, c.assets, c.player,
+                                                  vf);
+                    },
+                    /*draw_lives=*/false, /*do_present=*/false);
                 capture_renderer_output(c.surface.ren(), c.shot);
                 c.res.quit = true;   // captured; stop the sequence
             } else if (c.arena.wide_ready()) {
-                // Build the wide buffer like the fight (clean arena
-                // mirror, 0.10 gradient), then draw the victory sprites
-                // once at origin_x = wsb.M.  Mirroring the baked frame
-                // would reflect the T-Rex tail into the margin.
+                // The fight's clean HD arena, then the victory sprites at
+                // origin_x = wsb.M.  Mirroring the baked frame would
+                // reflect the T-Rex tail into the margin.
                 c.arena.keep_fade_source(vnat);
-                c.arena.show_wide_native(
-                    c.arena.compose_wide_native([&](RenderTarget& wrt) {
+                c.arena.present_wide_hd(
+                    [&](RenderTarget& wrt) {
                         render_l2_victory_sprites(wrt, c.assets, c.player,
                                                   vf);
-                    }),
+                    },
                     /*draw_lives=*/false);
+                tick.end();
                 SDL_Delay(kFlashExtraMs);
             } else if (c.arena.wide_on()) {
                 c.arena.present_wide_native(vnat, /*draw_lives=*/false);  // resize fallback
@@ -111,15 +138,15 @@ void play_l6_victory(const BossEnding& c, L6BossState& l6, bool smooth,
             return;
         }
         c.arena.keep_fade_source(vnat);      // post-victory fade source
-        // do_present=false renders without flipping, for the capture
-        // hook.
-        c.arena.show_wide_native(
-            c.arena.compose_wide_native([&](RenderTarget& wrt) {
+        // The fight's clean HD arena, sprites at HD.  do_present=false
+        // renders without flipping, for the capture hook.
+        c.arena.present_wide_hd(
+            [&](RenderTarget& wrt) {
                 // Sub-pixel drop on the smooth path; inert when
                 // use_float is false.
                 boss_smooth_pos(wrt, sp.use_float, sp.fx, sp.fy);
                 render_l6_victory_sprites(wrt, c.assets, c.player, l6);
-            }),
+            },
             /*draw_lives=*/true, do_present);
     };
 
@@ -132,6 +159,7 @@ void play_l6_victory(const BossEnding& c, L6BossState& l6, bool smooth,
     // Victory-frame counter for the capture hook (as L2/L4 have).
     int l6_vf = 0;
     while (l6.win_flag != 100 && !c.res.quit) {
+        VictoryTick tick(c.stats);
         const Uint32 vt0 = SDL_GetTicks();
         // Won: only a window close stops the ride-off.
         if (!poll_screen_events(c.surface.win())) c.res.quit = true;
@@ -187,6 +215,7 @@ void play_l6_victory(const BossEnding& c, L6BossState& l6, bool smooth,
                                         c.player, l6);
                 c.arena.present_frame();
             }
+            tick.end();
             const Uint32 vspent = SDL_GetTicks() - vt0;
             if (vspent < c.frame_ms) SDL_Delay(c.frame_ms - vspent);
         }
@@ -203,15 +232,13 @@ void fade_to_tally(const BossEnding& c, int internal_level,
 
         // L2, L4 and L6 fade through the overflow compose: each has a
         // victory sprite at the screen edge that mirroring the baked frame
-        // would duplicate.  Build the wide buffer once, then darken it per
-        // frame.
+        // would duplicate.  Build the wide HD frame once, as the victory
+        // drew it, then darken it per frame.
         if (c.arena.wide_ready() &&
             (internal_level == 4 || internal_level == 2 ||
              internal_level == 6)) {
             const std::vector<std::uint8_t> wbase =
-                c.arena.compose_wide_native([&](RenderTarget& wrt) {
-                    victory_sprites(wrt);
-                });
+                c.arena.build_wide_hd(victory_sprites);
             for (int f2 = 0; f2 <= kFadeFrames && !c.res.quit; ++f2) {
                 const double k =
                     1.0 - static_cast<double>(f2) / kFadeFrames;
@@ -221,9 +248,9 @@ void fade_to_tally(const BossEnding& c, int internal_level,
                     faded[i + 1] = static_cast<std::uint8_t>(faded[i + 1] * k);
                     faded[i + 2] = static_cast<std::uint8_t>(faded[i + 2] * k);
                 }
-                c.arena.show_wide_native(faded, /*draw_lives=*/false,
-                                       /*do_present=*/true,
-                                       /*draw_hud=*/false);
+                c.arena.show_wide_up(faded, /*draw_lives=*/false,
+                                     /*do_present=*/true,
+                                     /*draw_hud=*/false);
                 if (!poll_screen_events(c.surface.win())) c.res.quit = true;
                 SDL_Delay(c.frame_ms);
             }
@@ -294,12 +321,15 @@ void play_boss_ending(const BossEnding& c, BossFight& f,
                       SmoothPos& sp, bool with_cinematic) {
     if (!c.res.survived || c.res.quit) return;
     if (with_cinematic) {
+        // The victory is a stats phase of its own (the fight has reported).
         // L4's ride-off already ran inside the fight loop (it exits at
-        // win_flag >= 100).
+        // win_flag >= 100), so L4 reports no victory phase.
+        if (c.stats != nullptr) c.stats->begin_phase();
         if (f.level == 2)
             play_l2_victory(c, l2_last_flash);
         else if (f.level == 6)
             play_l6_victory(c, f.l6, smooth, pacer, sp);
+        if (c.stats != nullptr) c.stats->report(f.level, "victory");
     }
     if (!c.res.quit) fade_to_tally(c, f.level, victory_sprites);
 }

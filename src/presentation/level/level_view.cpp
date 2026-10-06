@@ -131,6 +131,7 @@ LevelView::LevelView(LevelSurface& surface, const LevelViewDeps& deps)
     fp_.stats = &diag.stats;
     wsp_.stats = &diag.stats;
     wire_overlay_stats(diag.stats, surface.overlay());
+    surface.set_stats(&diag.stats);
 
     if (s > 1) warm_level_sprites(g, s, opts.hd_profile);
 }
@@ -142,6 +143,11 @@ void LevelView::play_transition(const PrevFrame& pf,
     banners_.set_suppressed(true);
     play_screen_transition(deps_.g, pf, trans_, fp_, fb_, bubbles, env);
     banners_.set_suppressed(false);
+}
+
+std::optional<SpawnPostPreview> LevelView::first_visit_preview(bool enhanced) {
+    if (!enhanced || trans_.kind == TransitionKind::kNone) return std::nullopt;
+    return std::optional<SpawnPostPreview>(std::in_place, deps_.g);
 }
 
 DescentCtx LevelView::descent(bool& running) {

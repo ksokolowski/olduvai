@@ -60,6 +60,7 @@ BossView::BossView(LevelSurface& surface, const BossViewDeps& deps)
     // The HUD text overlay was the largest present cost on the platform side
     // (42% at 1280x720): its sinks count too.
     wire_overlay_stats(deps_.stats, surface.overlay());
+    surface.set_stats(&deps_.stats);
     arena_.stats = &deps_.stats;
     arena_.arena_bg = &assets.bg;
     arena_.smooth_use_float = &smooth_pos_.use_float;

@@ -18,6 +18,8 @@
 #include "presentation/render/smooth_config.hpp"   // smooth_present_config
 #include "prepare/game_archives.hpp"
 #include "presentation/boss_app.hpp"
+#include "presentation/env_num.hpp"   // env_int
+#include "presentation/input/actions.hpp"   // init_key_bindings
 #include "presentation/input/gamepad.hpp"
 #include "presentation/level/level_save.hpp"
 #include "presentation/level/level_setup.hpp"   // install_exe_game_data, load_sfx_bank
@@ -79,7 +81,7 @@ public:
         while (true) {
             rc = attract_pass(autoload);
             autoload = false;
-            if (single_ || !opts_.replay.empty() ||
+            if (single_ || stop_after_level_ || !opts_.replay.empty() ||
                 !opts_.record_inputs.empty() || quit_requested_)
                 break;
             carry_ = CarriedState{};
@@ -94,11 +96,9 @@ public:
 private:
     // SDL, the gamepad, the EXE tables, the audio device and the window.
     bool open() {
-        if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-            std::fprintf(stderr, "game: SDL init failed: %s\n", SDL_GetError());
-            return false;
-        }
+        if (!init_sdl_video()) return false;
         gamepad::init_from_options(opts_);
+        init_key_bindings(opts_);
         // Gameplay tables and the AdLib SFX patches come from the user's
         // executable; installed first so the audio backend can pre-render
         // the OPL SFX.  Non-fatal: the level loader reports bad game files
@@ -262,7 +262,7 @@ private:
         if (!quit_requested_ && display_ > 7 && end.rc == 0 && !single_)
             show_win_ending(opts_.game_dir, *audio_, sw_, hd_scale_,
                             rt_.hd_profile, rt_.enhance.smooth_motion,
-                            quit_requested_);
+                            rt_.enhanced, quit_requested_);
         return end.rc;
     }
 
@@ -280,8 +280,11 @@ private:
                 continue;
             }
             // --record-inputs records one level (the file is reopened "w" per
-            // level), level-end sequence included.
-            if (single_ || !opts_.record_inputs.empty()) return SeqStep::stop();
+            // level), level-end sequence included.  OLDUVAI_STOP_AFTER_LEVEL=1
+            // does the same for a measurement: unlike --play-frames it keeps
+            // the ending (a boss victory needs no frame cap to play).
+            if (single_ || stop_after_level_ || !opts_.record_inputs.empty())
+                return SeqStep::stop();
             ++display_;
         }
         return SeqStep::next();
@@ -339,6 +342,9 @@ private:
     const GameOptions& opts_;
     GameOptions rt_;
     const bool single_;   // --play-frames / --play-shot: one level
+    // OLDUVAI_STOP_AFTER_LEVEL=1: one level with its ending, then exit.
+    const bool stop_after_level_ =
+        env_int("OLDUVAI_STOP_AFTER_LEVEL", 0) != 0;
     std::unique_ptr<SdlAudio> audio_;   // rebuilt on a device change
     ScaledWindow sw_;
     Pipeline pipe_{sw_, audio_,

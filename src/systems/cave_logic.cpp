@@ -14,11 +14,12 @@ void enter_cave(SystemsState& state, int cave_index) {
             state.current_screen = 10;
             state.player.x = 10;
             state.player.y = 131;
-            // Screen-9 cave entry: FUN_25b2_020b 0x0837 clears bp-6, routing
-            // the next frame through Sprite_DrawDispatch mode 2 (the fade
-            // pair).  This entry bypasses the cave_warp_freeze path, so raise
-            // the fade signal here.
-            state.player.cave_warp_pending = true;
+            // The EXE cuts here: the 1000-marker warp takes the teleport
+            // branch (FUN_25b2_020b +0x081c -> +0x083e), which skips the
+            // bp-6 = 0 at +0x0837 that arms the fade pair for real caves,
+            // so the hop is a plain blit (+0x05d5).  Enhanced fades it, as
+            // it does the fake cave's 12 <-> 13 exit.
+            state.player.cave_warp_pending = state.enhanced_active;
         } else if (state.current_screen == 18) {
             state.current_screen = 19;
             state.level_complete = true;

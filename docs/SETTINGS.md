@@ -11,7 +11,7 @@ page is the reference for everything it can hold.
 |---|---|
 | Linux, macOS | `~/.config/olduvai/play.json` (`$XDG_CONFIG_HOME` honoured) |
 | Windows | `%APPDATA%\olduvai\play.json` |
-| KNULLI handhelds | `/userdata/system/.config/olduvai/play.json` |
+| KNULLI and PortMaster handhelds | inside the port: `olduvai/conf/olduvai/play.json` |
 
 Precedence, lowest first: engine defaults → `--default-profile` (a launcher's
 device defaults) → `play.json` → `--profile` → command-line flags.
@@ -25,7 +25,13 @@ returns to the defaults.
 | `dos` | The 1991 game, faithful to its quirks (the engine defaults). |
 | `hd` | Enhanced: HD upscaling, widescreen, smooth motion, vector HUD. |
 | `dos-handheld` | `dos`, in the handheld family. |
-| `hd-handheld` | `hd` tuned for 720p / 600p handheld panels (`smooth` ×3, lighter pacing). |
+| `hd-handheld` | `hd` tuned for 720p / 600p handheld panels (`xbrz` ×3, lighter pacing). |
+| `dos-handheld-43` | `dos` filling a 4:3 handheld panel (640×480), in its own family. |
+| `hd-handheld-43` | `hd-handheld` for a 4:3 panel: `xbrz` ×2, filling it at 4:3. |
+| `dos-handheld-x2` | `dos`, in the handheld family for wide panels of 400 to 599 lines. |
+| `hd-handheld-x2` | `hd-handheld` for those panels: `xbrz` ×2, widescreen. Untested on a device of its class. |
+| `dos-handheld-x4` | `dos`, in the handheld family for panels of 800 lines and up. |
+| `hd-handheld-x4` | `hd-handheld` for those panels: `xbrz` ×4 (a 1280×800 panel is exactly 4×). Untested on a device of its class. |
 
 *Options → Style* switches between Classic and Enhanced within the family
 the session started in.
@@ -44,7 +50,7 @@ the session started in.
 | Key | Values |
 |---|---|
 | `enhanced` | `true` / `false` — the Enhanced HD umbrella |
-| `hd_profile` | `native`, `retro`, `smooth`, `eagle`, `xbr`, `mmpx`, `omniscale` (default) |
+| `hd_profile` | `native`, `retro`, `smooth`, `eagle`, `xbrz`, `mmpx`, `omniscale` (default); an old `xbr` reads as `xbrz` |
 | `render_scale` | `2`, `4` |
 | `aspect` | `keep`, `4:3`, `stretch`, `widescreen` |
 | `fullscreen` | `true` / `false` (ALT+ENTER toggles) |
@@ -55,6 +61,18 @@ the session started in.
 | `banner_fx` | `caveman`, `fire`, `rainbow`, `gold`, `pulse` |
 | `smooth_subframes` | `0`-`12` (`0` = auto) — smooth-motion sub-frames per tick |
 | `smooth_vsync` | `auto`, `off` |
+
+What `hd_profile` runs at each `render_scale`. The names describe a look;
+at x3 three of them are the same scaler, and the game says so on the first use.
+
+| `hd_profile` | x2 | x3 | x4 |
+|---|---|---|---|
+| `retro` | nearest | nearest | nearest |
+| `smooth` | Scale2x | Scale3x | Scale2x, two passes |
+| `eagle` | Eagle | Scale3x (Eagle has no 3x form) | Eagle, two passes |
+| `xbrz` | xBRZ | xBRZ | xBRZ |
+| `mmpx` | MMPX | Scale3x (MMPX has no 3x form) | MMPX, two passes |
+| `omniscale` | OmniScale | OmniScale | OmniScale |
 
 **Audio** (the backends and what they need: [AUDIO.md](AUDIO.md))
 
@@ -75,11 +93,28 @@ effects backends together, by the 1991 card's name.
 
 | Key | Values |
 |---|---|
-| `pad_jump`, `pad_attack`, `pad_pause`, `pad_back`, `pad_confirm` | SDL button names by **position**: `a` bottom, `b` right, `x` left, `y` top, `start`, `back`, `leftshoulder`, `rightshoulder` |
+| `pad_jump`, `pad_attack`, `pad_pause`, `pad_back`, `pad_confirm` | one or two SDL button names by **position**, comma-separated (`"b,y"`): `a` bottom, `b` right, `x` left, `y` top, `start`, `back`, `leftshoulder`, `rightshoulder`, `lefttrigger`, `righttrigger`, `leftstick`, `rightstick` |
 | `pad_deadzone` | stick deadzone, default `8000` |
+| `key_left`, `key_right`, `key_up`, `key_down`, `key_attack`, `key_pause`, `key_quit` | one or two SDL key names for play, comma-separated (`"Space,Left Ctrl"`); unset means the defaults below |
 
 *Options → Controls* edits the same keys, with an Xbox and a Nintendo layout.
-Menu confirm follows jump.
+Menu confirm follows jump. In play only pause acts as a menu key, so menu
+back may share a button with attack: the Nintendo layout puts both on B.
+A `pad_back` of `back` saved with the first Nintendo layout reads as B.
+
+The keyboard moves with the arrows or WASD; Space or Left Ctrl attacks, Esc
+pauses and backs out, and Enter, Keypad Enter or Space confirms. In play,
+F6 quicksaves, F9 quickloads, F7 opens cheats (with `--cheats`) and F5 the
+bug report; on a pad, hold Select and press R1, L1, the top or the left
+button. F10 asks "Exit game?" (the same question as *Pause → Exit Game*), and
+it opens on No, so a single key press never ends a run; `key_quit` moves it.
+A quit signal (a window's close button, Alt+F4, Cmd+Q, a handheld's PortMaster
+hotkey Start + Select) leaves at once.
+
+*Gamepad* and *Keyboard* under *Options → Controls* give each action two
+slots: pick one, press Enter, then the button or key. Esc or five seconds
+cancels; Backspace empties a spare slot. The keyboard screen moves play
+only: menus always answer to the keys above.
 
 A row names its button as the connected pad prints it, with where it sits
 (*A - right*): Nintendo letters on a Nintendo-style pad, PlayStation names on

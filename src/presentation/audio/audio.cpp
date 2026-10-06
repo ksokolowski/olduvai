@@ -18,6 +18,11 @@
 #include <mt32emu/c_interface/c_interface.h>
 #endif
 
+#ifdef OLDUVAI_VENDORED_FLUIDSYNTH
+// Vendored FluidSynth — see third_party/fluidsynth/OLDUVAI-VENDORING.md.
+#include <fluidsynth.h>
+#endif
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -38,12 +43,15 @@ namespace {
 // not match and would leak the watch).
 int audio_device_watch(void* ud, SDL_Event* ev);
 
+#if !defined(OLDUVAI_VENDORED_MT32EMU) || !defined(OLDUVAI_VENDORED_FLUIDSYNTH)
+// A synth loaded at run time (built without its vendored copy).
 void* dlopen_first(std::initializer_list<const char*> names) {
     for (const char* name : names) {
         if (void* h = dyn_open(name)) return h;
     }
     return nullptr;
 }
+#endif
 
 // The libmt32emu C API subset (interface version 1+).
 using Mt32CreateFn = void* (*)(void* report_handler, void* instance_data);
@@ -320,6 +328,38 @@ struct FsApi {
     FsDelSettingsFn del_settings = nullptr;
 };
 
+#ifdef OLDUVAI_VENDORED_FLUIDSYNTH
+// Compiled in (third_party/fluidsynth): typed shims over the C API, so the
+// FsApi table the dlopen path fills binds the same way.
+void* fs_new_settings() { return new_fluid_settings(); }
+int fs_setnum(void* s, const char* name, double v) {
+    return fluid_settings_setnum(static_cast<fluid_settings_t*>(s), name, v);
+}
+void* fs_new_synth(void* s) {
+    return new_fluid_synth(static_cast<fluid_settings_t*>(s));
+}
+fluid_synth_t* fs(void* synth) { return static_cast<fluid_synth_t*>(synth); }
+int fs_sfload(void* sy, const char* f, int reset) {
+    return fluid_synth_sfload(fs(sy), f, reset);
+}
+int fs_noteon(void* sy, int c, int k, int v) {
+    return fluid_synth_noteon(fs(sy), c, k, v);
+}
+int fs_noteoff(void* sy, int c, int k) { return fluid_synth_noteoff(fs(sy), c, k); }
+int fs_program(void* sy, int c, int p) {
+    return fluid_synth_program_change(fs(sy), c, p);
+}
+int fs_cc(void* sy, int c, int n, int v) { return fluid_synth_cc(fs(sy), c, n, v); }
+int fs_bend(void* sy, int c, int v) { return fluid_synth_pitch_bend(fs(sy), c, v); }
+int fs_write_s16(void* sy, int len, void* l, int lo, int li, void* r, int ro,
+                 int ri) {
+    return fluid_synth_write_s16(fs(sy), len, l, lo, li, r, ro, ri);
+}
+void fs_del_synth(void* sy) { delete_fluid_synth(fs(sy)); }
+void fs_del_settings(void* s) {
+    delete_fluid_settings(static_cast<fluid_settings_t*>(s));
+}
+#else
 // Bundle-relative first — see the note above load_mt32emu().
 void* load_fluidsynth() {
 #ifdef __APPLE__
@@ -341,6 +381,63 @@ void* load_fluidsynth() {
         if (h != nullptr) return h;
     }
     return nullptr;
+}
+#endif  // OLDUVAI_VENDORED_FLUIDSYNTH
+
+// Bind the FluidSynth entry points; false when the library is missing or
+// lacks one the synth cannot run without.  Vendored build (default):
+// compiled in, no probe.  The dlopen path is for
+// -DOLDUVAI_WITH_FLUIDSYNTH=OFF (system libfluidsynth, $OLDUVAI_FLUIDSYNTH).
+bool bind_fluid_api(FsApi& api, void*& lib) {
+#ifdef OLDUVAI_VENDORED_FLUIDSYNTH
+    lib = nullptr;
+    api.new_settings = &fs_new_settings;
+    api.setnum = &fs_setnum;
+    api.new_synth = &fs_new_synth;
+    api.sfload = &fs_sfload;
+    api.noteon = &fs_noteon;
+    api.noteoff = &fs_noteoff;
+    api.program = &fs_program;
+    api.cc = &fs_cc;
+    api.bend = &fs_bend;
+    api.write_s16 = &fs_write_s16;
+    api.del_synth = &fs_del_synth;
+    api.del_settings = &fs_del_settings;
+    return true;
+#else
+    lib = load_fluidsynth();
+    if (lib == nullptr) return false;
+    api.new_settings = reinterpret_cast<FsNewSettingsFn>(
+        dyn_sym(lib, "new_fluid_settings"));
+    api.setnum = reinterpret_cast<FsSetNumFn>(
+        dyn_sym(lib, "fluid_settings_setnum"));
+    api.new_synth = reinterpret_cast<FsNewSynthFn>(
+        dyn_sym(lib, "new_fluid_synth"));
+    api.sfload = reinterpret_cast<FsSfLoadFn>(
+        dyn_sym(lib, "fluid_synth_sfload"));
+    api.noteon = reinterpret_cast<FsNoteOnFn>(
+        dyn_sym(lib, "fluid_synth_noteon"));
+    api.noteoff = reinterpret_cast<FsNoteOffFn>(
+        dyn_sym(lib, "fluid_synth_noteoff"));
+    api.program = reinterpret_cast<FsProgFn>(
+        dyn_sym(lib, "fluid_synth_program_change"));
+    api.cc = reinterpret_cast<FsCcFn>(dyn_sym(lib, "fluid_synth_cc"));
+    api.bend = reinterpret_cast<FsBendFn>(
+        dyn_sym(lib, "fluid_synth_pitch_bend"));
+    api.write_s16 = reinterpret_cast<FsWriteFn>(
+        dyn_sym(lib, "fluid_synth_write_s16"));
+    api.del_synth = reinterpret_cast<FsDelSynthFn>(
+        dyn_sym(lib, "delete_fluid_synth"));
+    api.del_settings = reinterpret_cast<FsDelSettingsFn>(
+        dyn_sym(lib, "delete_fluid_settings"));
+    if (api.new_settings == nullptr || api.new_synth == nullptr ||
+        api.sfload == nullptr || api.write_s16 == nullptr) {
+        dyn_close(lib);
+        lib = nullptr;
+        return false;
+    }
+    return true;
+#endif
 }
 
 // SoundFont discovery: explicit path -> $OLDUVAI_SOUNDFONT ->
@@ -443,40 +540,11 @@ class FluidSynth final : public PcmMidiSynth {
 public:
     static std::unique_ptr<FluidSynth> create(const std::string& soundfont,
                                               int rate) {
-        void* lib = load_fluidsynth();
-        // Report "no FluidSynth" separately from "no SoundFont".
-        g_fluid_lib_found = (lib != nullptr);
-        if (lib == nullptr) return nullptr;
+        void* lib = nullptr;
         FsApi api;
-        api.new_settings = reinterpret_cast<FsNewSettingsFn>(
-            dyn_sym(lib, "new_fluid_settings"));
-        api.setnum = reinterpret_cast<FsSetNumFn>(
-            dyn_sym(lib, "fluid_settings_setnum"));
-        api.new_synth = reinterpret_cast<FsNewSynthFn>(
-            dyn_sym(lib, "new_fluid_synth"));
-        api.sfload = reinterpret_cast<FsSfLoadFn>(
-            dyn_sym(lib, "fluid_synth_sfload"));
-        api.noteon = reinterpret_cast<FsNoteOnFn>(
-            dyn_sym(lib, "fluid_synth_noteon"));
-        api.noteoff = reinterpret_cast<FsNoteOffFn>(
-            dyn_sym(lib, "fluid_synth_noteoff"));
-        api.program = reinterpret_cast<FsProgFn>(
-            dyn_sym(lib, "fluid_synth_program_change"));
-        api.cc = reinterpret_cast<FsCcFn>(
-            dyn_sym(lib, "fluid_synth_cc"));
-        api.bend = reinterpret_cast<FsBendFn>(
-            dyn_sym(lib, "fluid_synth_pitch_bend"));
-        api.write_s16 = reinterpret_cast<FsWriteFn>(
-            dyn_sym(lib, "fluid_synth_write_s16"));
-        api.del_synth = reinterpret_cast<FsDelSynthFn>(
-            dyn_sym(lib, "delete_fluid_synth"));
-        api.del_settings = reinterpret_cast<FsDelSettingsFn>(
-            dyn_sym(lib, "delete_fluid_settings"));
-        if (api.new_settings == nullptr || api.new_synth == nullptr ||
-            api.sfload == nullptr || api.write_s16 == nullptr) {
-            dyn_close(lib);
-            return nullptr;
-        }
+        // Report "no FluidSynth" separately from "no SoundFont".
+        g_fluid_lib_found = bind_fluid_api(api, lib);
+        if (!g_fluid_lib_found) return nullptr;
         void* settings = api.new_settings();
         if (api.setnum != nullptr) {
             api.setnum(settings, "synth.sample-rate", rate);
@@ -1059,12 +1127,19 @@ void SdlAudio::fade_out_music() {
     }
     constexpr int kSteps = 16;
     const Uint32 step_ms = 1000u * 2u / 18u;   // 2 BIOS ticks ≈ 111ms
+    const float from = music_gain_.load(std::memory_order_relaxed);
+    if (from <= 0.0f) return;   // already silent (set_music_fade)
     for (int s = kSteps - 1; s >= 0; --s) {
-        music_gain_.store(static_cast<float>(s) / kSteps,
+        music_gain_.store(from * static_cast<float>(s) / kSteps,
                           std::memory_order_relaxed);
         SDL_Delay(step_ms);
     }
     music_gain_.store(0.0f, std::memory_order_relaxed);
+}
+
+void SdlAudio::set_music_fade(float gain) {
+    if (!music_available() || host_midi_active_) return;
+    music_gain_.store(std::clamp(gain, 0.0f, 1.0f), std::memory_order_relaxed);
 }
 
 void SdlAudio::stop_music() {
@@ -1184,10 +1259,11 @@ SoundCardAvail probe_sound_cards(const std::string& rom_dir,
         }
         dyn_close(lib);
     }
-    // GM: FluidSynth loads, and a SoundFont is found (not loaded).
+    // GM: FluidSynth binds, and a SoundFont is found (not loaded).
     {
-        void* lib = load_fluidsynth();
-        a.gm = lib != nullptr && !find_soundfont(soundfont).empty();
+        FsApi api;
+        void* lib = nullptr;
+        a.gm = bind_fluid_api(api, lib) && !find_soundfont(soundfont).empty();
         dyn_close(lib);
     }
     // External MIDI: host MIDI compiled in and at least one output port.

@@ -131,22 +131,40 @@ void BossArenaPresenter::present_frame(bool draw_lives, bool do_present) {
     }
 }
 
-std::vector<std::uint8_t> BossArenaPresenter::build_wide_up() {
-    const int hd_scale = surface_.hd_scale();
+// Cached static wide bg: the HUD-clean arena composed wide (pure edge
+// reflection, 0.10 gradient), upscaled once.
+void BossArenaPresenter::ensure_bg_hd() {
     const std::string& profile = *surface_.hd_profile();
+    if (bg_hd_M_ == ws_.M && bg_hd_profile_ == profile) return;
+    FrameBuffer cbg{320, 200};
+    std::copy(arena_bg->begin(), arena_bg->end(), cbg.px.begin());
+    std::vector<std::uint8_t> wide;
+    compose_arena_wide(wide, ws_.M, cbg);
+    bg_hd_ = enhance::upscale_rgba(wide, ws_.w, 200, surface_.hd_scale(),
+                                   profile);
+    bg_hd_M_ = ws_.M;
+    bg_hd_profile_ = profile;
+    ++bg_hd_gen_;
+}
 
-    // 1. Cached static wide bg: the HUD-clean arena composed wide (pure edge
-    // reflection, 0.10 gradient), upscaled once.
-    if (bg_hd_M_ != ws_.M || bg_hd_profile_ != profile) {
-        FrameBuffer cbg{320, 200};
-        std::copy(arena_bg->begin(), arena_bg->end(), cbg.px.begin());
-        std::vector<std::uint8_t> wide;
-        compose_arena_wide(wide, ws_.M, cbg);
-        bg_hd_ = enhance::upscale_rgba(wide, ws_.w, 200, hd_scale, profile);
-        bg_hd_M_ = ws_.M;
-        bg_hd_profile_ = profile;
-    }
+// Sprites over an HD wide buffer at origin_x = M (per-asset HD cache), so
+// edge-crossing sprites overflow into the margins.
+RenderTarget BossArenaPresenter::wide_target(std::uint8_t* px) const {
+    const int hd_scale = surface_.hd_scale();
+    RenderTarget wrt =
+        boss_visual_target(px, ws_.w * hd_scale, 200 * hd_scale, hd_scale,
+                           &cache_, surface_.hd_profile(), ws_.M);
+    apply_smooth(wrt);
+    return wrt;
+}
 
+std::vector<std::uint8_t> BossArenaPresenter::build_wide_up() {
+    return build_wide_hd(draw_fight_sprites);
+}
+
+std::vector<std::uint8_t> BossArenaPresenter::build_wide_hd(
+    const std::function<void(RenderTarget&)>& draw) {
+    ensure_bg_hd();
     // Timed separately: the background copy (2.5 MB at scale 3, the same for
     // every boss) and the sprite blit (varies by boss).
     std::vector<std::uint8_t> out;
@@ -154,31 +172,55 @@ std::vector<std::uint8_t> BossArenaPresenter::build_wide_up() {
         FrameStats::Timer bt(stats, &FrameStats::bg_copy_ms);
         out = bg_hd_;   // copy cached HD wide bg
     }
-    // 2. draw the live fight sprites over the HD buffer at origin_x = M (per-
-    //    asset HD cache) so edge-crossing sprites overflow into the margins.
-    RenderTarget wrt = boss_visual_target(out.data(), ws_.w * hd_scale,
-                                          200 * hd_scale, hd_scale, &cache_,
-                                          surface_.hd_profile(), ws_.M);
-    apply_smooth(wrt);
-    {
-        FrameStats::Timer st(stats, &FrameStats::scene_ms);
-        draw_fight_sprites(wrt);
-    }
+    RenderTarget wrt = wide_target(out.data());
+    FrameStats::Timer st(stats, &FrameStats::scene_ms);
+    draw(wrt);
     return out;
 }
 
+// build_wide_up's frame, kept between presents and repainted only where its
+// blits changed (dirty_frame.hpp).  A rebuilt background or OLDUVAI_DIRTY=0
+// takes the whole frame.
+void BossArenaPresenter::present_wide_hd(
+    const std::function<void(RenderTarget&)>& draw, bool draw_lives,
+    bool do_present) {
+    ensure_bg_hd();
+    const int hd_scale = surface_.hd_scale();
+    const auto target = [this](std::uint8_t* px) { return wide_target(px); };
+    const auto timed = [&](RenderTarget& wrt) {
+        FrameStats::Timer st(stats, &FrameStats::scene_ms);
+        draw(wrt);
+    };
+    const std::vector<DirtyRect>* region = dirty_.compose(
+        {bg_hd_, bg_hd_gen_, ws_.w * hd_scale, 200 * hd_scale}, target, timed,
+        {}, /*allow=*/true, stats);
+    show_wide_up(dirty_.frame(), draw_lives, do_present, /*draw_hud=*/true,
+                 region, this);
+    if (surface_.verifying_dirty())
+        surface_.verify_dirty(
+            dirty_.reference(bg_hd_, target, draw,
+                             [](std::vector<std::uint8_t>&) {}),
+            ws_.w);
+}
+
 void BossArenaPresenter::show_wide_up(const std::vector<std::uint8_t>& up,
-                                      bool draw_lives, bool do_present) {
+                                      bool draw_lives, bool do_present,
+                                      bool draw_hud,
+                                      const std::vector<DirtyRect>* rects,
+                                      const void* owner) {
     FrameStats::Timer pt(stats, &FrameStats::present_ms);
     if (stats != nullptr) stats->note_present();
     SDL_Renderer* const ren = surface_.ren();
     {
         FrameStats::Timer ut(stats, &FrameStats::upload_ms);
-        surface_.upload(up, ws_.w, LevelSurface::Res::kHd);
+        if (owner != nullptr)
+            surface_.upload_dirty(up, ws_.w, rects, owner);
+        else
+            surface_.upload(up, ws_.w, LevelSurface::Res::kHd);
     }
     surface_.show(ws_.wtex());
     // Vector HUD over the center 320 sub-region (mapped into the wide domain).
-    if (surface_.hd_text().ok()) hud_overlay_wide(draw_lives);
+    if (draw_hud && surface_.hd_text().ok()) hud_overlay_wide(draw_lives);
     if (do_present) {
         FrameStats::Timer st(stats, &FrameStats::swap_ms);
         present_output(ren);
@@ -198,22 +240,6 @@ std::vector<std::uint8_t> BossArenaPresenter::compose_wide_native(
         draw(wrt);
     }
     return wide;
-}
-
-void BossArenaPresenter::show_wide_native(const std::vector<std::uint8_t>& wide,
-                                          bool draw_lives, bool do_present,
-                                          bool draw_hud) {
-    if (ws_.wtex() == nullptr) return;
-    const std::vector<std::uint8_t> up =
-        enhance::upscale_rgba(wide, ws_.w, 200, surface_.hd_scale(),
-                              *surface_.hd_profile());
-    if (draw_hud) {
-        show_wide_up(up, draw_lives, do_present);
-        return;
-    }
-    surface_.upload(up, ws_.w, LevelSurface::Res::kHd);
-    surface_.show(ws_.wtex());
-    if (do_present) present_output(surface_.ren());
 }
 
 void BossArenaPresenter::use_wide_logical() {
@@ -247,7 +273,7 @@ void BossArenaPresenter::present_wide(bool draw_lives, bool do_present) {
         present_frame(draw_lives, do_present);
         return;
     }
-    show_wide_up(build_wide_up(), draw_lives, do_present);
+    present_wide_hd(draw_fight_sprites, draw_lives, do_present);
 }
 
 void BossArenaPresenter::present_wide_native(const FrameBuffer& nat,
@@ -295,10 +321,9 @@ void BossArenaPresenter::present_wide_native(const FrameBuffer& nat,
 void BossArenaPresenter::present_any(bool draw_lives, bool do_present) {
     const bool l4_victory = ws_.active && wide_victory && wide_victory();
     if (l4_victory) {
-        // L4 ride-off: the wide buffer as the fight builds it (clean arena,
-        // mirror, 0.10 gradient), then the victory sprites once at origin_x = M
-        // so rider and dino overflow into the margins.  320 fallback if a
-        // resize dropped widescreen.
+        // L4 ride-off: the fight's cached HD arena, then the victory sprites
+        // at HD at origin_x = M so rider and dino overflow into the margins.
+        // 320 fallback if a resize dropped widescreen.
         ws_.rebuild_if_resized();
 
         // Keep the fade source (ws_.last_native) current; by the fade the dino
@@ -314,17 +339,7 @@ void BossArenaPresenter::present_any(bool draw_lives, bool do_present) {
             present_wide_native(vnat, draw_lives, do_present);
             return;
         }
-        FrameBuffer cbg{320, 200};
-        std::copy(arena_bg->begin(), arena_bg->end(), cbg.px.begin());
-        std::vector<std::uint8_t> wide;
-        compose_arena_wide(wide, ws_.M, cbg);
-        RenderTarget wrt = boss_visual_target(wide.data(), ws_.w, 200, 1,
-                                              nullptr, nullptr, ws_.M);
-        draw_victory_sprites(wrt);
-        show_wide_up(enhance::upscale_rgba(wide, ws_.w, 200,
-                                           surface_.hd_scale(),
-                                           *surface_.hd_profile()),
-                     draw_lives, do_present);
+        present_wide_hd(draw_victory_sprites, draw_lives, do_present);
     } else if (ws_.active) {
         present_wide(draw_lives, do_present);
     } else {

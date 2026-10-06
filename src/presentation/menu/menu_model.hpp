@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <optional>
 #include <string>
 
@@ -24,11 +25,15 @@ namespace olduvai::presentation {
 // requires a rebuild, and a malformed edit fails that build.
 MenuModel built_in_menu_model();
 
-// The button rows (pad_*) name each button as `f` prints it: "A - right".
+// The button rows name each button as `f` prints it: "A - right".  A row is
+// a button row when every value is a pad button, not by its key: a later
+// pad_* setting holding anything else keeps its own labels.
 inline void label_pad_rows(MenuModel& m, PadFamily f) {
     for (auto& [id, screen] : m.screens) {
         for (MenuItem& it : screen.items) {
-            if (it.key.rfind("pad_", 0) != 0) continue;
+            if (it.values.empty() ||
+                !std::all_of(it.values.begin(), it.values.end(), is_pad_button))
+                continue;
             it.value_labels.resize(it.values.size());
             for (std::size_t i = 0; i < it.values.size(); ++i)
                 it.value_labels[i] = pad_button_label(it.values[i], f);

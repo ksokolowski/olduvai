@@ -37,10 +37,8 @@ tar xzf "${work}/sdl2.tar.gz" -C "${work}"
 # Drowning our own warnings in them is the actual cost.
 # -w via CFLAGS/CXXFLAGS, NOT -DCMAKE_C_FLAGS: the -D form REPLACES
 # CMAKE_C_FLAGS_INIT, which on some platforms carries load-bearing
-# platform defines.  On Windows that exact mistake disarms FluidSynth's
-# export macro (see build_fluidsynth_windows.cmd for the full autopsy);
-# these two are POSIX-only, but the same lever is used here so the three
-# scripts do not disagree about how to silence a vendored build.
+# platform defines (on Windows it once disarmed a DLL's export macro:
+# archive/DONE-2026-07.md).  POSIX-only here, but the one lever everywhere.
 export CFLAGS="${CFLAGS:-} -w"
 export CXXFLAGS="${CXXFLAGS:-} -w"
 export OBJCFLAGS="${OBJCFLAGS:-} -w"

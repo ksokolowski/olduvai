@@ -106,6 +106,12 @@ struct WindowSpec {
 // resizable.
 ScaledWindow create_scaled_window(const WindowSpec& spec);
 
+// SDL_InitSubSystem(SDL_INIT_VIDEO | extra), with a fallback: when the
+// driver SDL picks by default does not start (a firmware whose SDL keeps its
+// display driver on demand, or a launcher naming one the device lacks), each
+// compiled-in display driver is tried by name.  Logs the driver in use.
+bool init_sdl_video(Uint32 extra_flags = 0);
+
 // Alt+Enter (main or keypad) toggles desktop fullscreen.  Returns true when
 // consumed; the caller must then skip it (so Enter does not also advance).
 bool handle_fullscreen_toggle(const SDL_Event& ev, SDL_Window* win);

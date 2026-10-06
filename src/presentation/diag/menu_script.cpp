@@ -58,8 +58,7 @@ bool drive_menu_script(MenuScript& ms, ReportFormService* form) {
             SDL_PushEvent(&e);
         }
     } else {
-        const SDL_Keycode sym = menu_token_sym(tok);
-        if (sym != SDLK_UNKNOWN) push_menu_key(sym);
+        run_input_token(tok);
     }
     return ms.quit;
 }

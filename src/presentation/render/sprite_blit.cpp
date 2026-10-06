@@ -20,6 +20,19 @@ using formats::Sprite;
 
 namespace {
 
+// Palette entry `color` as opaque RGBA at `dst`; an index past the palette
+// shows magenta.
+inline void put_palette_pixel(std::uint8_t* dst, const std::vector<Rgb>& pal,
+                              int color) {
+    const Rgb c = color < static_cast<int>(pal.size())
+                      ? pal[static_cast<std::size_t>(color)]
+                      : Rgb{255, 0, 255};
+    dst[0] = c.r;
+    dst[1] = c.g;
+    dst[2] = c.b;
+    dst[3] = 255;
+}
+
 // The HD cache's source key for a sprite: everything its RGBA is built from
 // (the planes, the size and format, the 16 palette entries a 4-bit sprite
 // can index, and which builder: plain, flipped, keyed), with the scale,
@@ -84,13 +97,8 @@ std::vector<std::uint8_t> keyed_rgba(const Sprite& s,
             const auto& p = pixels[static_cast<std::size_t>(sy) * w + sx];
             if (!p.opaque) continue;
             if (p.color == static_cast<std::uint8_t>(bg_idx)) continue;
-            const Rgb c = (p.color < pal.size())
-                              ? pal[p.color] : Rgb{255, 0, 255};
-            const std::size_t o = (static_cast<std::size_t>(sy) * w + sx) * 4;
-            rgba[o] = c.r;
-            rgba[o + 1] = c.g;
-            rgba[o + 2] = c.b;
-            rgba[o + 3] = 255;
+            put_palette_pixel(&rgba[(static_cast<std::size_t>(sy) * w + sx) * 4],
+                              pal, p.color);
         }
     return rgba;
 }
@@ -100,23 +108,48 @@ std::vector<std::uint8_t> keyed_rgba(const Sprite& s,
 inline void blit_pixel(RenderTarget& t, int dx, int dy,
                        const std::vector<Rgb>& pal, int color) {
     if (dx < 0 || dx >= t.w || dx < t.clip_x_lo || dx >= t.clip_x_hi) return;
-    const Rgb c = (color < static_cast<int>(pal.size()))
-                      ? pal[static_cast<std::size_t>(color)]
-                      : Rgb{255, 0, 255};
-    const std::size_t off = (static_cast<std::size_t>(dy) * t.w + dx) * 4;
-    t.px[off] = c.r;
-    t.px[off + 1] = c.g;
-    t.px[off + 2] = c.b;
-    t.px[off + 3] = 255;
+    put_palette_pixel(&t.px[(static_cast<std::size_t>(dy) * t.w + dx) * 4], pal,
+                      color);
+}
+
+// Rows [r.y0, r.y1) and columns [r.x0, r.x1) of `hd` placed at (ox, oy),
+// alpha-composited: opaque texels copy, partial ones (the blending scaler's
+// edges) blend over what is already drawn.
+void write_hd_block(RenderTarget& t, const enhance::HdAsset& hd, int ox,
+                    int oy, const DirtyRect& r) {
+    const std::size_t n = static_cast<std::size_t>(r.x1 - r.x0) * 4;
+    for (int dy = r.y0; dy < r.y1; ++dy) {
+        const std::uint8_t* sp =
+            hd.px.data() +
+            (static_cast<std::size_t>(dy - oy) * hd.w + (r.x0 - ox)) * 4;
+        std::uint8_t* dp = t.px + (static_cast<std::size_t>(dy) * t.w + r.x0) * 4;
+        const std::uint8_t* const se = sp + n;
+        for (; sp < se; sp += 4, dp += 4) {
+            const std::uint8_t av = sp[3];
+            if (av == 0) continue;
+            if (av == 255) {
+                dp[0] = sp[0];
+                dp[1] = sp[1];
+                dp[2] = sp[2];
+            } else {
+                const int ia = 255 - av;
+                dp[0] = static_cast<std::uint8_t>((sp[0] * av + dp[0] * ia) / 255);
+                dp[1] = static_cast<std::uint8_t>((sp[1] * av + dp[1] * ia) / 255);
+                dp[2] = static_cast<std::uint8_t>((sp[2] * av + dp[2] * ia) / 255);
+            }
+            dp[3] = 255;
+        }
+    }
 }
 
 // Blit an upscaled block at (fx, fy), clipped and alpha-composited; the HD
 // half shared by both blitters (their differences are settled before `hd`
 // exists).  Rounds at HD, not native: a bubble at native sub-pixels
 // 0/0.33/0.67 moves to distinct HD pixels (0/1.33/2.67 at scale 4).  Integer
-// positions round-trip exactly.
+// positions round-trip exactly.  `key` names the asset for the dirty
+// present's blit record.
 void blit_hd_block(RenderTarget& t, const enhance::HdAsset& hd, float fx,
-                   float fy) {
+                   float fy, std::uint64_t key) {
     const int ox = static_cast<int>(std::lround((fx + t.origin_x) * t.scale));
     const int oy = static_cast<int>(std::lround(fy * t.scale));
     // The column range is fixed for the block (ox is constant): fold the clip
@@ -127,32 +160,18 @@ void blit_hd_block(RenderTarget& t, const enhance::HdAsset& hd, float fx,
     if (ox < 0) sx_lo = -ox;
     if (t.clip_x_lo > 0) sx_lo = std::max(sx_lo, t.clip_x_lo - ox);
     if (sx_lo >= sx_hi) return;
-    for (int sy = 0; sy < hd.h; ++sy) {
-        const int dy = oy + sy;
-        if (dy < 0 || dy >= t.h || dy >= t.clip_y) continue;
-        const std::uint8_t* sp =
-            hd.px.data() + (static_cast<std::size_t>(sy) * hd.w + sx_lo) * 4;
-        std::uint8_t* dp =
-            t.px + (static_cast<std::size_t>(dy) * t.w + ox + sx_lo) * 4;
-        const std::uint8_t* const se =
-            hd.px.data() + (static_cast<std::size_t>(sy) * hd.w + sx_hi) * 4;
-        for (; sp < se; sp += 4, dp += 4) {
-            const std::uint8_t av = sp[3];
-            if (av == 0) continue;
-            if (av == 255) {
-                dp[0] = sp[0];
-                dp[1] = sp[1];
-                dp[2] = sp[2];
-            } else {
-                // Partial-alpha edge from the blending scaler — composite over
-                // the already-drawn opaque background for a smooth silhouette.
-                const int ia = 255 - av;
-                dp[0] = static_cast<std::uint8_t>((sp[0] * av + dp[0] * ia) / 255);
-                dp[1] = static_cast<std::uint8_t>((sp[1] * av + dp[1] * ia) / 255);
-                dp[2] = static_cast<std::uint8_t>((sp[2] * av + dp[2] * ia) / 255);
-            }
-            dp[3] = 255;
-        }
+    const DirtyRect r{ox + sx_lo, std::max(oy, 0), ox + sx_hi,
+                      std::min(oy + hd.h, std::min(t.h, t.clip_y))};
+    if (r.empty()) return;
+    if (t.blits != nullptr) t.blits->push_back({key, ox, oy, r});
+    if (t.record_only) return;
+    if (t.clip == nullptr) {
+        write_hd_block(t, hd, ox, oy, r);
+        return;
+    }
+    for (const DirtyRect& c : *t.clip) {
+        const DirtyRect s = intersect(r, c);
+        if (!s.empty()) write_hd_block(t, hd, ox, oy, s);
     }
 }
 
@@ -190,13 +209,8 @@ std::vector<std::uint8_t> sprite_to_rgba(const Sprite& s,
                 pixels[static_cast<std::size_t>(sy) * w +
                        static_cast<std::size_t>(flip_h ? (w - 1 - sx) : sx)];
             if (!p.opaque) continue;
-            const Rgb c = (p.color < pal.size())
-                              ? pal[p.color] : Rgb{255, 0, 255};
-            const std::size_t o = (static_cast<std::size_t>(sy) * w + sx) * 4;
-            rgba[o] = c.r;
-            rgba[o + 1] = c.g;
-            rgba[o + 2] = c.b;
-            rgba[o + 3] = 255;
+            put_palette_pixel(&rgba[(static_cast<std::size_t>(sy) * w + sx) * 4],
+                              pal, p.color);
         }
     return rgba;
 }
@@ -236,11 +250,12 @@ void blit_sprite(RenderTarget& t, const Sprite& s,
     }
     // HD: sprite_to_rgba() (palette + flip), cache upscale, blit at scaled
     // coordinates.  hd_warm.cpp hashes the same bytes (game_render.hpp).
+    const std::uint64_t key =
+        sprite_source_key(s, pal, flip_h ? kPlainFlipped : kPlain, t, true);
     const auto& hd = t.cache->get_by_source(
-        sprite_source_key(s, pal, flip_h ? kPlainFlipped : kPlain, t, true),
-        [&] { return sprite_to_rgba(s, pal, flip_h); }, w, h, t.scale,
+        key, [&] { return sprite_to_rgba(s, pal, flip_h); }, w, h, t.scale,
         *t.profile);
-    blit_hd_block(t, hd, fx, fy);
+    blit_hd_block(t, hd, fx, fy, key);
 }
 
 void blit_sprite(FrameBuffer& fb, const Sprite& s,
@@ -277,11 +292,11 @@ void blit_sprite_keyed(RenderTarget& t, const Sprite& s,
         }
         return;
     }
+    const std::uint64_t key = sprite_source_key(s, pal, kKeyed, t, false);
     const auto& hd = t.cache->get_by_source(
-        sprite_source_key(s, pal, kKeyed, t, false),
-        [&] { return keyed_rgba(s, pal); }, w, h, t.scale, *t.profile,
+        key, [&] { return keyed_rgba(s, pal); }, w, h, t.scale, *t.profile,
         /*bleed=*/false);
-    blit_hd_block(t, hd, fx, fy);
+    blit_hd_block(t, hd, fx, fy, key);
 }
 
 void blit_sprite_keyed(FrameBuffer& fb, const Sprite& s,

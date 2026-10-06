@@ -3,6 +3,7 @@
 #include "presentation/input/frame_input.hpp"   // gather_frame_inputs
 #include "presentation/game_app.hpp"
 
+#include "presentation/input/actions.hpp"   // key_is, play_key_is
 #include "presentation/input/gamepad.hpp"
 
 #include <SDL.h>
@@ -164,18 +165,23 @@ void play_pending_sfx(systems::SystemsState& st, SdlAudio& audio) {
 }
 
 // One frame's events.  The F5 form, the pause and the cheat picker each own
-// input while open, in that order.  ESC / window close abort to the title
+// input while open, in that order.  True when the program should end: the
+// window close and SIGTERM (SDL_QUIT: a handheld's quit hotkey, a desktop's
+// close button) quit at once, as on every other screen; aborting to the title
+// took a second press to leave.  ESC / the pause key abort to the title
 // through the game-over path (as the reference does); intentional divergence:
 // the EXE quits straight to DOS (INT 9 latches DS:0x87eb -> FUN_210c_0c53 ->
 // INT 21h/4Ch).
-void poll_level_events(SDL_Window* win, ReportFormService& form,
+bool poll_level_events(SDL_Window* win, ReportFormService& form,
                        PauseService& pause, CheatPicker& cheats,
-                       systems::SystemsState& st, bool cheats_allowed,
-                       bool& abort_to_title) {
+                       systems::SystemsState& st, bool cheats_allowed) {
+    const gamepad::ContextScope ctx(
+        form.open() || pause.open() || cheats.open() ? gamepad::Context::kMenu
+                                                     : gamepad::Context::kPlay);
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         if (handle_fullscreen_toggle(ev, win)) continue;
-        if (ev.type == SDL_QUIT) abort_to_title = true;
+        if (ev.type == SDL_QUIT) return true;
         if (form.open()) {
             form.handle_event(ev);
             continue;
@@ -191,13 +197,20 @@ void poll_level_events(SDL_Window* win, ReportFormService& form,
                 std::printf("cheat: granted %s\n", CheatPicker::name(bt));
             }))
             continue;
-        if (sym == SDLK_ESCAPE)
+        if (play_key_is(ev.key.keysym, Action::kPause))
             pause.esc_pressed();   // opens Pause, or aborts to the title
-        else if (sym == SDLK_F5)
+        else if (key_is(sym, Action::kBugReport))
             form.open_form();
-        else if (sym == SDLK_F7 && cheats_allowed)
+        else if (key_is(sym, Action::kCheats) && cheats_allowed)
             cheats.open_picker();
+        else if (play_key_is(ev.key.keysym, Action::kQuicksave))
+            pause.quicksave();
+        else if (play_key_is(ev.key.keysym, Action::kQuickload))
+            pause.quickload();
+        else if (play_key_is(ev.key.keysym, Action::kQuit))
+            pause.quit_shortcut();
     }
+    return false;
 }
 
 // Enhanced widescreen: birds despawn and respawn past the wide edge, not at
@@ -386,13 +399,13 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         const PrevFrame pf(g.state);
 
         // Consume one token before the poll, so this frame's event loop handles
-        // it.
-        if (diag.menu.active() && drive_menu_script(diag.menu, &report_form)) {
+        // it.  Either one can end the program: a script's quit, or SDL_QUIT.
+        if ((diag.menu.active() && drive_menu_script(diag.menu, &report_form)) ||
+            poll_level_events(sw.win, report_form, pause, cheats, g.state,
+                              opts.cheats && !replay.active())) {
             outcome = LevelOutcome::kQuitProgram;
             break;
         }
-        poll_level_events(sw.win, report_form, pause, cheats, g.state,
-                          opts.cheats && !replay.active(), abort_to_title);
 
         // Leaving Options with staged changes opens the confirm dialog.
         pause.track_options_exit();
@@ -488,6 +501,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         if (fluid_bubbles && g.state.secret_flag)
             bubble_hook = make_bubble_hook(g, view.wsp().active());
         fx.step(g);
+        auto spawn_preview = view.first_visit_preview(opts.enhanced);
         // Before the smooth-motion save/restore, so the advance survives.
         // wsp.present draws entities again without advancing; fb itself shows
         // only on non-widescreen paths (pause, transitions, screenshot).
@@ -511,6 +525,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
         const bool smooth_vsync_ran =
             view.tick().present(pf, bubble_hook, fluid_bubbles, frame);
 
+        spawn_preview.reset();
         // Post-render snapshot, matching the reference's frame-top capture.
         if (trace.active()) trace.write(frame, g.state);
 

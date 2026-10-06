@@ -23,7 +23,7 @@ the rest.  No game data ships here, and CI makes sure it stays that way
 
 ## Status
 
-**Release candidate: 0.9.9.**  The whole game plays, on the desktop and on
+**Release candidate: 0.9.10.**  The whole game plays, on the desktop and on
 handhelds: seven levels, three boss fights, caves, secret rooms, the balloon
 flights and the ending.  No known bugs.  Every frame is checked against an
 independent reference implementation, in lockstep, with zero tolerance.
@@ -94,12 +94,13 @@ On the [Releases page](../../releases/latest):
 | macOS (universal) | `olduvai-<version>-macos-universal.dmg` |
 | TrimUI Smart Pro (KNULLI) | `olduvai-<version>-knulli-trimui.zip` |
 | Powkiddy A12 (KNULLI) | `olduvai-<version>-knulli-a12.zip` |
+| Other handhelds (PortMaster) | `olduvai-<version>-portmaster.zip` |
 
 **Handhelds:** Enhanced HD runs on the TrimUI Smart Pro close to full speed.
-Install steps, controls and music: [docs/HANDHELD.md](docs/HANDHELD.md).  A
-**[PortMaster](https://portmaster.games/) port is coming** to reach many more
-devices.  It needs more time than planned, so 0.9.10 or 0.9.11; time will
-tell.
+Install steps, controls and music: [docs/HANDHELD.md](docs/HANDHELD.md).  The
+**[PortMaster](https://portmaster.games/)** package reaches many more devices
+and firmwares, 64-bit and 32-bit ARM alike; it has been played on the TrimUI
+Smart Pro and the Powkiddy A12 (KNULLI) and on a 640x480 R36S clone (ArkOS).
 
 The binaries are not code-signed yet (see [the first funding
 goal](#supporting-the-project)):
@@ -175,6 +176,16 @@ Olduvai stands on [SDL2](https://libsdl.org),
 [munt / libmt32emu](https://github.com/munt/munt),
 [FluidSynth](https://www.fluidsynth.org) and
 [stb](https://github.com/nothings/stb).  Thanks to their authors too.
+
+## Author and upstream
+
+Olduvai is written and maintained by Krzysztof Sokołowski
+([@ksokolowski](https://github.com/ksokolowski)), who holds the copyright.
+This repository is the upstream: the source, every release and each package
+(the AppImage, the macOS disk image, the Windows zip and the handheld bundles)
+are made and published from here by the author.  A copy under the Olduvai name
+that does not point back to this repository is not the author's; the name and
+marks are covered in [LEGAL.md](LEGAL.md).
 
 ## Legal
 

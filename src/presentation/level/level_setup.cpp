@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <string>
 
 #include "core/game_tables.hpp"
 #include "core/rng.hpp"
@@ -24,6 +25,7 @@
 #include "prepare/exe_tables.hpp"
 #include "prepare/game_archives.hpp"
 #include "prepare/game_files.hpp"
+#include "presentation/env_num.hpp"   // parse_int
 #include "presentation/diag/debug_overlay.hpp"
 #include "presentation/render/game_render.hpp"
 #include "presentation/level/level_state.hpp"
@@ -449,30 +451,62 @@ void build_surface_screen_assets(const Loaded& g, int screen,
                 st.entities.push_back(e);
 }
 
+namespace {
+
+// A live monster (the set is systems/sprite_ids.hpp's); dead ones with no
+// respawns left stay hidden.
+bool peekable_monster(const core::Entity& e) {
+    return e.active && systems::is_monster(e.obj_type) &&
+           !(e.state == static_cast<int>(core::MonsterState::Dead) &&
+             e.respawns <= 0);
+}
+
+// `m` as it shows at its spawn post (init_x/init_y), walking.
+void place_at_spawn_post(core::Entity& m) {
+    m.x = m.init_x;
+    m.y = m.init_y;
+    m.visible = true;
+    m.state_counter = 0;
+    m.sprite = m.spr_num + (m.walk_offsets.empty() ? 0 : m.walk_offsets[0]);
+}
+
+}  // namespace
+
 // Peek monsters: live shared-machine monsters at their spawn posts
 // (init_x/init_y), where they appear on entry, so the margin predicts them
-// and entry does not pop.  Dead ones (no respawns left) stay hidden.
+// and entry does not pop.
 std::vector<core::Entity> collect_spawn_post_monsters(const Loaded& g,
                                                              int screen) {
-    // The monster set is defined once in systems/sprite_ids.hpp.
     std::vector<core::Entity> out;
     auto sit = g.store.find(screen);
     if (sit == g.store.end()) return out;
     for (const auto& e : sit->second) {
-        if (!e.active || !systems::is_monster(e.obj_type)) continue;
-        if (e.state == static_cast<int>(core::MonsterState::Dead) &&
-            e.respawns <= 0)
-            continue;
+        if (!peekable_monster(e)) continue;
         core::Entity m = e;
-        m.x = m.init_x;
-        m.y = m.init_y;
-        m.visible = true;
-        m.state_counter = 0;
-        m.sprite = m.spr_num +
-                   (m.walk_offsets.empty() ? 0 : m.walk_offsets[0]);
+        place_at_spawn_post(m);
         out.push_back(std::move(m));
     }
     return out;
+}
+
+SpawnPostPreview::SpawnPostPreview(Loaded& g) : g_(g) {
+    auto& es = g_.state.entities;
+    const systems::PlayerState& p = g_.state.player;
+    for (std::size_t i = 0; i < es.size(); ++i) {
+        core::Entity& e = es[i];
+        if (e.visible || !peekable_monster(e) ||
+            e.state != static_cast<int>(core::MonsterState::Reset))
+            continue;
+        core::Entity before = e;
+        if (systems::appear_if_player_level(e, p.x, p.y))
+            saved_.emplace_back(i, std::move(before));
+    }
+}
+
+SpawnPostPreview::~SpawnPostPreview() {
+    auto& es = g_.state.entities;
+    for (auto& [i, e] : saved_)
+        if (i < es.size()) es[i] = std::move(e);
 }
 
 // `out_ra` (optional): the composed screen's render assets, from which
@@ -664,6 +698,20 @@ int reset_level_state(Loaded& g, int internal_level, int start_screen) {
         const int last = static_cast<int>(g.tiles.screens.size()) - 1;
         entry_screen = last >= 0 ? std::min(start_screen, last) : 0;
         if (entry_screen > 0) g.state.get_ready_counter = 0;
+        // OLDUVAI_START_XY=x,y (debug): the player's position on that screen,
+        // for reaching a spot no replay from the level start reaches cheaply
+        // (the L7 hole and spring).
+        if (const char* xy = std::getenv("OLDUVAI_START_XY")) {
+            const std::string s(xy);
+            const std::size_t comma = s.find(',');
+            int x = 0, y = 0;
+            if (comma != std::string::npos &&
+                parse_int(s.substr(0, comma), x) &&
+                parse_int(s.substr(comma + 1), y)) {
+                g.state.player.x = x;
+                g.state.player.y = y;
+            }
+        }
     }
     return entry_screen;
 }

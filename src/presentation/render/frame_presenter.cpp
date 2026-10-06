@@ -70,7 +70,41 @@ void FramePresenter::present(FrameBuffer& f, bool with_hud, bool do_present) {
     const auto hud =
         with_hud ? surface->hud_layout(*state) : std::nullopt;
     const enhance::EnhancedHudLayout* const hud_p = hud ? &*hud : nullptr;
-    show_canvas(upload(f, hud_p));
+    finish(upload(f, hud_p), hud_p, do_present);
+}
+
+void FramePresenter::present_steady(FrameBuffer& f,
+                                    std::vector<BlitRecord>& blits,
+                                    std::uint64_t bg_key) {
+    FrameStats::Timer pt(stats, &FrameStats::present_ms);
+    if (stats != nullptr) stats->note_present();
+    wsp->sync_output();
+    const auto hud = surface->hud_layout(*state);
+    const enhance::EnhancedHudLayout* const hud_p = hud ? &*hud : nullptr;
+    const int s = surface->hd_scale();
+    // The bars are opaque and drawn last: their boxes are their rects.
+    hud_rects_.clear();
+    if (hud_p != nullptr) {
+        enhance::draw_enhanced_hud_bars(f.canvas(), s, *hud_p);
+        add_hud_rects(hud_rects_, *hud_p, s, 0, f.w, f.h);
+    }
+    const std::vector<DirtyRect>* region =
+        LevelSurface::dirty_on() && steady_diff_.ready(bg_key)
+            ? &steady_diff_.region(blits, hud_rects_)
+            : nullptr;
+    {
+        FrameStats::Timer ut(stats, &FrameStats::upload_ms);
+        surface->upload_dirty(f.px, 320, region, this);
+    }
+    steady_diff_.commit(blits, hud_rects_, bg_key, /*allow=*/true);
+    if (surface->verifying_dirty()) surface->verify_dirty(f.px, 320);
+    finish(false, hud_p, /*do_present=*/true);
+}
+
+void FramePresenter::finish(bool wide_frame,
+                            const enhance::EnhancedHudLayout* hud_p,
+                            bool do_present) {
+    show_canvas(wide_frame);
     draw_text_pass(hud_p);
     // Pause shots: the fully-composited frame (scene + slab + vector text),
     // whenever the overlay is up, classic included (its bitmap menu is in the

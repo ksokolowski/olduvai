@@ -7,9 +7,9 @@
 #   packaging/make_dmg_macos.sh --universal  # arm64+x86_64 fat binary — the
 #                                          # RELEASE shape
 #
-# SDL2 is built from pinned source and linked STATICALLY, so the .app carries
-# no SDL2 dylib and needs no dylibbundler.  The only staged library is
-# FluidSynth, which is dlopen'd (and stays dynamic for LGPL §6 relinking).
+# SDL2 is built from pinned source and linked STATICALLY; libmt32emu and
+# FluidSynth are vendored and compiled in.  So the .app carries no library
+# at all and needs no dylibbundler.
 #
 # Output: ./olduvai-<version>-macos-<arch|universal>.dmg
 set -eu
@@ -40,21 +40,13 @@ else
           -DCMAKE_PREFIX_PATH="${prefix}" >/dev/null
 fi
 
-# General MIDI: build a minimal, dependency-free FluidSynth to bundle.  It is
-# dlopen'd, so neither dylibbundler (LOAD COMMANDS) nor ldd can see it — which
-# is exactly how macOS shipped four releases with no GM support while
-# developers, served by Homebrew, never noticed.  MT-32 needs no equivalent:
-# libmt32emu is vendored and compiled in (third_party/mt32emu).
-sh packaging/build_fluidsynth.sh "${prefix}"
-
 # Fresh link every run: the .app is a build artefact, and a surviving one
 # could carry a stale binary or a stale Contents/libs from an earlier flavour.
 rm -rf "${bdir}/Olduvai.app"
 cmake --build "${bdir}" --target olduvai_app -j
 
-# Stage a COPY — never mutate the build tree's app.  Staging adds FluidSynth
-# and re-signs, and doing that in place would make the build tree's .app
-# differ from what a plain `cmake --build --target olduvai_app` produces.
+# Stage a COPY — never mutate the build tree's app: it must stay what a
+# plain `cmake --build --target olduvai_app` produces.
 out="olduvai-${ver}-macos-${tag}.dmg"
 stage="${bdir}/dmg-stage"
 rm -rf "${stage}" && mkdir -p "${stage}/licenses"
@@ -62,24 +54,11 @@ cp -R "${bdir}/Olduvai.app" "${stage}/"
 APP="${stage}/Olduvai.app"
 bin="${APP}/Contents/MacOS/Olduvai"
 
-# NO dylibbundler.  SDL2 is linked IN (OLDUVAI_STATIC_SDL), libmt32emu is
-# vendored, and FluidSynth is dlopen'd — which dylibbundler could never see
-# anyway, since it walks LOAD COMMANDS.  So nothing is left for it to bundle,
-# and dropping it removes the macOS 26 failure it caused: its install-name
-# rewriting produced a binary that SIGKILLs without re-signing (-ns, rc=137)
-# and HANGS in signature assessment with it (rc=124, 38 minutes before being
-# killed).  Isolated on a pristine bundle with no FluidSynth involved: before
-# dylibbundler the app runs, after it does not.
-#
-# The only thing still staged is FluidSynth, under exactly the unversioned
-# name audio.cpp's load_fluidsynth() asks for.  A versioned copy would ride
-# along as dead weight while a dev machine, served by Homebrew, still looked
-# fine — the silent-success trap that hid the original packaging bug.
-mkdir -p "${APP}/Contents/libs"
-cp "${prefix}/lib/libfluidsynth.dylib" "${APP}/Contents/libs/libfluidsynth.dylib"
-# Adding a file to a bundle invalidates its seal, and an invalid signature
-# makes dlopen SIGKILL rather than fail — turning graceful OPL fallback into a
-# crash.  Re-seal after staging.
+# NO dylibbundler.  SDL2 is linked IN (OLDUVAI_STATIC_SDL), libmt32emu and
+# FluidSynth are vendored, so nothing is left for it to bundle; and its
+# install-name rewriting produced a binary that SIGKILLs on macOS 26 without
+# re-signing (-ns, rc=137) and HANGS in signature assessment with it.
+# Ad-hoc seal of the staged bundle (the release is not notarised).
 codesign --force --deep --sign - "${APP}" >/dev/null 2>&1 || true
 
 # ── hard verification of the bundle ──
@@ -94,45 +73,18 @@ if otool -L "${bin}" | grep -E "^\s" \
     exit 1
 fi
 
-# Assert the ARTIFACT, not the build host.  The Linux lane's equivalent
-# checks `ldconfig -p` — i.e. that the library exists on the machine doing
-# the packaging — and then prints a manifest that always exits 0, so a
-# packaging tool that silently dropped a library would still produce a green
-# release.  Check what is actually in the bundle, under the exact name the
-# loader will ask for, and prove the shipped binary can really load it.
-[ -f "${APP}/Contents/libs/libfluidsynth.dylib" ] \
-    || { echo "make_dmg: bundled libfluidsynth missing" >&2; exit 1; }
-if otool -L "${APP}/Contents/libs/libfluidsynth.dylib" | tail -n +2 \
-     | grep -qE "/(opt/homebrew|usr/local)/"; then
-    echo "make_dmg: bundled libfluidsynth pulls third-party dylibs" >&2
-    otool -L "${APP}/Contents/libs/libfluidsynth.dylib" >&2; exit 1
-fi
-# An invalid signature makes dlopen SIGKILL rather than fail, which would
-# turn the engine's graceful OPL fallback into a crash on a user's machine.
-codesign --verify "${APP}/Contents/libs/libfluidsynth.dylib" 2>/dev/null \
-    || { echo "make_dmg: bundled libfluidsynth signature is invalid — dlopen would SIGKILL" >&2; exit 1; }
-# Strongest available check short of shipping a test binary: actually dlopen
-# it and resolve a symbol the engine binds.  This is the assertion that would
-# have caught every failure mode found while writing this — a library the
-# loader cannot find, cannot open, or is killed for opening.  (An invalid
-# signature SIGKILLs the *caller*, so a crash here is a real failure, not a
-# flake.)  Skipped, loudly, if python3 is absent rather than passing quietly.
-if command -v python3 >/dev/null 2>&1; then
-    python3 -c "import ctypes,sys; ctypes.CDLL(sys.argv[1]).new_fluid_settings" \
-        "${APP}/Contents/libs/libfluidsynth.dylib" \
-        || { echo "make_dmg: bundled libfluidsynth will not dlopen" >&2; exit 1; }
-else
-    echo "make_dmg: NOTE — python3 absent, skipped the dlopen check" >&2
+# Nor any library staged beside it.
+if [ -d "${APP}/Contents/libs" ] && [ -n "$(ls -A "${APP}/Contents/libs")" ]; then
+    echo "make_dmg: the bundle carries libraries in Contents/libs:" >&2
+    ls "${APP}/Contents/libs" >&2; exit 1
 fi
 if otool -L "${bin}" | grep -qE "/(opt/homebrew|usr/local)/|$(pwd)/"; then
     echo "make_dmg: absolute dylib path leaked into the binary:" >&2
     otool -L "${bin}" >&2; exit 1
 fi
 if [ "${tag}" = "universal" ]; then
-    for f in "${bin}" "${APP}/Contents/libs/libfluidsynth.dylib"; do
-        lipo -archs "${f}" | grep -q "x86_64 arm64" \
-            || { echo "make_dmg: ${f} is not universal" >&2; exit 1; }
-    done
+    lipo -archs "${bin}" | grep -q "x86_64 arm64" \
+        || { echo "make_dmg: ${bin} is not universal" >&2; exit 1; }
 fi
 "${bin}" --version >/dev/null \
     || { echo "make_dmg: bundled binary failed to run" >&2; exit 1; }
@@ -148,6 +100,11 @@ cp third_party/nuked_opl3/LICENSE "${stage}/licenses/Nuked-OPL3-LICENSE.txt"
 cp third_party/mt32emu/COPYING.LESSER.txt \
    "${stage}/licenses/libmt32emu-LICENSE.txt"
 cp third_party/rtmidi/LICENSE "${stage}/licenses/RtMidi-LICENSE.txt"
+# FluidSynth (LGPL-2.1) and the gcem headers it builds with (Apache-2.0),
+# vendored and compiled in (third_party/fluidsynth/OLDUVAI-VENDORING.md).
+cp third_party/fluidsynth/LICENSE "${stage}/licenses/FluidSynth-LICENSE.txt"
+cp third_party/fluidsynth/gcem/LICENSE "${stage}/licenses/gcem-LICENSE.txt"
+cp third_party/fluidsynth/gcem/NOTICE.txt "${stage}/licenses/gcem-NOTICE.txt"
 rm -f "${out}"
 hdiutil create -volname "Olduvai" -srcfolder "${stage}" -ov -format UDZO "${out}"
 echo "dmg ready: ${out}"

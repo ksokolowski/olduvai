@@ -7,10 +7,12 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 #include <SDL.h>
 
 #include "presentation/level/level_view_deps.hpp"
+#include "presentation/render/dirty_rects.hpp"   // BlitRecord
 #include "presentation/render/smooth_present.hpp"   // SmoothPacer
 
 namespace olduvai::presentation {
@@ -56,6 +58,7 @@ public:
 
 private:
     void compose_sub(const Bubbles& bubbles);
+    bool steady_ok(const Bubbles& bubbles) const;
     void present_frame(const Bubbles& bubbles);
 
     Loaded& g_;
@@ -68,6 +71,7 @@ private:
     const GameOptions& opts_;
     int hd_scale_;
     SmoothPacer pacer_;
+    std::vector<BlitRecord> blits_;   // fb's, from its last compose
     float player_fx_ = 0.0f;   // the sub-frame's interpolated player
     float player_fy_ = 0.0f;
 };

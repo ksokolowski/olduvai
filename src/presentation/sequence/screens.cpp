@@ -3,6 +3,7 @@
 #include "enhance/parallel_rows.hpp"
 #include "presentation/sequence/screens.hpp"
 
+#include "presentation/input/actions.hpp"       // key_is
 #include "presentation/render/shift_blit.hpp"   // clear_opaque
 
 #include <SDL.h>
@@ -34,26 +35,23 @@ enum class TallyKey { None, Skip, Quit };
 
 // Drain the event queue and classify, edge-triggered (a fresh KEYDOWN only), so
 // a key held from gameplay does not skip the pause (the EXE polls the fire key,
-// FUN_1847_0670).  Quit is a window close only; ESC skips like SPACE/RETURN (a
+// FUN_1847_0670).  Quit is a window close only; Back skips like Confirm (a
 // post-win tally must never abort).
 TallyKey poll_tally_key() {
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         if (ev.type == SDL_QUIT) return TallyKey::Quit;
         if (ev.type == SDL_KEYDOWN) {
-            if (ev.key.keysym.sym == SDLK_ESCAPE) return TallyKey::Skip;
+            const SDL_Keycode sym = ev.key.keysym.sym;
             // Alt+Enter is the fullscreen chord, not a skip: requeue it for the
             // present path's poll and stop draining.
-            if ((ev.key.keysym.sym == SDLK_RETURN ||
-                 ev.key.keysym.sym == SDLK_KP_ENTER) &&
+            if ((sym == SDLK_RETURN || sym == SDLK_KP_ENTER) &&
                 (ev.key.keysym.mod & KMOD_ALT) != 0) {
                 SDL_PushEvent(&ev);
                 break;
             }
-            if (ev.key.keysym.sym == SDLK_SPACE ||
-                ev.key.keysym.sym == SDLK_RETURN) {
+            if (key_is(sym, Action::kBack) || key_is(sym, Action::kConfirm))
                 return TallyKey::Skip;   // fresh key-down → skip
-            }
         }
     }
     return TallyKey::None;
@@ -97,11 +95,17 @@ void step_tally_lives(int& lives_remaining, long& score) {
 // (2.4 MB each way per frame at widescreen scale 3).  Each band owns a
 // disjoint byte range, so the result is identical however rows split.
 void apply_fade(FrameBuffer& dst, const FrameBuffer& src, double t) {
+    fade_rgba(dst.px, src.px, t);
+}
+
+void fade_rgba(std::vector<std::uint8_t>& dst,
+               const std::vector<std::uint8_t>& src, double t) {
     const int mul = static_cast<int>((1.0 - t) * 256.0);
-    const std::size_t n = src.px.size();
+    const std::size_t n = src.size();
+    dst.resize(n);
     if (n == 0) return;
-    std::uint8_t* const d0 = dst.px.data();
-    const std::uint8_t* const s0 = src.px.data();
+    std::uint8_t* const d0 = dst.data();
+    const std::uint8_t* const s0 = src.data();
     // Bands are counted in PIXELS so a band boundary can never fall inside one.
     const int pixels = static_cast<int>(n / 4);
     // Capture by value and re-qualify inside: pointers captured by reference
@@ -122,10 +126,11 @@ void apply_fade(FrameBuffer& dst, const FrameBuffer& src, double t) {
 }
 
 bool fade_to_black(const FrameBuffer& from, const PresentFn& present,
-                   const std::function<void(const FrameBuffer&)>& on_frame) {
+                   const std::function<void(const FrameBuffer&)>& on_frame,
+                   int frames) {
     FrameBuffer work{from.w, from.h};
-    for (int f = 0; f <= kFadeFrames; ++f) {
-        apply_fade(work, from, static_cast<double>(f) / kFadeFrames);
+    for (int f = 0; f <= frames; ++f) {
+        apply_fade(work, from, static_cast<double>(f) / frames);
         if (on_frame) on_frame(work);
         if (!present(work)) return false;
     }
@@ -162,19 +167,10 @@ bool show_loading_screen(const FrameBuffer* from, int display_level,
         if (from != nullptr) from_hd = hd.upscale(from->px);
 
         // Fade an HD RGBA buffer towards black (t=0 unchanged, 1 black) into
-        // `out`.  Same 8-bit multiply as apply_fade, applied per HD pixel.
+        // work_hd.
         std::vector<std::uint8_t> work_hd(loading_hd.size());
         auto fade_hd = [&](const std::vector<std::uint8_t>& src, double t) {
-            const int mul = static_cast<int>((1.0 - t) * 256.0);
-            for (std::size_t i = 0; i < src.size(); i += 4) {
-                work_hd[i] =
-                    static_cast<std::uint8_t>(src[i] * mul >> 8);
-                work_hd[i + 1] =
-                    static_cast<std::uint8_t>(src[i + 1] * mul >> 8);
-                work_hd[i + 2] =
-                    static_cast<std::uint8_t>(src[i + 2] * mul >> 8);
-                work_hd[i + 3] = 255;
-            }
+            fade_rgba(work_hd, src, t);
         };
 
         if (from != nullptr) {              // fade current → black (no text)

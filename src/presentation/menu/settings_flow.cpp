@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "presentation/audio/sound_card.hpp"
+#include "presentation/input/binding_slots.hpp"
 #include "presentation/input/button_layout.hpp"
 
 namespace olduvai::presentation {
@@ -69,14 +70,11 @@ std::vector<StagedChange> fold_button_layout_rows(
         resolve_value) {
     PadBindings now, was;
     bool any = false;
-    for (std::size_t i = 0; i < std::size(kPadKeys); ++i) {
-        const std::string key = kPadKeys[i];
-        std::string* n = binding_for_key(now, key);
-        std::string* w = binding_for_key(was, key);
-        *n = value_of(key);
-        *w = *n;
+    for (const PadSlot& s : kPadSlots) {
+        now.*s.field = value_of(s.key);
+        was.*s.field = now.*s.field;
         for (const auto& ch : sess.changes())
-            if (ch.key == key) { *w = ch.old_value; any = true; }
+            if (ch.key == s.key) { was.*s.field = ch.old_value; any = true; }
     }
     if (!any) return rows;
     const std::string layout_new = button_layout_for(now);
@@ -134,8 +132,7 @@ std::vector<StagedChange> build_display_changes(
                 if (it.key == key) return &it;
         return nullptr;
     };
-    auto resolve_value = [](const MenuItem& it,
-                            const std::string& raw) -> std::string {
+    const auto label_of = [](const MenuItem& it, const std::string& raw) {
         for (std::size_t i = 0; i < it.values.size(); ++i) {
             if (it.values[i] == raw) {
                 if (i < it.value_labels.size()) return it.value_labels[i];
@@ -143,6 +140,19 @@ std::vector<StagedChange> build_display_changes(
             }
         }
         return raw;
+    };
+    // A binding row's slots by their printed names, without the position
+    // ("A - bottom" -> "A"): "A/Y" and "Space/Left Ctrl" fit the dialog.
+    auto resolve_value = [label_of](const MenuItem& it,
+                                    const std::string& raw) -> std::string {
+        if (it.type != "binding") return label_of(it, raw);
+        std::string out;
+        for (const std::string& n : split_binding(raw)) {
+            std::string l = label_of(it, n);
+            l = l.substr(0, l.find(" - "));
+            out += (out.empty() ? "" : "/") + l;
+        }
+        return out;
     };
     std::vector<StagedChange> out;
     for (const auto& ch : sess.changes()) {

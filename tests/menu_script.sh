@@ -236,8 +236,8 @@ if [ ${CFAIL} -eq 0 ]; then rm -rf "${CDIR}"; else echo "  kept: ${CDIR}"; FAIL=
 
 # Button layout (BACKLOG §3.34): pause -> Options -> Controls, Right
 # (Xbox -> Nintendo), back out, Apply, then reopen Controls.  Shots: the
-# picked layout with its four rows moved (000), the dialog folding the pad
-# keys into one "Button layout" row (001), and the reopened screen (002),
+# picked layout (000), the dialog folding the pad keys into one "Button
+# layout" row (001), and the reopened screen (002),
 # which reads the LIVE mapping — so it shows Nintendo only if the Apply took
 # effect without a restart.  play.json gets the four keys that moved.
 BDIR="$(mktemp -d /tmp/menu_layout.XXXXXX)"
@@ -259,12 +259,74 @@ while read -r WANT NAME; do
     fi
 done < "${FIX}/button_layout.sha256"
 for want in '"pad_jump": "b"' '"pad_attack": "a"' '"pad_confirm": "b"' \
-            '"pad_back": "back"'; do
+            '"pad_back": "a"'; do
     grep -qF "${want}" "${BCFG}/olduvai/play.json" 2>/dev/null || {
         echo "menu_script[button_layout]: FAIL — play.json lacks ${want}"; BFAIL=1; }
 done
 rm -rf "${BCFG}"
 if [ ${BFAIL} -eq 0 ]; then rm -rf "${BDIR}"; else echo "  kept: ${BDIR}"; FAIL=1; fi
+
+# check_walk <name> <script> <play.json seed or ""> <want>...: run a walk,
+# compare its shots to fixtures/<name>.sha256, and grep play.json for each
+# <want>.  Keeps the shot dir on failure.
+check_walk() {
+    _name="$1"; _script="$2"; _seed="$3"; shift 3
+    _dir="$(mktemp -d /tmp/menu_${_name}.XXXXXX)"
+    _cfg="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
+    mkdir -p "${_cfg}/olduvai"
+    [ -n "${_seed}" ] && printf '%s' "${_seed}" > "${_cfg}/olduvai/play.json"
+    XDG_CONFIG_HOME="${_cfg}" OLDUVAI_MENU_SCRIPT="${_script}" \
+        OLDUVAI_MENU_SCRIPT_DIR="${_dir}" timeout 60 \
+        "${BINARY}" --play --level 1 --render-scale 1 --window 640x400 \
+        --game-dir "${GAME_DIR}" >/dev/null 2>"${_dir}/run.err"
+    _fail=0
+    while read -r WANT NAME; do
+        [ -n "${NAME}" ] || continue
+        if [ ! -s "${_dir}/${NAME}" ]; then
+            echo "menu_script[${_name}]: FAIL — shot ${NAME} not produced"
+            _fail=1
+        elif [ "$(sha256 "${_dir}/${NAME}")" != "${WANT}" ]; then
+            echo "menu_script[${_name}]: FAIL — ${NAME} differs from golden hash"
+            _fail=1
+        fi
+    done < "${FIX}/${_name}.sha256"
+    for want in "$@"; do
+        grep -qF "${want}" "${_cfg}/olduvai/play.json" 2>/dev/null || {
+            echo "menu_script[${_name}]: FAIL — play.json lacks ${want}"; _fail=1; }
+    done
+    rm -rf "${_cfg}"
+    if [ ${_fail} -eq 0 ]; then rm -rf "${_dir}"; else echo "  kept: ${_dir}"; FAIL=1; fi
+}
+
+# Capture (§3.34 phase 2): Controls -> Gamepad, Jump's alternate slot,
+# Enter, the pad's Y (`pad:y`: sdl2-compat refuses pushed controller
+# events, so the token feeds the capture); then Keyboard, Attack's
+# alternate, K.  Shots: Gamepad after the capture (000), Keyboard (001),
+# the Apply dialog naming both (002), and the reopened Gamepad screen
+# reading the live mapping (003).
+check_walk controls_capture \
+    "esc down down down enter down down down enter down enter right enter pad:y wait shot esc down enter down down down down right enter key:K wait shot esc esc esc shot enter esc wait esc down down down enter down down down enter down enter shot quit" \
+    "" '"pad_jump": "a,y"' '"pad_confirm": "a,y"' '"key_attack": "Space,K"'
+
+# Reset all over a custom mapping: the dialog folds the pad back to its
+# layout and names the keyboard row (000); play.json gets the defaults.
+check_walk controls_reset \
+    "esc down down down enter down down down enter down down down down enter esc esc shot enter wait quit" \
+    '{"pad_jump": "y", "pad_confirm": "y", "key_attack": "K"}' \
+    '"pad_jump": "a"' '"pad_confirm": "a"' '"key_attack": "Space,Left Ctrl"'
+
+# Quicksave in play (§3.34 phase 3): F6, which Select + R1 sends from a
+# pad, writes the save the pause menu's Save Game writes.  Quickload is not
+# walked here: a load re-enters the level and restarts this script.
+QSCFG="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
+XDG_CONFIG_HOME="${QSCFG}" OLDUVAI_MENU_SCRIPT="wait wait key:F6 wait wait quit" \
+    timeout 60 "${BINARY}" --play --level 1 --render-scale 1 --window 640x400 \
+    --game-dir "${GAME_DIR}" >/dev/null 2>&1
+if [ ! -s "${QSCFG}/olduvai/saves/quicksave.sav" ]; then
+    echo "menu_script[quicksave]: FAIL — F6 in play wrote no quicksave"
+    FAIL=1
+fi
+rm -rf "${QSCFG}"
 
 [ ${FAIL} -eq 0 ] && echo "menu_script: PASS"
 exit ${FAIL}

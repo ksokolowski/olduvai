@@ -48,6 +48,8 @@ TickRender::TickRender(LevelSurface& surface, const LevelViewDeps& deps,
 
 void TickRender::compose(const Bubbles& bubbles) {
     auto rt = make_render_target(fb_, surface_, g_.hd_cache);
+    blits_.clear();
+    rt.blits = &blits_;   // for the steady present's diff
     compose_frame(rt, g_.state, g_.render, /*draw_player=*/true, bubbles);
     fx_.draw(rt, g_);
 }
@@ -57,6 +59,8 @@ void TickRender::compose(const Bubbles& bubbles) {
 // first sub-frame.
 void TickRender::compose_sub(const Bubbles& bubbles) {
     auto rt = make_render_target(fb_, surface_, g_.hd_cache);
+    blits_.clear();
+    rt.blits = &blits_;
     rt.advance_state = false;
     rt.use_float_pos = true;   // 1-HD-px player/entities
     rt.player_fx = player_fx_;
@@ -75,14 +79,29 @@ void TickRender::advance_once(BannerPresenter& banners) {
     systems::tick_get_ready(g_.state);
 }
 
-// The widescreen compose, or fb.
+// fb holds only blits over the screen's cached HD background: no secret
+// room (its background is drawn live, bubbles between), no debug overlay, no
+// bitmap GET READY (vector text off).
+bool TickRender::steady_ok(const Bubbles& bubbles) const {
+    return surface_.hd() && surface_.use_hd_text() &&
+           fb_.w == 320 * hd_scale_ && !bubbles &&
+           g_.state.secret_flag == 0 && !opts_.debug_collision &&
+           !opts_.debug_entities && !opts_.debug_perf;
+}
+
+// The widescreen compose, or fb: only what changed when steady_ok.
 void TickRender::present_frame(const Bubbles& bubbles) {
     if (wsp_.present_path()) {
         wsp_.present(bubbles);
-    } else {
-        maybe_dump_steady(fb_.px.data(), fb_.w, fb_.h);
-        fp_.present(fb_);
+        return;
     }
+    maybe_dump_steady(fb_.px.data(), fb_.w, fb_.h);
+    if (steady_ok(bubbles))
+        fp_.present_steady(fb_, blits_,
+                           static_bg_key(g_.state, g_.render, hd_scale_,
+                                         *surface_.hd_profile()));
+    else
+        fp_.present(fb_);
 }
 
 bool TickRender::present(const PrevFrame& pf, const Bubbles& bubbles,

@@ -26,7 +26,7 @@ using olduvai::enhance::upscale_rgba;
 namespace {
 
 // Deterministic 64x48 RGBA covering what the scalers branch on.  A 4-colour
-// alphabet keeps the EQUALITY branching dense — a scale2x/eagle/mmpx/xbr rule
+// alphabet keeps the EQUALITY branching dense — a scale2x/eagle/mmpx/xbrz rule
 // fires only when neighbours compare equal, so hash noise would exercise just
 // the pass-through.  The bands lay flat runs, hard stripes, checker, diagonal
 // edges, a gradient with fractional alpha and isolated dots next to each
@@ -123,10 +123,10 @@ int main() {
         {"eagle:3", 0xc8fd78cc8b2c672full},   // no native 3x → scale3x
         {"eagle:4", 0xdc880b9065f95b4full},
         {"eagle:5", 0x67270a0f00e04342ull},
-        {"xbr:2", 0xdd8e04fb4169bfa5ull},
-        {"xbr:3", 0xc8fd78cc8b2c672full},     // no native 3x → scale3x
-        {"xbr:4", 0x8da922bae5ebe30aull},
-        {"xbr:5", 0x67270a0f00e04342ull},
+        {"xbrz:2", 0x673c832f94b51cbaull},
+        {"xbrz:3", 0x8405125d0a86f3d5ull},    // native: not scale3x
+        {"xbrz:4", 0x94a869f335c0212full},
+        {"xbrz:5", 0x67270a0f00e04342ull},    // only 2 to 4 exist: nearest
         {"mmpx:2", 0x101f5befa0c421baull},
         {"mmpx:3", 0xc8fd78cc8b2c672full},    // no native 3x → scale3x
         {"mmpx:4", 0x6bcf631f031bee98ull},
@@ -134,7 +134,7 @@ int main() {
         {"omniscale:2", 0xc3125eb48cdafd0full},
         {"omniscale:3", 0x464d610e77bb4728ull},
         {"omniscale:4", 0xce33f2477c131cecull},
-        {"omniscale:5", 0x4e5fb3b93782b5b7ull},
+        {"omniscale:5", 0x67270a0f00e04342ull},    // only 2 to 4 exist: nearest
     };
 
     int failures = 0;

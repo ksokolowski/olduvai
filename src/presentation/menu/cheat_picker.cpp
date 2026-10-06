@@ -4,6 +4,7 @@
 
 #include <cstddef>
 
+#include "presentation/input/actions.hpp"        // key_is
 #include "presentation/render/game_render.hpp"   // FrameBuffer
 #include "presentation/render/hud_render.hpp"    // draw_text, text_width
 #include "presentation/render/text_overlay.hpp"  // draw_centered_overlay_row
@@ -27,13 +28,13 @@ std::string CheatPicker::row_label(int i) const {
 bool CheatPicker::handle_key(SDL_Keycode sym,
                              const std::function<void(int)>& grant) {
     if (!open_) return false;
-    if (sym == SDLK_ESCAPE || sym == SDLK_F7) {
+    if (key_is(sym, Action::kBack) || key_is(sym, Action::kCheats)) {
         open_ = false;
-    } else if (sym == SDLK_UP || sym == SDLK_w) {
+    } else if (key_is(sym, Action::kUp)) {
         sel_ = (sel_ + kRows - 1) % kRows;
-    } else if (sym == SDLK_DOWN || sym == SDLK_s) {
+    } else if (key_is(sym, Action::kDown)) {
         sel_ = (sel_ + 1) % kRows;
-    } else if (sym == SDLK_RETURN || sym == SDLK_SPACE) {
+    } else if (key_is(sym, Action::kConfirm)) {
         grant(sel_);
         open_ = false;
     } else if (sym >= SDLK_1 && sym <= SDLK_6) {

@@ -64,10 +64,18 @@ MenuLayout compute_menu_layout(const Menu& menu, int fb_w, int fb_h) {
     // 212 is the house width.  A row wider than that (label + 16 px gap + value
     // at 8 px per glyph, + 34 px pointer and margins) widens the slab, up to
     // the frame less 4 px a side.
+    // Binding rows add a second value column, as wide as its widest entry
+    // and never narrower than "B - bottom", so a capture's "Press..." does
+    // not move the slab.
     int slab_w = 212;
+    int col2_w = 0;
+    for (const MenuRow& r : rows)
+        if (r.value2)
+            col2_w = std::max({col2_w, 80, 8 * static_cast<int>(r.value2->size())});
     for (const MenuRow& r : rows) {
         int w = 34 + 8 * static_cast<int>(r.label.size());
         if (r.value) w += 16 + 8 * static_cast<int>(r.value->size());
+        if (r.value2) w += 16 + col2_w;
         slab_w = std::max(slab_w, w);
     }
     slab_w = std::min(slab_w, fb_w - 8);
@@ -83,9 +91,40 @@ MenuLayout compute_menu_layout(const Menu& menu, int fb_w, int fb_h) {
     // Room for the half-scale bone pointer (13px) + a tight 3px gap.
     L.label_x = L.slab_x + 24;
     L.value_right = L.slab_x + slab_w - 10;
+    L.value_col = col2_w > 0 ? L.value_right - col2_w - 16 : L.value_right;
     L.accent_x = L.slab_x + 7;
     return L;
 }
+
+namespace {
+
+struct ValueCell {
+    const std::string* text;
+    int right;   // native x of its right edge
+    Rgb colour;
+};
+
+// Where a row's values go and in what colour: one, or a binding row's two
+// slots, the selected slot of the selected row in the accent colour.
+std::vector<ValueCell> value_cells(const MenuRow& r, bool sel,
+                                   const MenuLayout& L) {
+    std::vector<ValueCell> out;
+    if (!r.value) return out;
+    const Rgb base = (r.label == "Back" || !r.selectable) ? kHint : kValue;
+    if (!r.value2) {
+        out.push_back({&*r.value, L.value_right, base});
+        return out;
+    }
+    const auto colour = [&](const std::string& t, int slot) {
+        if (sel && r.column == slot) return kAccent;
+        return t == "---" ? kHint : base;
+    };
+    out.push_back({&*r.value, L.value_col, colour(*r.value, 0)});
+    out.push_back({&*r.value2, L.value_right, colour(*r.value2, 1)});
+    return out;
+}
+
+}  // namespace
 
 void draw_menu(FrameBuffer& fb, const Menu& menu,
                const std::vector<formats::Sprite>& charset, bool dim,
@@ -151,11 +190,9 @@ void draw_menu(FrameBuffer& fb, const Menu& menu,
         const bool sel = (i == cursor);
         const int y = L.row0_baseline + i * L.row_h;
         draw_text_rgb(fb, charset, L.label_x, y, r.label, sel ? kSelected : kText);
-        if (r.value) {
-            const Rgb vc = (r.label == "Back" || !r.selectable) ? kHint : kValue;
-            draw_text_rgb(fb, charset, L.value_right - text_width(charset, *r.value),
-                          y, *r.value, vc);
-        }
+        for (const ValueCell& c : value_cells(r, sel, L))
+            draw_text_rgb(fb, charset, c.right - text_width(charset, *c.text),
+                          y, *c.text, c.colour);
     }
 }
 
@@ -274,11 +311,9 @@ void draw_menu_vector(const enhance::Canvas& cv,
         const int by = sy(L.row0_baseline + i * L.row_h);
         if (sel) draw_vector_bone(cv, font, sx(L.label_x), by);
         font.draw(cv, sx(L.label_x), by, r.label, sel ? kSelected : kText);
-        if (r.value) {
-            const bool dimv = (r.label == "Back" || !r.selectable);
-            font.draw(cv, sx(L.value_right) - font.measure(*r.value), by,
-                      *r.value, dimv ? kHint : kValue);
-        }
+        for (const ValueCell& c : value_cells(r, sel, L))
+            font.draw(cv, sx(c.right) - font.measure(*c.text), by, *c.text,
+                      c.colour);
     }
     font.set_cap_px(entry_cap);
 }

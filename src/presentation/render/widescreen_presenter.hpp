@@ -20,6 +20,7 @@
 #include "enhance/enhanced_hud.hpp"
 #include "enhance/hd_asset_cache.hpp"
 #include "enhance/hd_text.hpp"
+#include "presentation/render/dirty_frame.hpp"
 #include "presentation/render/game_render.hpp"
 #include "presentation/render/text_overlay.hpp"
 #include "presentation/window_util.hpp"
@@ -238,8 +239,10 @@ private:
     // Bumped on every peek rebuild; keys the wide static-bg HD cache to the
     // peek content.
     std::uint64_t peek_generation_ = 0;
-    // Reusable per-frame HD wide buffer (fast widescreen present).
-    std::vector<std::uint8_t> frame_hd_;
+    // The fast present's HD wide frame, kept between presents and repainted
+    // only where it changed (dirty_frame.hpp); `hud_rects_` are the bars'.
+    DirtyFrame dirty_;
+    std::vector<DirtyRect> hud_rects_;
 
     // FOND backdrop (320x200 RGBA), built once per level.
     FrameBuffer backdrop_;

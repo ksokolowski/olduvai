@@ -26,6 +26,7 @@ struct MenuLayout {
     int row_h = 0;
     int label_x = 0;           // native x of row labels
     int value_right = 0;       // native x of the right edge for values
+    int value_col = 0;         // binding rows: right edge of the first slot
     int accent_x = 0;          // native x of the cursor accent bar
 };
 

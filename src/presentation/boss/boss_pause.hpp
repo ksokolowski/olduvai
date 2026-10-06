@@ -3,6 +3,7 @@
 // The boss fight's pause menu and its event poll.
 #pragma once
 
+#include <functional>
 #include <string>
 
 #include <SDL.h>
@@ -65,6 +66,11 @@ public:
         return menu_ok_ && routing_.open_screen(screen);
     }
 
+    // The Quit key: the boss pause, asking "Exit game?" (opens on No).
+    void quit_shortcut() {
+        if (open_screen("pause_boss") && ask_exit_) ask_exit_();
+    }
+
     // An Apply of a pipeline key: the driver adopts reinit_target().
     bool wants_reinit() const { return want_reinit_; }
     const BossReinit& reinit_target() const { return target_; }
@@ -78,6 +84,13 @@ public:
 
 private:
     MenuActionTable actions(BossRunResult& res, bool& running) {
+        ask_exit_ = [this, &res, &running] {
+            confirm_.ask("Exit game?", [&res, &running] {
+                res.quit = true;
+                res.quit_program = true;
+                running = false;
+            });
+        };
         return {
             {"resume", [this] { open_ = false; }},
             {"restart_level", [&res, &running] {
@@ -90,13 +103,7 @@ private:
                     running = false;
                 });
             }},
-            {"quit_desktop", [this, &res, &running] {
-                confirm_.ask("Exit game?", [&res, &running] {
-                    res.quit = true;
-                    res.quit_program = true;
-                    running = false;
-                });
-            }},
+            {"quit_desktop", [this] { ask_exit_(); }},
         };
     }
 
@@ -134,6 +141,7 @@ private:
         return h;
     }
 
+    std::function<void()> ask_exit_;   // set by actions(): the Exit Game question
     const GameOptions* opts_;
     MenuModel model_;
     bool menu_ok_;

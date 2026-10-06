@@ -77,7 +77,8 @@ project's marks. The GPL covers the *code*, not the *name or marks*:
 
 - Copyright (C) 2026 Krzysztof Sokołowski (sole copyright holder; every
   project source file carries the SPDX license tag and this notice).
-- Code: **GPL-3.0-or-later** ([LICENSE](LICENSE)). The license does not grant
+- Code: **GPL-3.0-or-later** ([LICENSE](LICENSE)); the binaries also carry the
+  GPL-3.0-only xBRZ scaler, so they are conveyed under GPL-3.0. The license does not grant
   any rights to the project name, the project marks, or any third-party
   trademark.
 - Bundled and vendored third-party components are listed with their licenses

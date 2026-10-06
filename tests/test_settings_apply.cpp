@@ -36,7 +36,7 @@ int main() {
     REQUIRE(classify_change("aspect", "keep", cur) == ApplyTier::Live);
 
     // hd_profile among same-scale non-native profiles → live.
-    REQUIRE(classify_change("hd_profile", "xbr", cur) == ApplyTier::Live);
+    REQUIRE(classify_change("hd_profile", "xbrz", cur) == ApplyTier::Live);
     REQUIRE(classify_change("hd_profile", "omniscale", cur) == ApplyTier::Live);
 
     // hd_profile crossing to native (hd_scale 2 -> 1) → reinit (window resize).
@@ -158,7 +158,7 @@ int main() {
         rec.mem.clear();
         rec.mem["profile_family"] = "handheld";
         apply_preset(rec, "hd");
-        REQUIRE(has("hd_profile", "smooth"));
+        REQUIRE(has("hd_profile", "xbrz"));
         REQUIRE(has("render_scale", "3"));
         REQUIRE(has("smooth_subframes", "2"));
         REQUIRE(has("smooth_vsync", "off"));
@@ -206,8 +206,8 @@ int main() {
     // A set that does NOT cross the boundary falls back to per-key tiers
     // (same-scale profile swap stays Live).
     const std::vector<std::pair<std::string, std::string>> swap_set = {
-        {"hd_profile", "xbr"}};
-    REQUIRE(classify_change_in_set("hd_profile", "xbr", hd2, swap_set) ==
+        {"hd_profile", "xbrz"}};
+    REQUIRE(classify_change_in_set("hd_profile", "xbrz", hd2, swap_set) ==
             ApplyTier::Live);
     // Empty set degenerates to classify_change exactly.
     REQUIRE(classify_change_in_set("enhanced", "true", classic2, {}) ==

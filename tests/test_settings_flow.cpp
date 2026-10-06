@@ -364,14 +364,14 @@ int main() {
     {
         std::map<std::string, std::string> now = {
             {"pad_jump", "b"}, {"pad_attack", "a"}, {"pad_confirm", "b"},
-            {"pad_back", "back"}, {"pad_pause", "start"}};
+            {"pad_back", "a"}, {"pad_pause", "start"}};
         const auto value_of = [&now](const std::string& k) { return now[k]; };
 
         SettingsSession s;   // Xbox -> Nintendo
         s.stage("pad_jump", "pad_jump", "a", "b");
         s.stage("pad_attack", "pad_attack", "x", "a");
         s.stage("pad_confirm", "pad_confirm", "a", "b");
-        s.stage("pad_back", "pad_back", "b", "back");
+        s.stage("pad_back", "pad_back", "b", "a");
         auto rows = build_display_changes(s, model, value_of);
         CHECK(rows.size() == 1);
         if (rows.size() == 1) {

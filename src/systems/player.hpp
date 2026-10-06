@@ -144,6 +144,9 @@ struct SystemsState {
     bool cave_descent_third_shown = false;
     // GameOptions::enhanced, for render-only cosmetic gates.
     bool enhanced_active = false;
+    // run_tick: an Enhanced animation stopped game time this tick, so the
+    // draw-timed game counters (tick_get_ready) wait with the world.
+    bool time_stopped = false;
     // Enhanced teleport clouds (cave signs).  Departure: clouds shrink at the
     // sign, player hidden, teleport deferred (pending fields hold the
     // destination). Arrival: clouds grow, then the player appears in the EXE's

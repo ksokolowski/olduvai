@@ -34,18 +34,34 @@ void run_frame(SystemsState& state, const FrameInputs& inputs);
 
 // The frame-counter wrap drives the timer and the food-out death: reset when
 // the pre-increment value exceeded 0x3C, a 62-value cycle.  --god refills the
-// timer instead.  // DS:0x985a
+// timer instead.  A tick that time_stops_this_tick holds a wrap already due:
+// it, and the timer tick with it, happen on the first tick that runs.
+// // DS:0x985a
 void wrap_frame_counter(SystemsState& state, bool god);
 
 // Birds despawn and respawn `margin` px further out than the EXE's x < -50 /
 // 355 (margin 0).
 void set_bird_bounds(SystemsState& state, int margin);
 
+// An Enhanced-only animation stops game time: the teleport clouds and the
+// Enhanced cave emerge (Classic's 2-tick emerge stays draw-only).  Their
+// counters tick down with the draw (tick_teleport_fx, tick_cave_emerge), so
+// the world waits and nothing, whatever key an action is bound to, can act
+// underneath them.
+bool enhanced_fx_stops_time(const SystemsState& state);
+
+// What run_tick will decide, for wrap_frame_counter, which the shell runs
+// before it.  Includes the deferred cave-sign teleport run_tick is about to
+// complete into the arrival.
+bool time_stops_this_tick(const SystemsState& state);
+
 // The inputs (flight physics steers from them before run_frame), a deferred
 // cave-sign teleport (between the pre-frame snapshot and the classifier, so
 // the classifier sees the cave->surface edge), the cave-entrance descent,
-// then run_frame.  `paused` (the cheat picker) freezes the world: no
-// teleport, no run_frame; the descent still ticks.
+// then run_frame.  `paused` (the cheat picker) or an Enhanced animation
+// (enhanced_fx_stops_time) freezes the world: no teleport, no run_frame, so
+// the frame counter, the level timer, the monsters and the RNG hold; the
+// descent still ticks.
 void run_tick(SystemsState& state, const FrameInputs& inputs, bool paused);
 
 // --god's refill, then the post-frame steps 6b-8a.

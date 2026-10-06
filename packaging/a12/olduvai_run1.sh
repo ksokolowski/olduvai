@@ -1,24 +1,26 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Krzysztof Sokołowski
-# Runs ON the A12 or the TrimUI, installed at /userdata/system/olduvai_run1.sh
-# (docs/internal/HANDHELD_BENCHMARK.md): ONE measured
+# Runs ON the A12 or the TrimUI (KNULLI, /userdata/system/olduvai_run1.sh) or
+# the R36S (ArkOS, as root) (docs/internal/HANDHELD_BENCHMARK.md): ONE measured
 # run for a SERIES taken with EmulationStation already stopped
-# (/etc/init.d/S31emulationstation stop, once; start it again after the
-# series).  Unlike olduvai_measure.sh it never touches ES, and it refuses to
-# run unless the panel is on and ES is down (knulli-es-swissknife --espid = 0),
+# (KNULLI /etc/init.d/S31emulationstation stop, ArkOS systemctl stop
+# emulationstation, once; start it again after the series).  Unlike
+# olduvai_measure.sh it never touches ES, and it refuses to
+# run unless the panel is on and ES is down (es=0),
 # logging panel and ES state before, every 5 s during, and after the run — a run whose
 # log shows anything but "On/0/es=0" is not a measurement.
 # Owner, 2026-09-17: the first series ran with ES back up and the panel off.
 # usage: run1.sh <bin> <log> "<env assignments>" <olduvai args...>
 BIN=$1; LOG=$2; ENVS=$3; shift 3
-cd /userdata/roms/ports/olduvai || exit 2
-# "On/0/es=0" when the panel is lit and ES is down.  The A12 has DRM
-# connector state and a backlight class; the TrimUI's disp driver reports
-# "unblank" and backlight(N) in one sysfs file instead.
+cd /userdata/roms/ports/olduvai 2>/dev/null || cd /roms/ports/olduvai || exit 2
+# "On/0/es=0" when the panel is lit and ES is down.  The A12 (DPI) and the
+# R36S (DSI) have DRM connector state and a backlight class; the TrimUI's disp
+# driver reports "unblank" and backlight(N) in one sysfs file instead.
 lit() {
-  if [ -e /sys/class/drm/card0-DPI-1/dpms ]; then
-    echo "$(cat /sys/class/drm/card0-DPI-1/dpms)/$(cat /sys/class/backlight/backlight/bl_power)"
+  conn=$(ls -d /sys/class/drm/card0-DPI-1 /sys/class/drm/card0-DSI-1 2>/dev/null | head -1)
+  if [ -n "$conn" ]; then
+    echo "$(cat "$conn/dpms")/$(cat /sys/class/backlight/backlight/bl_power)"
   else
     case "$(cat /sys/devices/virtual/disp/disp/attr/sys 2>/dev/null)" in
       *unblank*"backlight(0)"*) echo "Off/1" ;;
@@ -27,7 +29,12 @@ lit() {
     esac
   fi
 }
-panel() { echo "$(lit)/es=$(knulli-es-swissknife --espid)"; }
+# KNULLI's espid is 0 when ES is down; ArkOS has no swissknife.
+es() {
+  if command -v knulli-es-swissknife >/dev/null; then knulli-es-swissknife --espid
+  else pidof emulationstation || echo 0; fi
+}
+panel() { echo "$(lit)/es=$(es)"; }
 echo "PRE $(panel)" > "$LOG.state"
 case "$(panel)" in On/0/es=0) ;; *) echo "ABORT: not ready $(panel)"; exit 3 ;; esac
 VT=2; while ps -o tty= | grep -q " tty$VT"; do VT=$((VT+1)); done

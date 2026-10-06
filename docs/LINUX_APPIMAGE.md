@@ -34,7 +34,7 @@ A GOG install is auto-discovered, so a GOG copy plays with a bare
 |---|---|
 | Engine + SDL2 (+ transitive deps) | bundled (ldd-driven) |
 | OPL music (vendored Nuked-OPL3) | built in |
-| libfluidsynth (GM music) | bundled (injected, since it is `dlopen`'d) |
+| FluidSynth (GM music) | built in (vendored; needs a SoundFont to sound) |
 | libmt32emu (MT-32 music) | built in (vendored; needs your own ROMs to sound) |
 | HD fonts (Freckle Face, Noto Sans; OFL) | bundled beside the binary |
 | ALSA (`libasound`) | host-provided (it `dlopen`s host plugins) |
@@ -69,20 +69,9 @@ drop `GeneralUser-GS.sf2` in `~/.config/olduvai/soundfonts/`.
 ## Do not test the raw binary against a newer host
 
 `build/appimage/olduvai` is compiled inside the pinned jammy container, so it
-was built against **that** SDL2 and FluidSynth. Running it directly on a newer
-distro links it to the host's much newer copies instead, a combination that
-never ships: the AppImage bundles the libraries it was built against.
-
-Measured on Ubuntu 26.04 (FluidSynth 2.4.8), same MIDI, same SoundFont:
-
-| what was run | GM renders |
-|---|---|
-| container-built binary, bare on the host | **segfaults ~50% of runs** |
-| natively built binary | 8/8 clean |
-| the shipped AppImage (bundled FluidSynth) | clean |
-
-So an intermittent GM crash in `build/appimage/olduvai` is an artefact of the
-test setup. Test the **AppImage**, or build natively.
+was built against **that** SDL2. Running it directly on a newer distro links
+it to the host's SDL2 instead, a combination that never ships: the AppImage
+bundles the one it was built against. Test the **AppImage**, or build natively.
 
 ## Limitation: the glibc floor
 

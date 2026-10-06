@@ -11,6 +11,7 @@
 
 #include "formats/pc1.hpp"
 #include "prepare/game_archives.hpp"
+#include "presentation/input/actions.hpp"
 #include "presentation/input/gamepad.hpp"
 #include "presentation/render/lerp_snapshot.hpp"   // snap_lerp_*
 
@@ -244,12 +245,11 @@ BossInputs read_boss_inputs(const InputReplay& replay, int frame) {
         }
         return in;
     }
-    const Uint8* k = SDL_GetKeyboardState(nullptr);
-    in.left = k[SDL_SCANCODE_LEFT] != 0 || gamepad::left();
-    in.right = k[SDL_SCANCODE_RIGHT] != 0 || gamepad::right();
-    in.jump = k[SDL_SCANCODE_UP] != 0 || gamepad::up();
-    in.fire = k[SDL_SCANCODE_SPACE] != 0 || k[SDL_SCANCODE_LCTRL] != 0 ||
-              gamepad::attack_held();
+    in.left = key_held(Action::kLeft) || gamepad::left();
+    in.right = key_held(Action::kRight) || gamepad::right();
+    in.jump = key_held(Action::kUp) || key_held(Action::kJump) ||
+              gamepad::up();
+    in.fire = key_held(Action::kAttack) || gamepad::attack_held();
     return in;
 }
 

@@ -12,6 +12,7 @@
 #include "config.hpp"                  // Config, load/save_config_file, config_path
 #include "enhance/upscale.hpp"         // is_supported_hd_profile, supported_hd_profiles
 #include "presentation/enhance_flags.hpp"
+#include "presentation/input/button_layout.hpp"   // upgrade_round1_nintendo
 #include "presentation/env_num.hpp"    // env_int — OLDUVAI_FORCE_SMOOTH gate escape
 #include "presentation/render/smooth_config.hpp"  // smooth_* keys + persist refresh
 
@@ -87,6 +88,7 @@ bool validate_choices(PlaySettings& ps, BuildOutcome& oc) {
         return fail(oc,
                     "olduvai: --banner-fx must be caveman|fire|rainbow|gold|"
                     "pulse (got '" + ps.banner_fx + "')\n");
+    ps.hd_profile = olduvai::enhance::canonical_hd_profile(ps.hd_profile);
     if (ps.hd_profile.empty()) {
         ps.hd_profile = "omniscale";
     } else if (!olduvai::enhance::is_supported_hd_profile(ps.hd_profile)) {
@@ -164,12 +166,22 @@ BuildOutcome build_game_options(const CliArgs& args, PlaySettings& ps,
     // jump into that level; 8 = the win ending.  Headless/replay remap 0 -> 1
     // in run_game.
     go.level = args.play_level < 0 ? 0 : args.play_level;
-    go.pad_jump = ps.pad_jump;
-    go.pad_attack = ps.pad_attack;
-    go.pad_pause = ps.pad_pause;
-    go.pad_confirm = ps.pad_confirm;
-    go.pad_back = ps.pad_back;
+    presentation::PadBindings pad{ps.pad_jump, ps.pad_attack, ps.pad_confirm,
+                                  ps.pad_back, ps.pad_pause};
+    presentation::upgrade_round1_nintendo(pad);
+    go.pad_jump = pad.jump;
+    go.pad_attack = pad.attack;
+    go.pad_pause = pad.pause;
+    go.pad_confirm = pad.confirm;
+    go.pad_back = pad.back;
     go.pad_deadzone = ps.pad_deadzone;
+    go.key_left = ps.key_left;
+    go.key_right = ps.key_right;
+    go.key_up = ps.key_up;
+    go.key_down = ps.key_down;
+    go.key_attack = ps.key_attack;
+    go.key_pause = ps.key_pause;
+    go.key_quit = ps.key_quit;
     go.enhanced = ps.enhanced;
     go.enhance = enhance_flags;
     go.hd_profile = ps.hd_profile;

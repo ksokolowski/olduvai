@@ -28,7 +28,8 @@ TEST_CASE("built_in_menu_model: the shipped menus.json yields the expected scree
     for (const auto& [sid, _] : m.screens) ids.insert(sid);
 
     const std::set<std::string> expected = {
-        "main", "options", "audio", "video", "controls", "cheats",
+        "main", "options", "audio", "video", "controls", "controls_pad",
+        "controls_keys", "controls_shortcuts", "cheats",
         "cheat_bonus",
         "pause", "pause_boss", "dev", "bug_report", "quit", "about",
         "audio_advanced"};
@@ -128,7 +129,7 @@ TEST_CASE("menu_model: the button rows are labelled for the pad family") {
     using olduvai::presentation::PadFamily;
     auto m = olduvai::presentation::built_in_menu_model();
     label_pad_rows(m, PadFamily::kNintendo);
-    const auto& items = m.screens.at("controls").items;
+    const auto& items = m.screens.at("controls_pad").items;
     int rows = 0;
     for (const auto& it : items) {
         if (it.key.rfind("pad_", 0) != 0) continue;
@@ -139,6 +140,21 @@ TEST_CASE("menu_model: the button rows are labelled for the pad family") {
     }
     CHECK(rows == 4);
     // Other rows keep their labels.
-    for (const auto& it : items)
+    for (const auto& it : m.screens.at("controls").items)
         if (it.key == "button_layout") CHECK(it.value_labels.at(0) == "Xbox");
+}
+
+TEST_CASE("menu_model: a pad_* row that holds no buttons keeps its labels") {
+    using olduvai::presentation::label_pad_rows;
+    using olduvai::presentation::PadFamily;
+    auto m = olduvai::presentation::built_in_menu_model();
+    auto& items = m.screens.at("controls").items;
+    olduvai::presentation::MenuItem dz;
+    dz.key = "pad_deadzone";
+    dz.values = {"8000", "16000"};
+    dz.value_labels = {"Low", "High"};
+    items.push_back(dz);
+    label_pad_rows(m, PadFamily::kNintendo);
+    CHECK(items.back().value_labels ==
+          std::vector<std::string>{"Low", "High"});
 }

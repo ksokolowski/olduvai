@@ -93,14 +93,13 @@ bool try_complete_sign_teleport(SystemsState& state) {
     return true;
 }
 
-namespace {
-
-// The result walk's three deepest blocks, each over the state and the
-// collision result.
-
 void apply_spring_launch(SystemsState& state,
                          const core::CollisionResult& result) {
     PlayerState& p = state.player;
+    // Enhanced: a player emerging from a cave is frozen, and a spring waits
+    // for the emerge to end (the L7 fake cave's exit door stands on the lava
+    // spring).  Classic has no freeze and launches at once, as the EXE.
+    if (state.enhanced_active && state.cave_emerge_frames > 0) return;
     // Generic trampoline bounce.
     if (result.spring_bounce && p.gravity_flag == 0) {
         p.saved_y_vel = p.y_vel;
@@ -118,6 +117,11 @@ void apply_spring_launch(SystemsState& state,
         state.sfx_spring_pending = true;
     }
 }
+
+namespace {
+
+// The result walk's two deepest blocks, each over the state and the
+// collision result.
 
 void apply_cave_entrance(SystemsState& state,
                          const core::CollisionResult& result) {

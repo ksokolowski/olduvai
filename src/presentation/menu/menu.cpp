@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "presentation/input/binding_slots.hpp"
+
 namespace olduvai::presentation {
 
 namespace {
@@ -23,7 +25,44 @@ void Menu::open(const std::string& screen_id) {
     if (it == model_.screens.end() || it->second.items.empty()) return;
     stack_.clear();
     stack_.emplace_back(screen_id, 0);
+    column_ = 0;
+    capture_key_.clear();
     snap_to_selectable(+1);
+}
+
+// A slot's text: the name's label (the row's value_labels), "---" when
+// empty, "Press..." while it captures.
+std::string Menu::slot_text(const MenuItem& it, int slot) const {
+    if (capturing() && capture_key_ == it.key && column_ == slot &&
+        &it == &selected())
+        return "Press...";
+    const BindingList l = split_binding(bind_.get(it.key));
+    const auto s = static_cast<std::size_t>(slot);
+    if (s >= l.size()) return "---";
+    const auto p = std::find(it.values.begin(), it.values.end(), l[s]);
+    const auto i = static_cast<std::size_t>(p - it.values.begin());
+    return p != it.values.end() && i < it.value_labels.size()
+               ? it.value_labels[i]
+               : l[s];
+}
+
+bool Menu::capturing() const {
+    if (capture_key_.empty()) return false;
+    return !clock_ || capture_deadline_ == 0 ||
+           static_cast<std::int32_t>(clock_() - capture_deadline_) < 0;
+}
+
+bool Menu::finish_capture(const std::string& name) {
+    if (!capturing()) return false;
+    const std::string key = capture_key_;
+    capture_key_.clear();
+    return bind_.set_binding(key, column_, name);
+}
+
+void Menu::clear_alternate() {
+    if (!is_open() || selected().type != "binding") return;
+    bind_.clear_alternate(selected().key);
+    column_ = 0;
 }
 
 std::optional<std::string> Menu::value_str(const MenuItem& it) const {
@@ -44,6 +83,8 @@ std::optional<std::string> Menu::value_str(const MenuItem& it) const {
         return cur;
     }
     if (it.type == "slider") return bind_.get(it.key);
+    // A readout with a key shows a derived value (the Upscaler's "Runs" row).
+    if (it.type == "readout" && !it.key.empty()) return bind_.get(it.key);
     if (it.type == "submenu" || it.type == "action")
         return it.hint.empty() ? std::nullopt : std::optional<std::string>(it.hint);
     if (it.type == "text") {
@@ -59,8 +100,15 @@ std::optional<std::string> Menu::value_str(const MenuItem& it) const {
 
 std::vector<MenuRow> Menu::rows() const {
     std::vector<MenuRow> out;
-    for (const auto& it : items())
-        out.push_back(MenuRow{it.label, value_str(it), selectable(it)});
+    for (const auto& it : items()) {
+        MenuRow r{it.label, value_str(it), selectable(it), std::nullopt, -1};
+        if (it.type == "binding") {
+            r.value = slot_text(it, 0);
+            r.value2 = slot_text(it, 1);
+            if (&it == &selected()) r.column = column_;
+        }
+        out.push_back(std::move(r));
+    }
     return out;
 }
 
@@ -76,6 +124,7 @@ void Menu::snap_to_selectable(int step) {
 
 void Menu::move(int dy) {
     if (!is_open() || dy == 0) return;
+    capture_key_.clear();
     const int step = dy > 0 ? 1 : -1;
     const auto& its = items();
     const int n = static_cast<int>(its.size());
@@ -89,7 +138,10 @@ void Menu::move(int dy) {
 void Menu::adjust(int dx) {
     if (!is_open() || dx == 0) return;
     const MenuItem& it = selected();
-    if (it.type == "toggle") {
+    if (it.type == "binding") {
+        // The alternate slot only once there is a primary to go with it.
+        column_ = dx > 0 && !split_binding(bind_.get(it.key)).empty() ? 1 : 0;
+    } else if (it.type == "toggle") {
         bind_.set(it.key, bind_.get(it.key) == "1" ? "0" : "1");
     } else if (it.type == "choice" ||
                (it.type == "action" && !it.key.empty() && !it.values.empty())) {
@@ -129,6 +181,7 @@ std::string Menu::activate() {
         const auto tgt = model_.screens.find(it.target);
         if (tgt == model_.screens.end() || tgt->second.items.empty()) return {};
         stack_.emplace_back(it.target, 0);
+        column_ = 0;
         snap_to_selectable(+1);
     } else if (it.type == "back") {
         back();
@@ -138,7 +191,12 @@ std::string Menu::activate() {
         // The call site opens the full-canvas text-editor overlay for this
         // key (the row itself cannot host multi-line editing).
         return "__edit_text:" + it.key;
+    } else if (it.type == "binding") {
+        capture_key_ = it.key;
+        capture_deadline_ = 0;
+        return "__capture:" + it.key;
     } else if (it.type == "action") {
+        if (bind_.run_action(it.action)) return it.action;
         auto cb = actions_.find(it.action);
         if (cb != actions_.end() && cb->second) cb->second();
         return it.action;
@@ -148,6 +206,8 @@ std::string Menu::activate() {
 
 void Menu::back() {
     if (!is_open()) return;
+    capture_key_.clear();
+    column_ = 0;
     if (stack_.size() > 1) stack_.pop_back();
     else close();
 }

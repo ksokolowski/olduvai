@@ -119,8 +119,7 @@ sudo apt install cmake g++ make libsdl2-dev libasound2-dev   # Debian/Ubuntu
 cmake --preset release && cmake --build --preset release
 ```
 
-Portable AppImage (bundles SDL2 + FluidSynth; needs ImageMagick for the
-icon):
+Portable AppImage (bundles SDL2; needs ImageMagick for the icon):
 
 ```sh
 packaging/build_appimage_linux.sh      # → ./olduvai-x86_64.AppImage
@@ -178,8 +177,8 @@ Static CRT (`/MT`) means no VC++ redistributable; `SDL2.dll` is copied
 beside the exe automatically and ships in the zip.
 
 On macOS the dmg links **SDL2 statically** from pinned source, so the `.app`
-carries no SDL2 dylib and needs no `dylibbundler`.  The only bundled library
-is FluidSynth, which is `dlopen`'d and stays dynamic for LGPL §6 relinking.
+carries no library at all (libmt32emu and FluidSynth are compiled in) and
+needs no `dylibbundler`.
 
 Portable zip (either toolchain):
 
@@ -191,8 +190,8 @@ sh packaging/package_windows.sh        # → olduvai-<version>-windows-x86_64.zi
 
 OPL/AdLib FM music and sound effects are **built in** (vendored Nuked-OPL3,
 the authentic 1991 sound, no external dependency), as is MT-32 emulation
-(vendored libmt32emu; supply your own Roland ROMs). General MIDI
-(FluidSynth) is loaded at runtime when installed. On Linux,
+(vendored libmt32emu; supply your own Roland ROMs) and General MIDI
+(vendored FluidSynth; supply a SoundFont). On Linux,
 `apt install scummvm-data` provides a Roland Sound Canvas SoundFont that is
 auto-selected for the most faithful GM sound. The full music-device ×
 SFX-backend matrix is in [`AUDIO.md`](AUDIO.md).

@@ -71,6 +71,17 @@ public:
     // dialog.
     void track_options_exit();
 
+    // The play shortcuts (F6 / F9, Select + R1 / L1): the pause menu's Save
+    // Game and Load Game without opening it.  A save rings the bonus ding,
+    // the one confirmation it has; a load answers through verdict().
+    void quicksave();
+    void quickload();
+
+    // The Quit key (F10 by default): the pause overlay, with the same "Exit
+    // game?" question Pause -> Exit Game asks.  It opens on No, so no single key
+    // press ends a run.  Without menus.json there is no dialog to show: nothing.
+    void quit_shortcut();
+
     // This frame's verdict, in this order: quit / restart / load / warp /
     // reinit / abort.  kFroze: the overlay is up; the caller presents the
     // paused frame (FramePresenter::present_paused) and skips the tick.

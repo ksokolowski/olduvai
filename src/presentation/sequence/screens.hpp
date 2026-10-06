@@ -62,12 +62,16 @@ constexpr int kFadeFrames = 18;
 
 // Multiply the frame towards black (t = 0 → unchanged, 1 → black).
 void apply_fade(FrameBuffer& dst, const FrameBuffer& src, double t);
+// The same over any RGBA buffer (an HD frame); `dst` takes src's size.
+void fade_rgba(std::vector<std::uint8_t>& dst,
+               const std::vector<std::uint8_t>& src, double t);
 
-// Fade `from` to black over kFadeFrames + 1 frames (the last fully black).
+// Fade `from` to black over `frames` + 1 frames (the last fully black).
 // `on_frame` sees each frame before it is presented.  Returns false when
 // `present` does.
 bool fade_to_black(const FrameBuffer& from, const PresentFn& present,
-                   const std::function<void(const FrameBuffer&)>& on_frame = {});
+                   const std::function<void(const FrameBuffer&)>& on_frame = {},
+                   int frames = kFadeFrames);
 
 // How a text screen draws: the level's bitmap font in its palette, the
 // present, and the vector text when HD (TextScreenHd; default: bitmap).

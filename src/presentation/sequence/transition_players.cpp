@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "core/constants.hpp"
+#include "enhance/incremental_upscale.hpp"   // LazyUpscaler
 #include "enhance/upscale.hpp"
 #include "presentation/image_out.hpp"
 #include "presentation/sequence/screens.hpp"
@@ -532,10 +533,10 @@ void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
     const int lo = std::min(old_s, new_s) - 1;
     const std::vector<std::uint8_t> strip =
         build_pan_strip(ctx, old_s, new_s, new_center);
-    // Upscale the strip once; each frame windows the HD strip.
-    std::vector<std::uint8_t> hd_strip =
-        enhance::upscale_rgba(strip, kStripW, H, ctx.hd_scale,
-                              *ctx.hd_profile);
+    // The HD strip, upscaled band by band as the window reaches it: the
+    // whole strip up front stalled the first frame on a handheld at 4x.
+    enhance::LazyUpscaler hd_strip(strip, kStripW, H, ctx.hd_scale,
+                                   *ctx.hd_profile);
     const int sWh = kStripW * ctx.hd_scale;   // HD strip row width
     const int wWh = WN * ctx.hd_scale, wHh = H * ctx.hd_scale;
     std::vector<std::uint8_t> work(
@@ -562,10 +563,11 @@ void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
             dump_frame("ptrans", -1, seq, nat.data(), WN, H);
         }
         const int x0h = x0 * ctx.hd_scale;   // HD strip x-offset
+        hd_strip.ensure(x0, x0 + WN);
         for (int y = 0; y < wHh; ++y)
             std::copy_n(
-                hd_strip.begin() + (static_cast<std::size_t>(y) * sWh +
-                                    static_cast<std::size_t>(x0h)) * 4,
+                hd_strip.hd().begin() + (static_cast<std::size_t>(y) * sWh +
+                                         static_cast<std::size_t>(x0h)) * 4,
                 static_cast<std::size_t>(wWh) * 4,
                 work.begin() + static_cast<std::size_t>(y) * wWh * 4);
         ctx.wsp->present_transition(work, /*with_hud=*/true,

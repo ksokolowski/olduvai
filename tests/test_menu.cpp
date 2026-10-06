@@ -312,3 +312,85 @@ TEST_CASE("menu: an unknown screen renders as nothing, not as a throw") {
     CHECK(menu.rows().empty());
     CHECK(menu.header().empty());
 }
+
+// ── Binding rows (Options -> Controls, §3.34 phase 2) ───────────────────────
+
+namespace {
+
+MenuModel binding_model() {
+    MenuModel m;
+    MenuScreen s;
+    s.header = "GAMEPAD";
+    s.items = {
+        MenuItem{"j", "binding", "Jump", "", "", "", "pad_jump", {"a", "y"},
+                 0, 0, 0, false, {"A - bottom", "Y - top"}},
+        MenuItem{"k", "binding", "Attack", "", "", "", "pad_attack", {}, 0, 0,
+                 0, false, {}},
+    };
+    m.screens["pad"] = s;
+    return m;
+}
+
+}  // namespace
+
+TEST_CASE("a binding row shows two labelled slots and picks one") {
+    auto model = binding_model();
+    FakeBindings b;
+    b.v["pad_jump"] = "a";
+    b.v["pad_attack"] = "x,Space";
+    Menu menu(model, b);
+    menu.open("pad");
+    auto rows = menu.rows();
+    CHECK(rows[0].value == "A - bottom");
+    CHECK(rows[0].value2 == "---");
+    CHECK(rows[0].column == 0);
+    CHECK(rows[1].value2 == "Space");   // no labels: the name itself
+    CHECK(rows[1].column == -1);        // not selected
+    menu.adjust(+1);
+    CHECK(menu.rows()[0].column == 1);
+    menu.adjust(-1);
+    CHECK(menu.rows()[0].column == 0);
+}
+
+TEST_CASE("a capture shows Press..., lands, and ends") {
+    auto model = binding_model();
+    FakeBindings b;
+    b.v["pad_jump"] = "a";
+    Menu menu(model, b);
+    menu.open("pad");
+    menu.adjust(+1);                                // the alternate slot
+    CHECK(menu.activate() == "__capture:pad_jump");
+    CHECK(menu.capturing());
+    CHECK(menu.capture_key() == "pad_jump");
+    CHECK(menu.rows()[0].value2 == "Press...");
+    CHECK(menu.finish_capture("y"));
+    CHECK_FALSE(menu.capturing());
+    CHECK(b.v["pad_jump"] == "a,y");
+    CHECK(menu.rows()[0].value2 == "Y - top");
+    menu.clear_alternate();
+    CHECK(b.v["pad_jump"] == "a");
+    // Moving away ends a capture without binding anything.
+    menu.activate();
+    menu.move(+1);
+    CHECK_FALSE(menu.capturing());
+    CHECK_FALSE(menu.finish_capture("b"));
+    CHECK(b.v["pad_jump"] == "a");
+}
+
+TEST_CASE("a capture ends at its deadline") {
+    auto model = binding_model();
+    FakeBindings b;
+    b.v["pad_jump"] = "a";
+    Menu menu(model, b);
+    std::uint32_t now = 1000;
+    menu.set_clock([&now] { return now; });
+    menu.open("pad");
+    menu.activate();
+    menu.set_capture_deadline(6000);
+    now = 5999;
+    CHECK(menu.capturing());
+    now = 6000;
+    CHECK_FALSE(menu.capturing());
+    CHECK(menu.rows()[0].value == "A - bottom");
+    CHECK_FALSE(menu.finish_capture("y"));
+}

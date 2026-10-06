@@ -30,6 +30,8 @@ struct PlaySettings {
     std::string pad_jump = "a", pad_attack = "x", pad_pause = "start",
                 pad_confirm = "a", pad_back = "b";
     int pad_deadzone = 8000;
+    std::string key_left, key_right, key_up, key_down, key_attack, key_pause,
+        key_quit;
     std::string music_device = "auto";
     std::string rom_dir;
     // MT-32 vs CM-32L: different machines, different sound.

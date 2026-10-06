@@ -4,6 +4,7 @@
 
 #include "enhance/hd_asset_cache.hpp"
 #include "enhance/upscale.hpp"
+#include "enhance/xbrz_scale.hpp"
 
 #include <filesystem>
 
@@ -33,8 +34,8 @@ std::vector<std::uint8_t> test_card() {
 //   • a hard diagonal step (drives scale2x / eagle corner copies and
 //     omniscale's gradient blend), AND
 //   • an isolated pair of luma-CLOSE colours flanking a center whose
-//     perpendicular neighbours are luma-DISTINCT, which is the exact
-//     pattern that makes xBR emit a 50/50 blend (so xbr != nearest).
+//     perpendicular neighbours are luma-DISTINCT: an edge that an edge-directed
+//     scaler (xBRZ) blends, so it diverges from nearest.
 std::vector<std::uint8_t> rich_card() {
     std::vector<std::uint8_t> px(6 * 6 * 4, 0);
     auto set = [&](int x, int y, int r, int g, int b) {
@@ -50,9 +51,9 @@ std::vector<std::uint8_t> rich_card() {
             const bool on = x > y;
             set(x, y, on ? 240 : 20, on ? 180 : 20, on ? 40 : 100);
         }
-    // Plant an xBR-blend trigger at (2,2): N and W are luma-close to each
-    // other (both ~mid-grey) while E and S keep the distinct base colours,
-    // so xBR blends the NW corner and diverges from a pure nearest replicate.
+    // Plant a blend trigger at (2,2): N and W are luma-close to each other
+    // (both ~mid-grey) while E and S keep the distinct base colours, so an
+    // edge-directed scaler blends the NW corner.
     set(2, 1, 130, 130, 130);   // N
     set(1, 2, 128, 132, 134);   // W (luma-close to N, not exactly equal)
     set(2, 2, 200, 60, 60);     // E-of-center stays distinct
@@ -83,7 +84,7 @@ TEST_CASE("profile_preserves_palette: pins per-scaler alpha treatment (A4)") {
     for (const char* p : {"native", "retro", "smooth", "eagle", "mmpx"})
         CHECK(profile_preserves_palette(p));
     // Blending scalers — anti-aliased alpha edge kept.
-    for (const char* p : {"omniscale", "xbr"})
+    for (const char* p : {"omniscale", "xbrz"})
         CHECK_FALSE(profile_preserves_palette(p));
     // Unknown => false (safe default).
     CHECK_FALSE(profile_preserves_palette("bogus"));
@@ -95,7 +96,7 @@ TEST_CASE("profile_preserves_palette: pins per-scaler alpha treatment (A4)") {
     // into a gate failure instead of an eyeball catch.
     const std::vector<std::string> preserving = {"native", "retro", "smooth",
                                                  "eagle", "mmpx"};
-    const std::vector<std::string> blending = {"omniscale", "xbr"};
+    const std::vector<std::string> blending = {"omniscale", "xbrz"};
     for (const auto& p : supported_hd_profiles()) {
         const bool in_preserving =
             std::find(preserving.begin(), preserving.end(), p) !=
@@ -166,17 +167,97 @@ TEST_CASE("upscale_rgba: eagle x4 sizes via chained eagle_2x") {
     REQUIRE(up.size() == 16u * 16u * 4u);
 }
 
-TEST_CASE("upscale_rgba: xbr x2 sizes and blends the diagonal") {
+TEST_CASE("upscale_rgba: xbrz x2 sizes and blends the diagonal") {
     const auto px = test_card();
-    const auto up = olduvai::enhance::upscale_rgba(px, 4, 4, 2, "xbr");
+    const auto up = olduvai::enhance::upscale_rgba(px, 4, 4, 2, "xbrz");
     REQUIRE(up.size() == 8u * 8u * 4u);
     CHECK(up != nearest(px, 4, 4, 2));  // blended ramp, not replication
 }
 
-TEST_CASE("upscale_rgba: xbr x4 sizes via chained xbr_2x") {
+TEST_CASE("upscale_rgba: xbrz has a native form at x2, x3 and x4") {
     const auto px = test_card();
-    const auto up = olduvai::enhance::upscale_rgba(px, 4, 4, 4, "xbr");
-    REQUIRE(up.size() == 16u * 16u * 4u);
+    for (int s : {2, 3, 4}) {
+        CAPTURE(s);
+        const auto up = olduvai::enhance::upscale_rgba(px, 4, 4, s, "xbrz");
+        REQUIRE(up.size() == std::size_t(4 * s) * (4 * s) * 4u);
+    }
+    // not Scale3x at x3, and not two passes at x4
+    CHECK(olduvai::enhance::upscale_rgba(px, 4, 4, 3, "xbrz") !=
+          olduvai::enhance::upscale_rgba(px, 4, 4, 3, "smooth"));
+}
+
+TEST_CASE("upscale_rgba: xbrz leaves an opaque frame opaque to its border, and a clear region clear") {
+    // 6x6: opaque grey left half, fully transparent right half whose RGB is
+    // loud (the bleed a sprite carries) and must not reach the output.
+    std::vector<std::uint8_t> px(6 * 6 * 4);
+    for (int y = 0; y < 6; ++y)
+        for (int x = 0; x < 6; ++x) {
+            const std::size_t i = std::size_t(y * 6 + x) * 4;
+            const bool left = x < 3;
+            px[i] = left ? 90 : 255;
+            px[i + 1] = left ? 90 : 0;
+            px[i + 2] = left ? 90 : 255;
+            px[i + 3] = left ? 255 : 0;
+        }
+    const auto up = olduvai::enhance::upscale_rgba(px, 6, 6, 4, "xbrz");
+    for (int y = 0; y < 24; ++y)
+        for (int x = 0; x < 24; ++x) {
+            const std::size_t i = std::size_t(y * 24 + x) * 4;
+            if (x < 8) {             // the opaque side, borders included
+                CHECK(up[i] == 90);
+                CHECK(up[i + 3] == 255);
+            } else if (x >= 16) {    // the transparent side, borders included
+                CHECK(up[i + 3] == 0);
+            }
+        }
+}
+
+TEST_CASE("upscale_rgba: xbrz on an opaque image keeps every output pixel opaque") {
+    const auto px = rich_card();                  // 6x6, all alpha 255
+    for (int s : {2, 3, 4}) {
+        CAPTURE(s);
+        const auto up = olduvai::enhance::upscale_rgba(px, 6, 6, s, "xbrz");
+        for (std::size_t i = 3; i < up.size(); i += 4) REQUIRE(up[i] == 255);
+    }
+}
+
+TEST_CASE("xbrz: the alpha-table distance path and upstream's give the same pixels") {
+    // Random images with opaque, transparent and partly transparent pixels, and
+    // runs of equal colour so the edge rules fire: the two paths must agree to
+    // the byte at every factor, and the platform default must be one of them.
+    std::uint32_t seed = 12345;
+    const auto next = [&seed] { seed = seed * 1664525u + 1013904223u; return seed >> 8; };
+    for (int round = 0; round < 60; ++round) {
+        const int w = 1 + int(next() % 40), h = 1 + int(next() % 30);
+        const int colours = 2 + int(next() % 5);
+        std::vector<std::uint8_t> pal(std::size_t(colours) * 3);
+        for (auto& c : pal) c = std::uint8_t(next());
+        std::vector<std::uint8_t> px(std::size_t(w) * h * 4);
+        for (std::size_t i = 0; i < std::size_t(w) * h; ++i) {
+            const std::size_t c = (next() >> 3) % colours;
+            for (int k = 0; k < 3; ++k) px[i * 4 + k] = pal[c * 3 + k];
+            const unsigned a = next() % 8;
+            px[i * 4 + 3] = a == 0 ? 0 : a == 1 ? std::uint8_t(next()) : 255;
+        }
+        for (int s : {2, 3, 4}) {
+            CAPTURE(round);
+            CAPTURE(s);
+            using olduvai::enhance::XbrzDistance;
+            using olduvai::enhance::xbrz_scale_with;
+            const auto ref = xbrz_scale_with(px, w, h, s, XbrzDistance::Reference);
+            REQUIRE(xbrz_scale_with(px, w, h, s, XbrzDistance::AlphaTable) == ref);
+            REQUIRE(xbrz_scale_with(px, w, h, s, XbrzDistance::Platform) == ref);
+        }
+    }
+}
+
+TEST_CASE("canonical_hd_profile: the old xbr reads as xbrz, nothing else moves") {
+    using olduvai::enhance::canonical_hd_profile;
+    CHECK(canonical_hd_profile("xbr") == "xbrz");
+    CHECK(canonical_hd_profile("xbrz") == "xbrz");
+    CHECK(canonical_hd_profile("mmpx") == "mmpx");
+    CHECK(canonical_hd_profile("") == "");
+    CHECK_FALSE(olduvai::enhance::is_supported_hd_profile("xbr"));   // only via the alias
 }
 
 TEST_CASE("upscale_rgba: native x4 is identity-by-replication, sized") {
@@ -191,16 +272,42 @@ TEST_CASE("upscale_rgba: implemented profiles are pairwise distinct") {
     const auto retro = olduvai::enhance::upscale_rgba(px, 6, 6, 4, "retro");
     const auto smooth = olduvai::enhance::upscale_rgba(px, 6, 6, 4, "smooth");
     const auto eagle = olduvai::enhance::upscale_rgba(px, 6, 6, 4, "eagle");
-    const auto xbr = olduvai::enhance::upscale_rgba(px, 6, 6, 4, "xbr");
+    const auto xbrz = olduvai::enhance::upscale_rgba(px, 6, 6, 4, "xbrz");
+    const auto mmpx = olduvai::enhance::upscale_rgba(px, 6, 6, 4, "mmpx");
     const auto omni = olduvai::enhance::upscale_rgba(px, 6, 6, 4, "omniscale");
-    CHECK(retro != smooth);
-    CHECK(retro != eagle);
-    CHECK(retro != xbr);
-    CHECK(retro != omni);
-    CHECK(smooth != xbr);
-    CHECK(smooth != omni);
-    CHECK(eagle != xbr);
-    CHECK(xbr != omni);
+    const std::vector<std::uint8_t>* const all[] = {&retro, &smooth, &eagle,
+                                                    &xbrz, &mmpx, &omni};
+    for (std::size_t i = 0; i < std::size(all); ++i)
+        for (std::size_t j = i + 1; j < std::size(all); ++j) {
+            CAPTURE(i);
+            CAPTURE(j);
+            CHECK(*all[i] != *all[j]);
+        }
+}
+
+TEST_CASE("describe_hd_scaler says what upscale_rgba runs, x2 to x4") {
+    using olduvai::enhance::describe_hd_scaler;
+    CHECK(describe_hd_scaler("omniscale", 3) == "OmniScale");
+    CHECK(describe_hd_scaler("smooth", 4) == "Scale2x, two passes");
+    CHECK(describe_hd_scaler("mmpx", 2) == "MMPX");
+    CHECK(describe_hd_scaler("mmpx", 3) == "Scale3x (MMPX has no 3x form)");
+    CHECK(describe_hd_scaler("eagle", 4) == "Eagle, two passes");
+    CHECK(describe_hd_scaler("xbrz", 3) == "xBRZ");
+    CHECK(describe_hd_scaler("xbrz", 4) == "xBRZ");
+    CHECK(describe_hd_scaler("retro", 3) == "nearest");
+    CHECK(describe_hd_scaler("mmpx", 1) == "none");
+}
+
+TEST_CASE("x3: every profile that says Scale3x gives smooth's pixels") {
+    // The description and the dispatch must not drift apart: whoever changes
+    // one of the three fallbacks has to change what the player is told.
+    const auto src = rich_card();
+    const auto want = olduvai::enhance::upscale_rgba(src, 6, 6, 3, "smooth");
+    for (const char* p : {"eagle", "mmpx"}) {
+        CAPTURE(p);
+        CHECK(olduvai::enhance::describe_hd_scaler(p, 3).rfind("Scale3x", 0) == 0);
+        CHECK(olduvai::enhance::upscale_rgba(src, 6, 6, 3, p) == want);
+    }
 }
 
 TEST_CASE("upscale_rgba: unsupported profile throws (no silent fallback)") {
@@ -217,7 +324,7 @@ TEST_CASE("is_supported_hd_profile matches the catalog") {
     CHECK(is_supported_hd_profile("retro"));
     CHECK(is_supported_hd_profile("smooth"));
     CHECK(is_supported_hd_profile("eagle"));
-    CHECK(is_supported_hd_profile("xbr"));
+    CHECK(is_supported_hd_profile("xbrz"));
     CHECK(is_supported_hd_profile("mmpx"));
     CHECK(is_supported_hd_profile("omniscale"));
     CHECK_FALSE(is_supported_hd_profile("painterly"));

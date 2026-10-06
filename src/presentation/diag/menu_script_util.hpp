@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#include "presentation/input/gamepad.hpp"   // feed_capture
+
 namespace olduvai::presentation {
 
 // Split an OLDUVAI_MENU_SCRIPT value into tokens (space/comma/tab/newline
@@ -43,6 +45,7 @@ inline SDL_Keycode menu_token_sym(const std::string& t) {
     if (t == "space") return SDLK_SPACE;
     if (t == "f5")    return SDLK_F5;      // open the bug-report form
     if (t == "f7")    return SDLK_F7;      // open the --cheats picker
+    if (t == "f10")   return SDLK_F10;     // the default Quit key: asks "Exit game?"
     if (t == "bksp")  return SDLK_BACKSPACE;
     if (t == "del")   return SDLK_DELETE;
     if (t == "home")  return SDLK_HOME;
@@ -65,6 +68,22 @@ inline void push_menu_key(SDL_Keycode sym) {
         e.key.keysym.scancode = SDL_GetScancodeFromKey(sym);
         SDL_PushEvent(&e);
     }
+}
+
+// A token that presses something: a plain key, `key:<SDL key name>` (any
+// key, "key:K"), or `pad:<SDL button name>` (a pad press as Options ->
+// Controls captures it: sdl2-compat refuses app-pushed controller events).
+// False for a token that is none of these.
+inline bool run_input_token(const std::string& t) {
+    if (t.rfind("pad:", 0) == 0) {
+        gamepad::feed_capture(t.substr(4));
+        return true;
+    }
+    SDL_Keycode sym = menu_token_sym(t);
+    if (t.rfind("key:", 0) == 0) sym = SDL_GetKeyFromName(t.substr(4).c_str());
+    if (sym == SDLK_UNKNOWN) return false;
+    push_menu_key(sym);
+    return true;
 }
 
 }  // namespace olduvai::presentation

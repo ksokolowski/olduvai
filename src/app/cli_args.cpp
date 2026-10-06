@@ -314,7 +314,9 @@ std::vector<Flag> flag_table(CliArgs& a, PlaySettings& ps,
          setting(ps.enhance_list, ps.cli.enhanced)},
         {"--hd-profile", nullptr, kEnhanced,
          "      --hd-profile <p>    HD upscaler profile: native|retro|smooth|\n"
-         "                          eagle|xbr|mmpx|omniscale (default: omniscale).\n",
+         "                          eagle|xbrz|mmpx|omniscale (default: omniscale).\n"
+         "                          At x3, smooth, eagle and mmpx all run Scale3x;\n"
+         "                          at x4 they run twice.  xbr is now xbrz.\n",
          setting(ps.hd_profile, ps.cli.hd)},
         {"--render-scale", nullptr, kEnhanced,
          "      --render-scale <n>  Integer render scale: 2 or 4 (default: 4).\n",
@@ -339,7 +341,8 @@ std::vector<Flag> flag_table(CliArgs& a, PlaySettings& ps,
          number(a.play_start_screen)},
         {"--profile", nullptr, kConfig,
          "      --profile <name>    Built-in profile: dos|hd (handhelds:\n"
-         "                          dos-handheld|hd-handheld).  Overrides the\n"
+         "                          dos-handheld[-43|-x2|-x4]|\n"
+         "                          hd-handheld[-43|-x2|-x4]).  Overrides the\n"
          "                          saved config (CLI flags still win): dos =\n"
          "                          byte-faithful; hd = full enhanced +\n"
          "                          widescreen peeks (add --aspect 4:3 for the\n"
