@@ -75,9 +75,15 @@ inline SDL_Texture* create_stream_tex(SDL_Renderer* ren, int w, int h) {
 void set_window_icon(SDL_Window* win);
 
 // The output cleared to black, then `tex` over the whole canvas, or over
-// `dst` (the 320 picture pillarboxed on a wide canvas).  The caller presents.
+// `dst` (the 320 picture pillarboxed on a wide canvas), through the output
+// filter (render/output_filter.hpp).  The caller presents.
 void show_texture(SDL_Renderer* ren, SDL_Texture* tex,
                   const SDL_Rect* dst = nullptr);
+
+// The output filter for every later show_texture: "sharp", else nearest.
+void set_output_filter(const std::string& filter);
+// Free the filter's texture on `ren`; call before destroying `ren`.
+void release_output_filter(SDL_Renderer* ren);
 
 // Upload a 320x200 native frame into `tex`, upscaling first when HD is on.
 // Deliberately narrow: sites that upload an already-upscaled buffer, stride

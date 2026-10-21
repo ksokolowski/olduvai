@@ -9,6 +9,8 @@
 #include <cstdlib>
 
 #include "enhance/upscale.hpp"
+#include "presentation/image_out.hpp"   // present_wait_ms
+#include "presentation/pacing.hpp"   // unthrottled
 #include "presentation/render/text_overlay.hpp"
 
 namespace olduvai::presentation {
@@ -57,6 +59,7 @@ void FrameStats::begin_tick() {
     present_ms = 0.0;
     tick_paused = false;
     swap_ms = 0.0;
+    tick_wait0 = present_wait_ms();
     upload_ms = 0.0;
     present_calls = 0;
     ov_clear_ms = 0.0;
@@ -79,9 +82,10 @@ void FrameStats::begin_tick() {
 
 void FrameStats::end_tick() {
     if (!enabled) return;
+    last_tick_end = SDL_GetPerformanceCounter();
     const double work_ms =
-        static_cast<double>(SDL_GetPerformanceCounter() - t0) *
-        perf_ms;
+        static_cast<double>(last_tick_end - t0) * perf_ms;
+    if (!tick_paused) steady_wait_ms += present_wait_ms() - tick_wait0;
     ++frames;
     if (work_ms > worst_ms) {
         worst_ms = work_ms;
@@ -143,14 +147,14 @@ void FrameStats::report(int display_level, const char* phase) const {
             return static_cast<double>(iv[i]);
         };
         double sum = 0.0;
-        for (const float v : iv) sum += v;
+        for (const float v : iv) sum += static_cast<double>(v);
         const double mean = sum / static_cast<double>(n);
         // Slowest 1% and 0.1%, averaged, as rates.
         const auto low_rate = [&](double frac) {
             const std::size_t k =
                 std::max<std::size_t>(1, static_cast<std::size_t>(n * frac));
             double acc = 0.0;
-            for (std::size_t i = n - k; i < n; ++i) acc += iv[i];
+            for (std::size_t i = n - k; i < n; ++i) acc += static_cast<double>(iv[i]);
             const double avg = acc / static_cast<double>(k);
             return avg > 0.0 ? 1000.0 / avg : 0.0;
         };
@@ -181,7 +185,7 @@ void FrameStats::report(int display_level, const char* phase) const {
                  "compose=%.1fms "
                  "| PACING eff_hz=%.2f late_total=%.1fms late_max=%.1fms "
                  "subframes=%.2f paused=%.1fms/%lluticks "
-                 "budget=%.2fms\n",
+                 "budget=%.2fms%s\n",
                  display_level, sep, tag,
                  static_cast<unsigned long long>(frames),
                  static_cast<unsigned long long>(overruns), budget_ms,
@@ -222,7 +226,22 @@ void FrameStats::report(int display_level, const char* phase) const {
                      static_cast<double>(frames),
                  paused_ms,
                  static_cast<unsigned long long>(paused_ticks),
-                 budget_ms);
+                 budget_ms, engine_hz_text().c_str());
+}
+
+// Timedemo only: ticks a second over the frame loop (first tick to last),
+// without the presents' waits and, as eff_hz, without transitions.  An upper
+// bound: a present also waits for the GPU to finish its work.
+std::string FrameStats::engine_hz_text() const {
+    if (!unthrottled() || run_t0 == 0 || last_tick_end <= run_t0 ||
+        frames == 0)
+        return {};
+    const double wall = static_cast<double>(last_tick_end - run_t0) * perf_ms;
+    char buf[48];
+    std::snprintf(buf, sizeof buf, " engine_hz=%.2f",
+                  static_cast<double>(frames) * 1000.0 /
+                      std::max(1.0, wall - paused_ms - steady_wait_ms));
+    return buf;
 }
 
 void wire_overlay_stats(FrameStats& stats, TextOverlay& overlay) {

@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,10 @@
 #include "formats/pc1.hpp"
 #include "presentation/render/dirty_rects.hpp"
 #include "systems/player.hpp"
+
+namespace olduvai::enhance {
+class LazyUpscaler;
+}
 
 namespace olduvai::presentation {
 
@@ -237,6 +242,31 @@ std::uint64_t static_bg_key(const systems::SystemsState& state,
                             const LevelRenderAssets& assets, int scale,
                             const std::string& profile);
 
+// Builds the static background `assets` describe, as get_static_bg_hd would,
+// a column band per step(), and caches it at the last: a screen warmed ahead
+// of its change across several ticks, so neither the change nor any one tick
+// pays the whole upscale.  Composed at construction (the caller gives it that
+// screen's tiles); done() at once when it is cached already.
+class StaticBgWarmer {
+public:
+    StaticBgWarmer(systems::SystemsState& state,
+                   const LevelRenderAssets& assets, int scale,
+                   const std::string& profile);
+    ~StaticBgWarmer();
+    StaticBgWarmer(const StaticBgWarmer&) = delete;
+    StaticBgWarmer& operator=(const StaticBgWarmer&) = delete;
+
+    void step();
+    bool done() const { return done_; }
+
+private:
+    std::uint64_t key_;
+    std::vector<std::uint8_t> native_;
+    std::unique_ptr<enhance::LazyUpscaler> up_;
+    int cols_ = 0;
+    bool done_ = false;
+};
+
 // Upscaled wide static background (centre bg + tiles + margins),
 // (320+2*margin)*scale x 200*scale, cached per screen / margin / neighbours /
 // backdrop / profile.  The caller copies it and draws sprites and HUD bars on
@@ -246,6 +276,36 @@ const std::vector<std::uint8_t>& get_static_wide_bg_hd(
     systems::SystemsState& state, const LevelRenderAssets& assets, int scale,
     const std::string& profile, int margin, const WidePeek& peek,
     std::uint64_t* key_out = nullptr);
+
+// Builds the wide background get_static_wide_bg_hd would build for the same
+// arguments, a column band per advance(), and caches it when complete: a pan
+// warms the screen it lands on across its frames, so the first steady frame
+// after it finds the cache warm.  `peek`'s buffers must outlive it.
+class WideBgWarmer {
+public:
+    WideBgWarmer(systems::SystemsState& state, const LevelRenderAssets& assets,
+                 int scale, std::string profile, int margin,
+                 const WidePeek& peek);
+    ~WideBgWarmer();
+    WideBgWarmer(const WideBgWarmer&) = delete;
+    WideBgWarmer& operator=(const WideBgWarmer&) = delete;
+
+    // Upscale up to `frac` (0..1] of the columns; at 1, finish and cache.
+    void advance(double frac);
+    bool done() const { return done_; }
+
+private:
+    systems::SystemsState& state_;
+    const LevelRenderAssets& a_;
+    int scale_;
+    std::string profile_;
+    int margin_;
+    WidePeek peek_;
+    std::uint64_t key_ = 0;
+    std::vector<std::uint8_t> native_;
+    std::unique_ptr<enhance::LazyUpscaler> up_;
+    bool done_ = false;
+};
 
 // Neighbour tiles re-blitted across a seam so a straddling object is drawn
 // whole: the left neighbour's x=320 straddlers at -320, the right's x=0 ones

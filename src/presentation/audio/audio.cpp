@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "presentation/audio/audio.hpp"
+#include "presentation/pacing.hpp"   // pace_delay
 
 #include "presentation/audio/opl_sfx.hpp"
 #include "presentation/audio/resample.hpp"
@@ -685,7 +686,7 @@ SdlAudio::SdlAudio(const AudioSetup& setup) {
 
     // Order matters: SFX resolution reads music_backend_.
     select_music_backend(setup.music_device, setup.rom_dir, setup.soundfont,
-                         setup.midi_port, setup.mt32_model);
+                         setup.midi_port, setup.mt32_model, setup.auto_gm);
     resolve_and_bake_sfx(setup.sfx_backend);
     if (device_ != 0) SDL_PauseAudioDevice(device_, 0);   // offline: no device
 }
@@ -779,7 +780,8 @@ void SdlAudio::select_music_backend(const std::string& music_device,
                                     const std::string& rom_dir,
                                     const std::string& soundfont,
                                     const std::string& midi_port,
-                                    const std::string& mt32_model) {
+                                    const std::string& mt32_model,
+                                    bool auto_gm) {
     // "host-midi" (and the old alias "mt32") send raw MT-32 to a MIDI OUT
     // port, for real MT-32 hardware or MUNT; "gm-host" translates MT-32 -> GM
     // programs, for GM synths behind the OS mapper.  If no port opens, the
@@ -798,7 +800,7 @@ void SdlAudio::select_music_backend(const std::string& music_device,
         if (synth_ != nullptr) music_backend_ = "mt32-builtin";
     }
     if (!host_midi_active_ && synth_ == nullptr &&
-        wants("gm-builtin", "gm")) {
+        (device == "auto" ? auto_gm : wants("gm-builtin", "gm"))) {
         const std::string sf = find_soundfont(soundfont);
         if (!sf.empty()) {
             std::fprintf(stderr, "gm-builtin: soundfont = %s\n", sf.c_str());
@@ -1132,7 +1134,7 @@ void SdlAudio::fade_out_music() {
     for (int s = kSteps - 1; s >= 0; --s) {
         music_gain_.store(from * static_cast<float>(s) / kSteps,
                           std::memory_order_relaxed);
-        SDL_Delay(step_ms);
+        pace_delay(step_ms);   // timedemo: at once
     }
     music_gain_.store(0.0f, std::memory_order_relaxed);
 }

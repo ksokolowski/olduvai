@@ -21,6 +21,7 @@
 #include "presentation/render/dirty_rects.hpp"
 #include "presentation/render/game_render.hpp"
 #include "presentation/render/logical_size.hpp"
+#include "presentation/render/save_notice.hpp"
 #include "presentation/render/text_overlay.hpp"
 #include "presentation/window_util.hpp"   // LogicalDims, show_texture
 
@@ -72,11 +73,16 @@ public:
     int hd_scale() const { return hd_scale_; }
     // HD and the font loaded; a missing font falls back to the bitmap path.
     bool use_hd_text() const { return hd_ && hd_text_.ok(); }
-    // The vector HUD's layout for `state`; none without the vector HUD.
+    // The vector HUD's layout for `state`, the save notice while it shows;
+    // none without the vector HUD.
     std::optional<enhance::EnhancedHudLayout> hud_layout(
-        const systems::SystemsState& state) {
-        if (!use_hd_text()) return std::nullopt;
-        return enhance::compute_enhanced_hud_layout(hd_text_, state);
+        const systems::SystemsState& state);
+    // The save notice's text now, or null.
+    void set_save_notice(const SaveNotice* n) { save_notice_ = n; }
+    const SaveNotice* save_notice() const { return save_notice_; }
+    const char* save_notice_text() const {
+        return save_notice_ != nullptr ? save_notice_->text(SDL_GetTicks())
+                                       : nullptr;
     }
     // Live: the address the driver keeps writing (Options change it mid-level).
     const std::string* hd_profile() const { return hd_profile_; }
@@ -162,6 +168,7 @@ private:
     bool verify_ = false;
     unsigned long verify_checked_ = 0, verify_bad_ = 0, verify_partial_ = 0;
     FrameStats* stats_ = nullptr;
+    const SaveNotice* save_notice_ = nullptr;
 };
 
 // RenderTarget over `b`: the HD per-asset path only for a buffer that is

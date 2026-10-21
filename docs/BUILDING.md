@@ -122,7 +122,7 @@ cmake --preset release && cmake --build --preset release
 Portable AppImage (bundles SDL2; needs ImageMagick for the icon):
 
 ```sh
-packaging/build_appimage_linux.sh      # → ./olduvai-x86_64.AppImage
+packaging/build_appimage_linux.sh      # → ./olduvai-<version>-x86_64.AppImage
 ```
 
 Details (what gets bundled, GM SoundFont discovery, best-sound setup):

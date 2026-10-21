@@ -33,6 +33,11 @@ void maybe_dump_output(SDL_Renderer* ren);
 // presenter (boss arena, text screens).
 void present_output(SDL_Renderer* ren);
 
+// Milliseconds spent inside present_output's SDL_RenderPresent since start:
+// the page-flip (vsync) waits, and the GPU finishing its work.  Frame stats
+// subtract it for the timedemo's engine_hz.
+double present_wait_ms();
+
 // Every dump hook appends "<file> <SDL performance counter>" to
 // <dir>/frames.txt, so a clip can be timed against an OLDUVAI_AUDIO_CAPTURE
 // recording.

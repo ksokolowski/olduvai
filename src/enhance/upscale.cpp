@@ -47,22 +47,27 @@ struct Scaler {
     const char* id;            // the --hd-profile and play.json value
     const char* label;         // the Options menu's name for it
     bool preserves_palette;    // copies whole source pixels: alpha is re-stamped
-    Plan plan[3];              // x2, x3, x4; any other factor is Nearest
+    Plan plan[5];              // x2 to x6; a missing factor is Nearest
 };
 
 // Menu order.  "native" is HD off upstream; asked for a factor anyway it
 // replicates, so a caller sized for x2 still gets x2.
 constexpr Scaler kScalers[] = {
-    {"native", "Off", true, {nearest(), nearest(), nearest()}},
-    {"retro", "Nearest", true, {nearest(), nearest(), nearest()}},
+    {"native", "Off", true, {nearest(), nearest(), nearest(), nearest(), nearest()}},
+    {"retro", "Nearest", true, {nearest(), nearest(), nearest(), nearest(), nearest()}},
     {"smooth", "Scale2x/3x", true,
-     {native2("Scale2x", scale2x), native2("Scale3x", scale3x), twice("Scale2x", scale2x)}},
-    {"eagle", "Eagle", true, {native2("Eagle", eagle_2x), no3x("Eagle"), twice("Eagle", eagle_2x)}},
+     {native2("Scale2x", scale2x), native2("Scale3x", scale3x), twice("Scale2x", scale2x),
+      nearest(), nearest()}},
+    {"eagle", "Eagle", true,
+     {native2("Eagle", eagle_2x), no3x("Eagle"), twice("Eagle", eagle_2x), nearest(), nearest()}},
     {"xbrz", "xBRZ", false,
-     {nativeN("xBRZ", xbrz_scale), nativeN("xBRZ", xbrz_scale), nativeN("xBRZ", xbrz_scale)}},
-    {"mmpx", "MMPX", true, {native2("MMPX", mmpx_2x), no3x("MMPX"), twice("MMPX", mmpx_2x)}},
+     {nativeN("xBRZ", xbrz_scale), nativeN("xBRZ", xbrz_scale), nativeN("xBRZ", xbrz_scale),
+      nativeN("xBRZ", xbrz_scale), nativeN("xBRZ", xbrz_scale)}},
+    {"mmpx", "MMPX", true,
+     {native2("MMPX", mmpx_2x), no3x("MMPX"), twice("MMPX", mmpx_2x), nearest(), nearest()}},
     {"omniscale", "OmniScale", false,
-     {nativeN("OmniScale", omniscale), nativeN("OmniScale", omniscale), nativeN("OmniScale", omniscale)}},
+     {nativeN("OmniScale", omniscale), nativeN("OmniScale", omniscale), nativeN("OmniScale", omniscale),
+      nativeN("OmniScale", omniscale), nativeN("OmniScale", omniscale)}},
 };
 constexpr std::size_t kScalerCount = sizeof(kScalers) / sizeof(kScalers[0]);
 
@@ -77,7 +82,7 @@ const Scaler* find_scaler(const std::string& profile, std::size_t* index = nullp
 
 const Plan& plan_for(const Scaler& s, int scale) {
     static constexpr Plan kNearest = nearest();
-    return scale >= 2 && scale <= 4 ? s.plan[scale - 2] : kNearest;
+    return scale >= 2 && scale <= kMaxHdScale ? s.plan[scale - 2] : kNearest;
 }
 
 // Said once per profile: x3 runs several times a frame, and the note is for the
@@ -123,6 +128,8 @@ std::vector<std::uint8_t> upscale_rgba_impl(const std::vector<std::uint8_t>& px,
 // today; the scalers thread inside); the cost is a relaxed add per call.
 std::atomic<double> g_upscale_ms{0.0};
 std::atomic<unsigned long> g_upscale_calls{0};
+bool g_log_on = false;
+std::vector<UpscaleCall> g_log;
 
 }  // namespace
 
@@ -140,6 +147,17 @@ const std::vector<std::string>& supported_hd_profiles() {
 
 std::string canonical_hd_profile(const std::string& profile) {
     return profile == "xbr" ? "xbrz" : profile;
+}
+
+int max_hd_scale(const std::string& profile) {
+    // The largest factor with a real scaler (x4 for the 2x-based ones: past
+    // it, chained passes compound their artefacts).
+    const Scaler* s = find_scaler(profile);
+    if (s == nullptr) return 4;
+    int m = 4;
+    for (int f = 5; f <= kMaxHdScale; ++f)
+        if (s->plan[f - 2].route == Route::Native) m = f;
+    return m;
 }
 
 bool is_supported_hd_profile(const std::string& profile) {
@@ -184,6 +202,14 @@ void reset_upscale_stats() {
     g_upscale_calls.store(0, std::memory_order_relaxed);
 }
 
+void set_upscale_log(bool on) { g_log_on = on; }
+
+std::vector<UpscaleCall> take_upscale_log() {
+    std::vector<UpscaleCall> out;
+    out.swap(g_log);
+    return out;
+}
+
 std::vector<std::uint8_t> upscale_rgba(const std::vector<std::uint8_t>& px,
                                        int w, int h, int scale,
                                        const std::string& profile) {
@@ -197,6 +223,7 @@ std::vector<std::uint8_t> upscale_rgba(const std::vector<std::uint8_t>& px,
     while (!g_upscale_ms.compare_exchange_weak(cur, cur + ms,
                                                std::memory_order_relaxed)) {}
     g_upscale_calls.fetch_add(1, std::memory_order_relaxed);
+    if (g_log_on) g_log.push_back({w, h, scale, ms});
     return out;
 }
 

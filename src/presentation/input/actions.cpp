@@ -79,15 +79,9 @@ bool key_held(Action a) {
 }
 
 void init_key_bindings(const GameOptions& opts) {
-    const std::string* const values[] = {&opts.key_left, &opts.key_right,
-                                         &opts.key_up,   &opts.key_down,
-                                         &opts.key_attack, &opts.key_pause,
-                                         &opts.key_quit};
-    static_assert(std::size(values) == std::size(kKeyActions),
-                  "one GameOptions field per kKeyActions entry, in its order");
-    for (std::size_t i = 0; i < std::size(kKeyActions); ++i)
-        if (!apply_key_binding(kKeyActions[i].key, *values[i]))
-            apply_key_binding(kKeyActions[i].key, "");
+    for (const KeyAction& k : kKeyActions)
+        if (!apply_key_binding(k.key, opts.*k.setting))
+            apply_key_binding(k.key, "");
 }
 
 std::string key_binding(const std::string& key) {

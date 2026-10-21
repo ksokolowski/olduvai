@@ -131,4 +131,13 @@ void LazyUpscaler::ensure(int x0, int x1) {
     }
 }
 
+void LazyUpscaler::ensure_upto(double frac) {
+    if (upto_ >= w_ || frac <= 0.0) return;
+    const int target =
+        frac >= 1.0 ? w_ : std::min(w_, static_cast<int>(frac * w_));
+    if (target < w_ && target - upto_ < kMinBand) return;
+    ensure(upto_, target);
+    upto_ = target;
+}
+
 }  // namespace olduvai::enhance

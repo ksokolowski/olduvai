@@ -439,6 +439,29 @@ void WidescreenPresenter::present(
     if (do_present) flip();
 }
 
+WidePeek WidescreenPresenter::wide_peek() const {
+    return WidePeek{left_ok_ ? &left_ : nullptr, left_screen_,
+                    right_ok_ ? &right_ : nullptr, right_screen_,
+                    ws_backdrop(), &left_seam_, &right_seam_, &left_bridge_,
+                    &right_bridge_, peek_generation_};
+}
+
+// Only when the steady present will read the cache: present_fast.
+void WidescreenPresenter::start_bg_warm() {
+    bg_warm_.reset();
+    if (!present_path() || !hd() || hd_scale() <= 1 || wide_tex() == nullptr)
+        return;
+    bg_warm_ = std::make_unique<WideBgWarmer>(*ctx_.state, *ctx_.render,
+                                              hd_scale(), *hd_profile(),
+                                              margin_, wide_peek());
+}
+
+void WidescreenPresenter::advance_bg_warm(double frac) {
+    if (!bg_warm_) return;
+    bg_warm_->advance(frac);
+    if (bg_warm_->done()) bg_warm_.reset();
+}
+
 RenderTarget WidescreenPresenter::foreground_target(
     std::uint8_t* px, int w, int h, int scale, enhance::HdAssetCache* cache,
     const std::string* profile) const {
@@ -486,14 +509,10 @@ void WidescreenPresenter::flip() const {
 void WidescreenPresenter::present_fast(
     const std::function<void(RenderTarget&)>& bubbles,
     const enhance::EnhancedHudLayout* hud) {
-    const FrameBuffer* ws_bd = ws_backdrop();
     // `peek` is a named local, not a braced temporary: GCC 13-15
     // -Wdangling-reference fires on the temporary (a false positive; the
     // result lives in a static cache), and CI builds with -Werror.
-    const WidePeek peek{left_ok_ ? &left_ : nullptr, left_screen_,
-                        right_ok_ ? &right_ : nullptr, right_screen_,
-                        ws_bd, &left_seam_, &right_seam_, &left_bridge_,
-                        &right_bridge_, peek_generation_};
+    const WidePeek peek = wide_peek();
     std::uint64_t bg_key = 0;
     const std::vector<std::uint8_t>& bg_hd = presentation::get_static_wide_bg_hd(
         *ctx_.state, *ctx_.render, hd_scale(), *hd_profile(), margin_, peek,

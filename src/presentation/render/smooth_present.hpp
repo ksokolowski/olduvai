@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "presentation/pacing.hpp"   // unthrottled, pace_delay
 #include "presentation/render/smooth_config.hpp"
 
 namespace olduvai::presentation {
@@ -54,7 +55,8 @@ inline bool smooth_subframes_explicit() {
 // the config knob is ignored under kmsdrm (resolve_vsync_off), with a log
 // line.
 inline bool smooth_try_enable_vsync(SDL_Renderer* ren, bool smooth) {
-    if (!smooth || ren == nullptr) return false;
+    // Timedemo: no vsync, which would pace the presents at the display's rate.
+    if (!smooth || ren == nullptr || unthrottled()) return false;
     const char* env = std::getenv("OLDUVAI_NO_VSYNC");
     const char* driver = SDL_GetCurrentVideoDriver();
     const bool config_off = smooth_present_config().vsync_off;
@@ -85,7 +87,8 @@ struct SmoothPacer {
 // must then skip its own delay.
 template <class RenderAt>
 inline bool smooth_fill_tick(SmoothPacer& p, RenderAt&& render_at) {
-    if (p.vsync) {
+    // Timedemo: the discrete sub-frames, unpaced (the vsync fill is timed).
+    if (p.vsync && !unthrottled()) {
         const Uint32 t0 = SDL_GetTicks();
         const Uint32 budget =
             p.frame_ms > p.carryover ? p.frame_ms - p.carryover : p.frame_ms;
@@ -121,7 +124,7 @@ inline bool smooth_fill_tick(SmoothPacer& p, RenderAt&& render_at) {
         render_at(alpha, sub);
         const Uint32 sub_ms = p.frame_ms / static_cast<Uint32>(p.discrete_n);
         const Uint32 spent = SDL_GetTicks() - st;
-        if (sub < p.discrete_n && spent < sub_ms) SDL_Delay(sub_ms - spent);
+        if (sub < p.discrete_n && spent < sub_ms) pace_delay(sub_ms - spent);
     }
     return false;
 }

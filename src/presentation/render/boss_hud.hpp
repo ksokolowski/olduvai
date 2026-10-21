@@ -65,6 +65,9 @@ public:
     // the lives digit (labels are still drawn).
     void draw_into(const enhance::Canvas& cv,
                    bool draw_lives, int cx_native, int total_native_w);
+    // Everything draw_into reads, as a TextOverlay key: unchanged skips the
+    // overlay's redraw and upload.
+    std::uint64_t key(bool draw_lives, int cx_native, int total_native_w) const;
 
     // Classic (non-HD): the same lives value in the game's 1bpp font, straight
     // into the 320x200 arena buffer at (48,8).  Kept in this type so the vector

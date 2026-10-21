@@ -33,11 +33,12 @@ that PortMaster supports should work, and a report either way is welcome.
    [What you need](#what-you-need). The first launch without them shows which
    files are missing and where they go.
 
-What it does for you: it starts Enhanced HD at the largest scale that fits the
-panel's height, a step every 200 lines: x2 from 400 lines (a 4:3 panel such as
-640x480 is filled at 4:3), x3 from 600 (the A12, the TrimUI) and x4 from 800 (a
-1280x800 panel is exactly 4x). The x2 wide and x4 steps have not yet been tried
-on real hardware of their class. Panels shorter than 400 lines start in Classic
+What it does for you: it starts Enhanced HD at the largest scale (x2 to x4)
+whose frame fits the panel: x2 at 640x480, x3 on the A12 and the TrimUI, x4
+on a 1280x800 panel. A panel narrower than 16:10 (640x480, 1024x768) is filled
+at 4:3, a wider one is widescreen. Only x2 (4:3) and x3 (widescreen) have been
+tried on real hardware so far; `olduvai/log.txt` says what was chosen
+(`display: panel`). Panels shorter than 400 lines start in Classic
 DOS; your choice under *Options → Style* is remembered. Settings, saves and bug reports
 live inside the port folder, so an update never touches them. MT-32 ROMs go in
 `olduvai/mt32-roms/` and a SoundFont in `olduvai/soundfonts/`, as described
@@ -66,6 +67,19 @@ that is where Enhanced HD is meant to be the natural way to play. On older,
 slower hardware such as the Powkiddy A12, Enhanced HD is smooth but a little
 slower than the original's pace, and very playable; Classic runs there at full
 speed and is one menu choice away.
+
+**If Enhanced stutters on your device**, lower the scale first: *Options →
+Video → Render scale*, one step at a time (4 → 3 → 2). It is the biggest
+lever, it applies at once, and your choice is kept. Enhanced picks the
+largest scale your panel fits, which suits any recent handheld; an older chip
+on a big panel can be asked for more than it has. Next, *Options → Video →
+Upscaler*: Scale2x/3x and Nearest are lighter than xBRZ.
+
+The **Runs** line under them shows what your choice really runs. xBRZ (the
+handheld default), OmniScale and Nearest keep their look at every scale;
+Eagle and MMPX have no x3 form, so at x3 they run Scale3x and Runs says so:
+to keep their look, step from x4 straight to x2. Every upscaler still
+smooths at x2, with less room to shape the edges than at x4.
 
 ## What you need
 
@@ -143,9 +157,12 @@ chip) with digital sound effects, which needs nothing extra.
 - **Roland MT-32 / CM-32L:** if you own the ROM images, copy them into
   `olduvai/mt32-roms/` (`CM32L_CONTROL.ROM` + `CM32L_PCM.ROM`, and/or
   `MT32_CONTROL.ROM` + `MT32_PCM.ROM`) and the Roland sound is used instead.
-- **General MIDI:** copy a SoundFont (`.sf2`) into `olduvai/soundfonts/`. It is
-  used when no Roland ROMs are present; the order is Roland, then General MIDI,
-  then Sound Blaster. The General MIDI synth (FluidSynth) is built in.
+- **General MIDI:** copy a SoundFont (`.sf2`) into `olduvai/soundfonts/`, then
+  pick it under *Options → Audio → Sound card*. On a handheld it is not chosen
+  on its own: the order is Roland, then Sound Blaster, because the General
+  MIDI synth (FluidSynth, built in) costs a small chip more than the game
+  can spare. Set `"music_auto_gm": true` in `play.json` to put it back in the
+  order, between the two.
 
 To choose instead of taking the order above, pick a **Sound card** under
 *Options → Audio*: Sound Blaster, AdLib, Roland MT-32 or General MIDI (the

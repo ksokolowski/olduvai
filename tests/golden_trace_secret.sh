@@ -43,7 +43,8 @@
 #
 # Skip (77) when game data or the binary is absent.
 
-exec sh "$(dirname "$0")/lib/trace_gate.sh" golden_trace_secret 1 5 \
+# Paced (TRACE_GATE_PACED): one level replay keeps the 18.2 Hz tick.
+TRACE_GATE_PACED=1 exec sh "$(dirname "$0")/lib/trace_gate.sh" golden_trace_secret 1 5 \
     secret_l1_in.jsonl golden_trace_l1_secret.jsonl 300 180 \
     "${OLDUVAI_GAME_DATA:-${1:-$(dirname "$0")/../game_data}}" \
     "${2:-$(dirname "$0")/../build/release/olduvai}"

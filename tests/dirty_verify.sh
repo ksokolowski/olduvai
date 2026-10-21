@@ -23,6 +23,16 @@
 # The latter needs a blending scaler, hence --profile hd (omniscale): the
 # boss sprites and the handheld `smooth` profile have no partial alpha.
 #
+# The replays run unthrottled (OLDUVAI_UNTHROTTLED): every present is checked
+# whatever the pacing, and the counts match the paced run's exactly.
+#
+# OLDUVAI_OVERLAY_VERIFY=1 rides along: the HUD text overlay skips its
+# redraw while its key is unchanged, and this redraws anyway and reports a key
+# that said "unchanged" while the pixels moved (both the wide and the flat
+# HUD pass are keyed).  OLDUVAI_BG_CACHE_VERIFY=1 as well: each cached wide
+# background's first hit is rebuilt and compared, which covers the one a pan
+# builds ahead in bands (WideBgWarmer).
+#
 # Skip (77) when game data or the binary is absent.
 
 GAME_DIR="${OLDUVAI_GAME_DATA:-${1:-$(dirname "$0")/../game_data}}"
@@ -55,7 +65,8 @@ run_case() {
     CFG_DIR="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
     # shellcheck disable=SC2086
     env XDG_CONFIG_HOME="${CFG_DIR}" OLDUVAI_DIRTY_VERIFY=1 \
-        ${MODE_ENV} ${envs} \
+        OLDUVAI_OVERLAY_VERIFY=1 OLDUVAI_BG_CACHE_VERIFY=1 \
+        OLDUVAI_UNTHROTTLED=1 ${MODE_ENV} ${envs} \
         timeout 300 "${BINARY}" --no-config --game-dir "${GAME_DIR}" \
         --profile hd ${MODE_ARGS} \
         --music-device off --transitions classic --play "$@" \
@@ -73,11 +84,20 @@ run_case() {
         echo "dirty_verify: FAIL (${label}) — ${line}"
         grep '^dirty-verify: mismatch' "${ERR}" | head -5
         rc=1
+    elif grep -q '^bg-cache-verify: .*MISMATCH' "${ERR}"; then
+        echo "dirty_verify: FAIL (${label}) — a cached wide background differs"
+        grep '^bg-cache-verify: .*MISMATCH' "${ERR}" | head -3
+        rc=1
+    elif grep -q '^overlay-verify:' "${ERR}"; then
+        echo "dirty_verify: FAIL (${label}) — a stale overlay key"
+        grep '^overlay-verify:' "${ERR}" | head -3
+        rc=1
     elif [ "${partial:-0}" -eq 0 ] || [ "${checked:-0}" -eq 0 ]; then
         echo "dirty_verify: FAIL (${label}) — the dirty path did not run: ${line}"
         rc=1
     else
-        echo "dirty_verify: OK (${label}) — ${line#dirty-verify: }"
+        echo "dirty_verify: OK (${label}) — ${line#dirty-verify: }" \
+             "bg-cache ok=$(grep -c '^bg-cache-verify: .* ok' "${ERR}")"
     fi
 }
 

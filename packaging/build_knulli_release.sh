@@ -40,6 +40,8 @@ case "${OUT}/" in "${SRC}/"*)
 esac
 STRIP="${LLVM_STRIP:-$(command -v llvm-strip || echo /opt/homebrew/opt/llvm/bin/llvm-strip)}"
 [ -x "$STRIP" ] || { echo "build_knulli_release: needs llvm-strip (brew install llvm)" >&2; exit 2; }
+READELF="${LLVM_READELF:-$(command -v llvm-readelf || echo /opt/homebrew/opt/llvm/bin/llvm-readelf)}"
+[ -x "$READELF" ] || { echo "build_knulli_release: needs llvm-readelf (brew install llvm)" >&2; exit 2; }
 VER=$(awk '/^project\(olduvai/ {p = 1} p && $1 == "VERSION" {print $2; exit}' \
           "$SRC/CMakeLists.txt")
 [ -n "$VER" ] || { echo "build_knulli_release: no VERSION in $SRC/CMakeLists.txt" >&2; exit 1; }
@@ -55,6 +57,19 @@ build() {   # device arch sysroot xtool
         -DSDL2_DIR="$sysroot/usr/lib/cmake/SDL2" >/dev/null
     cmake --build "$b" --target olduvai -j"$(getconf _NPROCESSORS_ONLN)" >/dev/null
     "$STRIP" -o "$OUT/olduvai.$arch" "$b/olduvai"
+    # glibc's memset / memcpy, not the compiler runtime's byte loops
+    # (src/app/glibc_mem.c): a toolchain change must not quietly undo it.
+    # It must also not EXPORT a memset: the loader would bind glibc's call to
+    # it, and it would jump to itself.  (No grep -q: under pipefail its early
+    # exit fails the pipe; see below.)
+    syms=$("$READELF" --dyn-syms -W "$OUT/olduvai.$arch")
+    printf '%s\n' "$syms" | grep " UND memset@GLIBC" >/dev/null || {
+        echo "build_knulli_release: olduvai.$arch does not take memset from glibc" >&2
+        exit 1; }
+    if printf '%s\n' "$syms" | grep -E " [0-9]+ (memset|memcpy|memmove)$" >/dev/null; then
+        echo "build_knulli_release: olduvai.$arch exports its own memset/memcpy/memmove" >&2
+        exit 1
+    fi
     rm -rf "${OUT:?}/${dev:?}"
     bash "$SRC/packaging/build_port_knulli.sh" --public --device "$dev" \
         --binary "$OUT/olduvai.$arch" --out "$OUT/$dev" >/dev/null

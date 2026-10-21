@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Live preview of the cheap Options keys (fullscreen, music/sfx volume) —
-// the same three branches existed verbatim in the pause, title and boss
-// bindings' set() (CC3 phase 4, slice 3).  These preview immediately so
+// Live preview of the cheap Options keys (fullscreen, the output filter,
+// music/sfx volume), shared by the pause, title and boss bindings' set()
+// (CC3 phase 4, slice 3).  These preview immediately so
 // the user gets feedback while editing; they still stage like every other
 // key (persist happens on Apply — the caller keeps the staging call).
 //
@@ -18,6 +18,7 @@
 
 #include "presentation/audio/audio.hpp"       // SdlAudio
 #include "presentation/menu/parse_util.hpp"  // parse_f
+#include "presentation/window_util.hpp"      // set_output_filter
 
 namespace olduvai::presentation {
 
@@ -30,6 +31,10 @@ inline bool preview_cheap_key(const std::string& k, const std::string& v,
     if (k == "fullscreen" && win) {
         SDL_SetWindowFullscreen(
             win, v == "1" ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+        return true;
+    }
+    if (k == "output_filter") {
+        set_output_filter(v);
         return true;
     }
     if (k == "music_volume" && audio) {

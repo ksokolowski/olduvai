@@ -363,6 +363,28 @@ void bind_screen(Loaded& g, int screen) {
     g.state.current_screen = screen;
 }
 
+std::unique_ptr<presentation::StaticBgWarmer> start_neighbour_bg_warm(
+    Loaded& g, int scale, const std::string& profile) {
+    if (scale <= 1 || g.state.cave_flag || g.state.secret_flag) return nullptr;
+    const int cur = g.state.current_screen;
+    const int count = static_cast<int>(g.tiles.screens.size());
+    const int ahead = g.state.player.facing_left ? cur - 1 : cur + 1;
+    std::vector<presentation::LevelRenderAssets::TileDraw> tiles;
+    for (const int s : {ahead, 2 * cur - ahead}) {
+        if (s < 0 || s >= count) continue;
+        int backdrop = build_screen_tiles(
+            screen_tile_ctx(g, g.render.tile_sprites), s, tiles);
+        std::swap(g.render.tiles, tiles);
+        std::swap(g.render.backdrop_tile_count, backdrop);
+        auto warm = std::make_unique<presentation::StaticBgWarmer>(
+            g.state, g.render, scale, profile);
+        std::swap(g.render.tiles, tiles);
+        std::swap(g.render.backdrop_tile_count, backdrop);
+        if (!warm->done()) return warm;
+    }
+    return nullptr;
+}
+
 // Compose a surface screen's background + terrain (no entities) for the
 // widescreen peek.  Read-only on the session: never touches the RNG (tiles
 // come from the static table), never mutates g.state / g.store / g.render /

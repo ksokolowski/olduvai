@@ -17,7 +17,8 @@ namespace olduvai::presentation {
 // NOT ENOUGH FOOD! colour gradient + gentle bob in place while the status
 //                  lasts.
 // Effect: opts.banner_fx (default "caveman"; rainbow/fire/gold/pulse).  Under
-// headless capture the clock is the logic tick, so captures are reproducible.
+// headless capture and in the timedemo the clock is the logic tick, so
+// captures are reproducible and a flat-out replay animates as many frames.
 BannerPresenter::BannerPresenter(enhance::HdText& hd_text,
                                  const systems::SystemsState& state,
                                  const std::string& banner_fx,

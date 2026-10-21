@@ -95,8 +95,22 @@ TEST_CASE("scaler table: scale 1 is a no-op, other factors replicate, unknown th
         CAPTURE(profile);
         CHECK(describe_hd_scaler(profile, 1) == "none");
         CHECK(upscale_rgba(px, 9, 7, 1, profile) == px);
-        CHECK(describe_hd_scaler(profile, 5) == "nearest");
-        CHECK(upscale_rgba(px, 9, 7, 5, profile) == nearest_scale(px, 9, 7, 5));
+        // x5 and x6: the scalers that take the factor run it; the rest have no
+        // such plan (hd_scale_for never asks them) and replicate.
+        const bool takes = profile == "xbrz" || profile == "omniscale";
+        CHECK(max_hd_scale(profile) == (takes ? 6 : 4));
+        for (const int f : {5, 6}) {
+            CAPTURE(f);
+            if (takes) {
+                CHECK(describe_hd_scaler(profile, f) != "nearest");
+                CHECK(upscale_rgba(px, 9, 7, f, profile).size() == 9u * 7 * f * f * 4);
+            } else {
+                CHECK(describe_hd_scaler(profile, f) == "nearest");
+                CHECK(upscale_rgba(px, 9, 7, f, profile) == nearest_scale(px, 9, 7, f));
+            }
+        }
+        CHECK(describe_hd_scaler(profile, 7) == "nearest");
+        CHECK(upscale_rgba(px, 9, 7, 7, profile) == nearest_scale(px, 9, 7, 7));
     }
     CHECK_THROWS(upscale_rgba(px, 9, 7, 2, "bogus"));
     CHECK(describe_hd_scaler("bogus", 2) == "unsupported");
@@ -123,7 +137,7 @@ TEST_CASE("scaler table: the Options menu names the profiles as the table does")
 TEST_CASE("scaler table: docs/SETTINGS.md lists what each profile runs, word for word") {
     std::ifstream in(OLDUVAI_TEST_SOURCE_DIR "/docs/SETTINGS.md");
     REQUIRE(in.good());
-    std::map<std::string, std::vector<std::string>> rows;   // profile -> x2, x3, x4
+    std::map<std::string, std::vector<std::string>> rows;   // profile -> x2..x4, x5/x6
     for (std::string line; std::getline(in, line);) {
         if (line.rfind("| `", 0) != 0) continue;
         std::vector<std::string> cells;
@@ -134,9 +148,10 @@ TEST_CASE("scaler table: docs/SETTINGS.md lists what each profile runs, word for
             cells.push_back(b == std::string::npos ? "" : c.substr(b, e - b + 1));
         }
         // cells[0] is the empty text before the first bar
-        if (cells.size() == 5 && cells[1].size() > 2 && cells[1].front() == '`' &&
+        if (cells.size() == 6 && cells[1].size() > 2 && cells[1].front() == '`' &&
             is_supported_hd_profile(cells[1].substr(1, cells[1].size() - 2)))
-            rows[cells[1].substr(1, cells[1].size() - 2)] = {cells[2], cells[3], cells[4]};
+            rows[cells[1].substr(1, cells[1].size() - 2)] = {cells[2], cells[3], cells[4],
+                                                              cells[5]};
     }
     for (const std::string& profile : supported_hd_profiles()) {
         CAPTURE(profile);
@@ -145,6 +160,13 @@ TEST_CASE("scaler table: docs/SETTINGS.md lists what each profile runs, word for
         for (int s = 2; s <= 4; ++s) {
             CAPTURE(s);
             CHECK(rows[profile][std::size_t(s - 2)] == describe_hd_scaler(profile, s));
+        }
+        // x5 and x6: the scaler where it takes the factor, else held at x4.
+        if (max_hd_scale(profile) >= 6) {
+            CHECK(describe_hd_scaler(profile, 5) == describe_hd_scaler(profile, 6));
+            CHECK(rows[profile][3] == describe_hd_scaler(profile, 6));
+        } else {
+            CHECK(rows[profile][3] == "(x4)");
         }
     }
 }

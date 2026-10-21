@@ -18,8 +18,8 @@ release) and from the repository itself.
 | libmt32emu (munt) | [munt/munt](https://github.com/munt/munt) | LGPL-2.1-or-later | **Compiled into every binary** (`third_party/mt32emu/`, upstream tag `libmt32emu_2_8_3`, commit `3b05ec276f9e605af86b0eaef7f5eda43477a31f` — the corresponding source). Conveyed as part of the GPL-3.0 work under LGPL-2.1 §3 (conversion to GPL), same as Nuked-OPL3. Full text: `third_party/mt32emu/COPYING.LESSER.txt`; provenance and re-sync steps: `third_party/mt32emu/OLDUVAI-VENDORING.md`. MT-32 output additionally needs the user's own Roland ROMs, which are not distributed. Building with `-DOLDUVAI_WITH_MT32EMU=OFF` omits it and restores the previous runtime-`dlopen` behaviour for distributions that prefer to link the system library. |
 | RtMidi | [thestk/rtmidi](https://github.com/thestk/rtmidi) | RtMidi license (MIT-style) | Compiled in when host-MIDI support is built (`third_party/rtmidi/`). Full text: `third_party/rtmidi/LICENSE`. |
 | stb (`stb_image`, `stb_image_write`, `stb_truetype`) | [nothings/stb](https://github.com/nothings/stb) | MIT / public domain (dual) | Compiled in (`third_party/stb/`; license text embedded in each header). |
-| Freckle Face | Google Fonts | SIL OFL 1.1 | Bundled font file; license ships beside it (`fonts/FreckleFace-LICENSE.txt`). |
-| Noto Sans | Google Fonts | SIL OFL 1.1 | Bundled font file; license ships beside it (`fonts/NotoSans-LICENSE.txt`). |
+| Freckle Face | Google Fonts | SIL OFL 1.1 | Bundled font file; license ships with it (`fonts/FreckleFace-LICENSE.txt`; in the handheld bundles `licenses/LICENSE.FreckleFace.txt`). |
+| Noto Sans | Google Fonts | SIL OFL 1.1 | Bundled font file; license ships with it (`fonts/NotoSans-LICENSE.txt`; in the handheld bundles `licenses/LICENSE.NotoSans.txt`). |
 | doctest | [doctest/doctest](https://github.com/doctest/doctest) | MIT ([license text](third_party/doctest/LICENSE.txt)) | Test framework only — **not part of any release binary**. |
 | AppImage runtime | [AppImage project](https://github.com/AppImage/type2-runtime) | MIT | Embedded in the `.AppImage` file by `appimagetool` at packaging time. |
 

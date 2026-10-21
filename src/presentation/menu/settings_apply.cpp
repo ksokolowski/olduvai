@@ -4,6 +4,7 @@
 
 #include <string>
 
+#include "enhance/upscale.hpp"   // max_hd_scale
 #include "presentation/env_num.hpp"
 #include "presentation/menu/profile_table.hpp"
 
@@ -18,16 +19,18 @@ int hd_scale_for(bool enhanced, const std::string& hd_profile, int render_scale)
     // handheld (356x200 logical widescreen) x2 is a soft 1.8x stretch, x4
     // renders 1424x800 and throws pixels away, x3 (1068x600) is a 1.2x stretch.
     // smooth has a real scale3x; eagle and mmpx fall back to it with a note.
+    // Past 4 (a desktop 4K screen) only the scalers that take the factor go.
     if (!hd_active(enhanced, hd_profile)) return 1;
     if (render_scale < 2) return 2;
-    if (render_scale > 4) return 4;
+    const int top = enhance::max_hd_scale(hd_profile);
+    if (render_scale > top) return top;
     return render_scale;
 }
 
 ApplyTier classify_change(const std::string& key, const std::string& new_value,
                           const DisplaySettings& cur) {
     if (key == "music_volume" || key == "sfx_volume" || key == "fullscreen" ||
-        key == "aspect")
+        key == "aspect" || key == "output_filter")
         return ApplyTier::Live;
 
     // The pad and keyboard mappings: applied with the Apply (StagingBindings
@@ -126,11 +129,12 @@ void apply_preset(MenuBindings& bind, const std::string& preset) {
     const bool enhanced = p.role == ProfileRole::Enhanced;
     for (std::size_t i = 0; i < p.pin_count; ++i) {
         const std::string key = p.pins[i].key;
-        const std::string value = p.pins[i].value;
+        const std::string value = pin_value(p, i);   // "auto" resolved
         if (key == "aspect") {
             // Style sets the mode.  A deliberate 4:3 or stretch survives the
             // switch to Enhanced; "keep" and "" (unseeded) do not count as
-            // deliberate.  Classic always returns to keep.
+            // deliberate.  Classic always returns to its own (keep, or 4:3 on
+            // a 4:3 handheld).
             const std::string cur = bind.get("aspect");
             if (!enhanced || cur.empty() || cur == "keep")
                 bind.set("aspect", value);

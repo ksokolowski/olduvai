@@ -12,6 +12,7 @@
 # A third case covers the Enhanced skip (§3.43 item 4): OLDUVAI_ENDING_SKIP
 # presses mid-climb, and the shot then photographs the fade to black.  It
 # runs Enhanced with mmpx at render scale 2, an integer path like scale 1.
+# A fourth: the Classic skip shows a black frame, as the EXE does.
 #
 # The GAME-OVER half is still uncovered and deliberately not attempted here.
 # It needs a hook of its own: reaching it requires game_over==true, and with
@@ -101,6 +102,11 @@ check_one "${FIX}/ending_rise30_golden.sha256" "rise step 30" \
 check_one "${FIX}/ending_skip_fade_half_golden.sha256" "Enhanced skip, fade frame 27" \
     "OLDUVAI_ENDING_SKIP=20 OLDUVAI_ENDING_SHOT_FRAME=27" \
     "--enhanced --transitions classic --hd-profile mmpx --render-scale 2"
+# The Classic skip: the EXE clears the frame to black and shows it before
+# fading the music (Game_WinSequence 0x02b4-0x02cf), so the frame a press at
+# rise step 20 leaves is all black.
+check_one "${FIX}/ending_skip_classic_black_golden.sha256" "Classic skip, black frame" \
+    "OLDUVAI_ENDING_SKIP=20" "--render-scale 1"
 # The HD ending repaints only where the caveman moved (EndingCanvas over
 # DirtyFrame).  Mid-climb, that frame must equal the one composed whole
 # (OLDUVAI_DIRTY=0): a rect the dirty path missed shows here.
@@ -126,9 +132,3 @@ fi
 [ ${FAIL} -eq 0 ] && rm -f "${SHOT}"
 [ ${FAIL} -eq 0 ] || exit 1
 exit 0
-
-echo "ending_shot: FAIL — rendered ending differs from the golden hash."
-echo "  shot=${SHOT}  golden=${GOLDEN}"
-echo "  Eyeball the shot; if the ending renders correctly and the change is"
-echo "  intentional, regenerate the hash (see header)."
-exit 1

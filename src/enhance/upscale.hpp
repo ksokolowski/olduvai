@@ -34,6 +34,13 @@ bool profile_preserves_palette(const std::string& profile);
 // describe a look, and at x3 three of them are the same scaler.
 std::string describe_hd_scaler(const std::string& profile, int scale);
 
+// The render scales the table runs: 2 to kMaxHdScale.  max_hd_scale() is the
+// largest a profile has a real scaler for: 6 for xBRZ and OmniScale (scalers
+// that take the factor), 4 for the rest (2x-based: chaining past x4
+// compounds artefacts).
+inline constexpr int kMaxHdScale = 6;
+int max_hd_scale(const std::string& profile);
+
 // The Options menu's name for a profile ("Off", "Scale2x/3x", "xBRZ"); empty
 // for an unknown one.  assets/data/menus.json carries the same names, and a test
 // holds the two together.
@@ -61,5 +68,14 @@ struct UpscaleStats {
 };
 UpscaleStats upscale_stats();
 void reset_upscale_stats();
+
+// The present-gap trace (OLDUVAI_GAP_TRACE): every upscale call since the last
+// take, while the log is on.  Main thread only.
+struct UpscaleCall {
+    int w = 0, h = 0, scale = 0;
+    double ms = 0.0;
+};
+void set_upscale_log(bool on);
+std::vector<UpscaleCall> take_upscale_log();
 
 }  // namespace olduvai::enhance

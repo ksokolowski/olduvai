@@ -90,7 +90,7 @@ def invocations(text):
             continue
         if "! -x" in line or "-x \"" in line:
             continue
-        if not re.search(r"--play|--viewer|--trace|--render-audio", line):
+        if not re.search(r"--play|--trace|--render-audio", line):
             continue
         yield line
 

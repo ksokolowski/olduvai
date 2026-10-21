@@ -6,6 +6,8 @@
 // the env var is unset.  Read the field notes before interpreting a number.
 #pragma once
 
+#include <string>
+
 #include <SDL.h>
 
 #include <cstdint>
@@ -37,6 +39,13 @@ struct FrameStats {
         // cheap.
         double swap_ms = 0.0;             // this frame, SDL_RenderPresent only
         double total_swap_ms = 0.0;
+        // For engine_hz, the timedemo's rate without the page-flip waits
+        // (KMSDRM cannot drop vsync, so eff_hz there is capped by the panel):
+        // every present's wait in the ticks outside transitions
+        // (present_wait_ms, image_out.hpp), and the clock at the last tick.
+        double tick_wait0 = 0.0;
+        double steady_wait_ms = 0.0;
+        Uint64 last_tick_end = 0;
         // present_transition runs a whole animation in one main-loop iteration,
         // so per-frame present totals overstate.  `present_calls` counts
         // presents per frame, to divide by work done.  `upload_ms`:
@@ -128,6 +137,8 @@ struct FrameStats {
     // The two report lines (render-stats, then frame-stats) on stderr.
     // `phase` tags them ("L6 victory:"); null for the level itself.
     void report(int display_level, const char* phase = nullptr) const;
+    // " engine_hz=N" in a timedemo, else empty (report's last field).
+    std::string engine_hz_text() const;
 
     // Whether this instance is recording.  Presenters take it as `stats_on`.
     bool enabled = false;

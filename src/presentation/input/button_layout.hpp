@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "presentation/input/binding_slots.hpp"
+#include "presentation/play_config.hpp"
 
 namespace olduvai::presentation {
 
@@ -65,16 +66,30 @@ inline void upgrade_round1_nintendo(PadBindings& b) {
 
 inline constexpr const char* kCustomButtonLayout = "custom";
 
-// Each pad_* key and the PadBindings field it sets, in field order.
+// Each pad_* key, the PadBindings field it sets and the saved setting that
+// holds it, in field order.
 struct PadSlot {
     const char* key;
     std::string PadBindings::*field;
+    std::string PlayConfig::*setting;
 };
 inline constexpr PadSlot kPadSlots[] = {
-    {"pad_jump", &PadBindings::jump},       {"pad_attack", &PadBindings::attack},
-    {"pad_confirm", &PadBindings::confirm}, {"pad_back", &PadBindings::back},
-    {"pad_pause", &PadBindings::pause},
+    {"pad_jump", &PadBindings::jump, &PlayConfig::pad_jump},
+    {"pad_attack", &PadBindings::attack, &PlayConfig::pad_attack},
+    {"pad_confirm", &PadBindings::confirm, &PlayConfig::pad_confirm},
+    {"pad_back", &PadBindings::back, &PlayConfig::pad_back},
+    {"pad_pause", &PadBindings::pause, &PlayConfig::pad_pause},
 };
+
+// The pad mapping a PlayConfig holds, and back.
+inline PadBindings pad_bindings_of(const PlayConfig& c) {
+    PadBindings b;
+    for (const PadSlot& s : kPadSlots) b.*s.field = c.*s.setting;
+    return b;
+}
+inline void set_pad_bindings(PlayConfig& c, const PadBindings& b) {
+    for (const PadSlot& s : kPadSlots) c.*s.setting = b.*s.field;
+}
 
 inline bool same_bindings(const PadBindings& a, const PadBindings& b) {
     return std::all_of(std::begin(kPadSlots), std::end(kPadSlots),
@@ -227,7 +242,9 @@ inline bool is_pad_button(const std::string& name) {
 
 // What a binding row shows for an SDL button name: a face button as its
 // printed name and position ("A - right": the game font draws parentheses
-// as braces), the rest by their usual names.
+// as braces), the rest by their usual names.  A PlayStation shape names one
+// button on every such pad, so it goes without the position: "Triangle -
+// top" beside a row label and a second slot overflows the 320-wide menu.
 inline std::string pad_button_label(const std::string& button, PadFamily f) {
     struct Face {
         const char* name;
@@ -244,9 +261,8 @@ inline std::string pad_button_label(const std::string& button, PadFamily f) {
     };
     for (const Face& face : kFaces) {
         if (button != face.name) continue;
-        const char* printed = f == PadFamily::kNintendo      ? face.nintendo
-                              : f == PadFamily::kPlayStation ? face.playstation
-                                                             : face.xbox;
+        if (f == PadFamily::kPlayStation) return face.playstation;
+        const char* printed = f == PadFamily::kNintendo ? face.nintendo : face.xbox;
         return std::string(printed) + " - " + face.position;
     }
     if (button == "leftshoulder") return "L1";

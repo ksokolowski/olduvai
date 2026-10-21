@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "presentation/input/binding_slots.hpp"
+#include "presentation/play_config.hpp"
 
 namespace olduvai::presentation {
 
@@ -60,17 +61,22 @@ inline const std::vector<std::string>& default_keys(Action a) {
 }
 
 // The play actions the keyboard remaps (Options -> Controls -> Keyboard),
-// each a play.json key holding up to two key names.  The menu keys
-// (Enter, Space, Esc) stay fixed, so the keyboard always leaves a menu.
+// each a play.json key holding up to two key names, and the saved setting
+// that holds it.  The menu keys (Enter, Space, Esc) stay fixed, so the
+// keyboard always leaves a menu.
 struct KeyAction {
     Action action;
     const char* key;
+    std::string PlayConfig::*setting;
 };
 inline constexpr KeyAction kKeyActions[] = {
-    {Action::kLeft, "key_left"},     {Action::kRight, "key_right"},
-    {Action::kUp, "key_up"},         {Action::kDown, "key_down"},
-    {Action::kAttack, "key_attack"}, {Action::kPause, "key_pause"},
-    {Action::kQuit, "key_quit"},
+    {Action::kLeft, "key_left", &PlayConfig::key_left},
+    {Action::kRight, "key_right", &PlayConfig::key_right},
+    {Action::kUp, "key_up", &PlayConfig::key_up},
+    {Action::kDown, "key_down", &PlayConfig::key_down},
+    {Action::kAttack, "key_attack", &PlayConfig::key_attack},
+    {Action::kPause, "key_pause", &PlayConfig::key_pause},
+    {Action::kQuit, "key_quit", &PlayConfig::key_quit},
 };
 
 // A key_* setting's default value: its action's keys, comma-separated.

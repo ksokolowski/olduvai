@@ -106,6 +106,9 @@ WideOutgoing compose_outgoing_wide(Loaded& g, const PrevFrame& pf,
         // as a surface screen.
         ws_old = !pf.cave && !pf.secret && wsp.present_path();
 
+        // The panorama builds its own strip; nothing below is read.
+        if (trans.panorama) return {ws_old, ws_eligible_kind};
+
         // Outgoing 320 centre from g.state (old screen, not yet rebound): kind
         // 1 without the player (it rides the incoming screen), kind 2 with it
         // (the fade hides it).
@@ -167,6 +170,13 @@ void step9_screen_change(Loaded& g, const PrevFrame& pf,
         classify_transition(pf, g.state, enhanced, warp_fade);
     trans.kind = c.kind;
     if (c.kind == TransitionKind::kPan) trans.dir = c.dir;
+    // kind 1: continuous panorama pan for a simple +-1 surface step; anything
+    // else (cave/secret, non-adjacent, level wrap) uses the two-buffer slide.
+    trans.panorama =
+        c.kind == TransitionKind::kPan && !g.state.cave_flag &&
+        !g.state.secret_flag && g.state.current_screen < 100 &&
+        pf.screen < 100 && std::abs(g.state.current_screen - pf.screen) == 1 &&
+        (trans.dir == 'R' || trans.dir == 'L');
     trans.slide_old_wide_ok = false;   // rebuilt by a slide's capture
     capture_outgoing(g, trans, fp, fb);
     const WideOutgoing wide = compose_outgoing_wide(g, pf, trans, wsp);
@@ -210,15 +220,7 @@ void play_classified(Loaded& g, const PrevFrame& pf, TransitionState& trans,
                           bubble_hook);
         }
 
-        // kind 1: continuous panorama pan for a simple +-1 surface
-        // step; anything else (cave/secret, non-adjacent, level wrap)
-        // uses the two-buffer slide.
-        const bool panorama_ok =
-            trans.kind == TransitionKind::kPan && !g.state.cave_flag &&
-            !g.state.secret_flag && g.state.current_screen < 100 &&
-            pf.screen < 100 &&
-            std::abs(g.state.current_screen - pf.screen) == 1 &&
-            (trans.dir == 'R' || trans.dir == 'L');
+        const bool panorama_ok = trans.panorama;
         if (std::getenv("OLDUVAI_WS_DEBUG") != nullptr)
             std::fprintf(stderr,
                          "[WS-TRANS] kind=%d dir=%c %d->%d cave=%d "

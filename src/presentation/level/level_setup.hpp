@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -38,6 +39,13 @@ void refresh_secret_tiles(Loaded& g, bool draw_scatter);
 void warm_level_sprites(Loaded& g, int hd_scale, const std::string& profile);
 
 void bind_screen(Loaded& g, int screen);
+
+// Enhanced: start building a surface neighbour's static background ahead of
+// its screen change (the side the player faces first), or null when both are
+// cached.  Read-only on play: the live tile list is swapped out and back, so
+// the neighbour is composed from the assets its bind will give.
+std::unique_ptr<presentation::StaticBgWarmer> start_neighbour_bg_warm(
+    Loaded& g, int scale, const std::string& profile);
 
 // Enhanced icy-glider (internal level 5): flatten the decorative water (sprite
 // 7, no collision) to the flight-start (screen 9) sea level across the flight

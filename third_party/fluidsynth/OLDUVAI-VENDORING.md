@@ -63,3 +63,11 @@ Then gcem at the revision `$D/cmake_admin/FindGCEM.cmake` names (its
 `include/`, `LICENSE`, `NOTICE.txt` into `$D/gcem/`), update the table above,
 and check `--music-device gm-builtin` still renders a SoundFont
 (`scripts/metrics/audio_diff.sh`).
+
+## gcem in cross builds
+
+`cmake_admin/FindGCEM.cmake` looks for `gcem/include` with `find_path`, which a
+cross build (zig toolchain, `CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY`) searches
+only in the sysroot; it then downloads gcem.  The top-level `CMakeLists.txt`
+sets `GCEM_INCLUDE_DIR` to the vendored copy before `add_subdirectory`, so no
+build downloads it.  The vendored files are unchanged.

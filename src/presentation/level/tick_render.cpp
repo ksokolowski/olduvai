@@ -9,6 +9,7 @@
 #include "presentation/game_app.hpp"                 // GameOptions
 #include "presentation/image_out.hpp"
 #include "presentation/level/level_fx.hpp"
+#include "presentation/level/level_setup.hpp"     // start_neighbour_bg_warm
 #include "presentation/level/level_state.hpp"
 #include "presentation/render/banners.hpp"
 #include "presentation/render/frame_presenter.hpp"
@@ -47,6 +48,7 @@ TickRender::TickRender(LevelSurface& surface, const LevelViewDeps& deps,
       pacer_(pacer) {}
 
 void TickRender::compose(const Bubbles& bubbles) {
+    tick_t0_ = SDL_GetPerformanceCounter();
     auto rt = make_render_target(fb_, surface_, g_.hd_cache);
     blits_.clear();
     rt.blits = &blits_;   // for the steady present's diff
@@ -93,6 +95,13 @@ bool TickRender::steady_ok(const Bubbles& bubbles) const {
 void TickRender::present_frame(const Bubbles& bubbles) {
     if (wsp_.present_path()) {
         wsp_.present(bubbles);
+        // A menu-script `shot`: FramePresenter::finish takes it on the other
+        // paths, and this one does not pass there.
+        if (!diag_.menu.shot_path.empty()) {
+            capture_shot(diag_.menu.shot_path, surface_.hd(), surface_.ren(),
+                         bubbles);
+            diag_.menu.shot_path.clear();
+        }
         return;
     }
     maybe_dump_steady(fb_.px.data(), fb_.w, fb_.h);
@@ -110,6 +119,7 @@ bool TickRender::present(const PrevFrame& pf, const Bubbles& bubbles,
         draw_debug_overlays(fb_, opts_, g_, diag_, hd_scale_);
         present_frame(bubbles);
         write_draw_log(diag_.draw_log.get(), frame, 0, g_.state);
+        warm_ahead();
         return false;
     }
     // The logic positions: the interpolation target, restored after the fill.
@@ -142,7 +152,38 @@ bool TickRender::present(const PrevFrame& pf, const Bubbles& bubbles,
     });
     fx_.alpha = 1.0f;
     restore_logic_positions(g_.state, cur);
+    warm_ahead();
     return vsync_ran;
+}
+
+// A full-frame upscale (about 45 ms on the A12 at x3) moved out of the screen
+// change: a step a tick (StaticBgWarmer), when it fits before the tick's
+// deadline (plus kLateMs) as the last one measured did.
+void TickRender::warm_ahead() {
+    if (!surface_.hd() || hd_scale_ <= 1 || g_.state.screen_change) return;
+    constexpr double kTickMs = 54.925;   // the PIT tick (DosTicker)
+    constexpr double kMarginMs = 2.0;
+    // A step may end the tick this much late.  A smooth tick on the A12 has
+    // no time left after its presents, and a 48-column band there (~7 ms)
+    // a tick is a smaller hitch than the whole upscale (~45 ms) at the change.
+    constexpr double kLateMs = 10.0;
+    const double ms_per_count =
+        1000.0 / static_cast<double>(SDL_GetPerformanceFrequency());
+    const std::uint64_t now = SDL_GetPerformanceCounter();
+    if (static_cast<double>(now - tick_t0_) * ms_per_count + last_warm_ms_ +
+            kMarginMs > kTickMs + kLateMs)
+        return;
+    if (bg_warm_ && bg_warm_screen_ != g_.state.current_screen)
+        bg_warm_.reset();   // left the screen it was warming the neighbour of
+    if (!bg_warm_) {
+        bg_warm_ = start_neighbour_bg_warm(g_, hd_scale_, *surface_.hd_profile());
+        bg_warm_screen_ = g_.state.current_screen;
+    } else {
+        bg_warm_->step();
+        if (bg_warm_->done()) bg_warm_.reset();
+    }
+    last_warm_ms_ =
+        static_cast<double>(SDL_GetPerformanceCounter() - now) * ms_per_count;
 }
 
 // HD / widescreen: the vector HUD text is in the output overlay, not fb, so

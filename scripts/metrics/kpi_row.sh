@@ -88,7 +88,6 @@ build_gm_midi:src/formats/mdi.cpp
 compose_static_wide_bg_native:src/presentation/render/bg_compose.cpp
 compose_widescreen:src/presentation/render/widescreen.cpp
 draw_menu_vector:src/presentation/menu/menu_render.cpp
-run_viewer:src/presentation/diag/viewer.cpp
 update_boss_player:src/systems/boss.cpp
 update_projectiles:src/systems/boss_l2.cpp
 process_entity_collisions:src/systems/collision_dispatch.cpp

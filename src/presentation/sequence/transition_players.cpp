@@ -21,6 +21,7 @@
 #include "presentation/render/shift_blit.hpp"
 #include "presentation/render/tile_patterns.hpp"
 #include "presentation/render/widescreen.hpp"
+#include "presentation/pacing.hpp"
 #include "presentation/window_util.hpp"
 
 namespace olduvai::presentation {
@@ -32,6 +33,7 @@ namespace {
 // vsync.  Never delays longer than SDL_Delay(step_ms); a long gap resets.
 // ctx.pace_last starts at 0 per ctx.
 void paced(TransitionShellCtx& ctx, Uint32 step_ms) {
+    if (unthrottled()) return;
     const Uint32 now = SDL_GetTicks();
     if (ctx.pace_last != 0 && now - ctx.pace_last < step_ms)
         SDL_Delay(step_ms - (now - ctx.pace_last));
@@ -76,22 +78,26 @@ bool run_pan(TransitionShellCtx& ctx, int total, Frame&& frame) {
     const Uint32 step_ms = step_ms_of(ctx);
     const Uint32 t0 = SDL_GetTicks();
     const Uint32 dur = static_cast<Uint32>(total) * step_ms;
+    // Timedemo: every frame of the pan, as classic steps them.
+    const bool wall = ctx.smooth_motion && !unthrottled();
     for (int f2 = 1;; ++f2) {
-        const double p = ctx.smooth_motion
-                             ? wall_progress(t0, dur, 1.0 / total)
-                             : static_cast<double>(f2) / total;
-        const double pos = ctx.smooth_motion ? p * total : f2;
+        const double p = wall ? wall_progress(t0, dur, 1.0 / total)
+                              : static_cast<double>(f2) / total;
+        const double pos = wall ? p * total : f2;
         frame(PanStep{pos, p, f2});
         if (!step_done(ctx, step_ms)) return false;
-        if (ctx.smooth_motion ? p >= 1.0 : f2 >= total) return true;
+        if (wall ? p >= 1.0 : f2 >= total) return true;
     }
 }
 
 // kind 2: fade the old frame out, then the new one in.  Classic: n + 1 frames
 // each way; smooth: the same span on the wall clock.  `show` presents `work`.
-template <class Show>
+// `prep(p)` runs before each fade-out frame with its progress and with 1
+// before the fade-in, which first reads `newf`: work spread over the fade-out.
+template <class Show, class Prep>
 bool play_fade(TransitionShellCtx& ctx, FrameBuffer& work,
-               const FrameBuffer& oldf, const FrameBuffer& newf, Show&& show) {
+               const FrameBuffer& oldf, const FrameBuffer& newf, Show&& show,
+               Prep&& prep) {
     const Uint32 step_ms = step_ms_of(ctx);
     const int n = ctx.smooth_motion ? 36 : kFadeFrames;
     const auto step = [&](const FrameBuffer& src, double level) {
@@ -99,20 +105,25 @@ bool play_fade(TransitionShellCtx& ctx, FrameBuffer& work,
         show(work);
         return step_done(ctx, step_ms);
     };
-    if (ctx.smooth_motion) {
+    if (ctx.smooth_motion && !unthrottled()) {   // timedemo: the frame steps
         const Uint32 dur = static_cast<Uint32>(n + 1) * step_ms;
         for (const bool out : {true, false}) {
+            if (!out) prep(1.0);
             const Uint32 t0 = SDL_GetTicks();
             for (;;) {
                 const double p = wall_progress(t0, dur);
+                if (out) prep(p);
                 if (!step(out ? oldf : newf, out ? p : 1.0 - p)) return false;
                 if (p >= 1.0) break;
             }
         }
         return true;
     }
-    for (int f = 0; f <= n; ++f)
+    for (int f = 0; f <= n; ++f) {
+        prep(static_cast<double>(f) / n);
         if (!step(oldf, static_cast<double>(f) / n)) return false;
+    }
+    prep(1.0);
     for (int f = n; f >= 0; --f)
         if (!step(newf, static_cast<double>(f) / n)) return false;
     return true;
@@ -145,7 +156,7 @@ void play_transition(TransitionShellCtx& ctx, const FrameBuffer& oldf,
         dump_frame("trans", static_cast<int>(kind), seq, f.px.data(), f.w, f.h);
     };
     if (kind == TransitionKind::kFadePair) {
-        play_fade(ctx, work, oldf, newf, show);
+        play_fade(ctx, work, oldf, newf, show, [](double) {});
         return;
     }
     // The surface pan (in `dir`) and the secret slides share one shift core
@@ -182,7 +193,11 @@ void play_transition_wide(TransitionShellCtx& ctx,
     const int Wh = W * s, Hh = H * s;
     FrameBuffer work{Wh, Hh}, hd_old{Wh, Hh}, hd_new{Wh, Hh};
     hd_old.px = enhance::upscale_rgba(oldw, W, H, s, *ctx.hd_profile);
-    hd_new.px = enhance::upscale_rgba(neww, W, H, s, *ctx.hd_profile);
+    // The landing screen's steady wide background, built across the frames.
+    ctx.wsp->start_bg_warm();
+    const auto warm = [&](double p) {
+        ctx.wsp->advance_bg_warm(p >= 1.0 ? 1.0 : (p - 0.15) / 0.6);
+    };
     const auto show = [&](FrameBuffer& f) {
         ctx.wsp->present_transition(f.px, /*with_hud=*/true,
                                     /*pre_upscaled=*/true);
@@ -190,9 +205,20 @@ void play_transition_wide(TransitionShellCtx& ctx,
                    Hh);
     };
     if (kind == TransitionKind::kFadePair) {
-        play_fade(ctx, work, hd_old, hd_new, show);
+        // The incoming frame shows first at the fade-in: upscale it in bands
+        // over the fade-out, after its first frame.
+        enhance::LazyUpscaler up_new(neww, W, H, s, *ctx.hd_profile);
+        play_fade(ctx, work, hd_old, hd_new, show, [&](double p) {
+            if (p <= 0.0) return;
+            if (!up_new.complete()) {
+                up_new.ensure_upto(p >= 1.0 ? 1.0 : p / 0.6);
+                if (up_new.complete()) hd_new.px = up_new.take();
+            }
+            warm(p);
+        });
         return;
     }
+    hd_new.px = enhance::upscale_rgba(neww, W, H, s, *ctx.hd_profile);
     const auto shifted = [&](const TransitionShift& sh) {
         clear_opaque(work.px);
         blit_shifted(work.px, hd_old.px, Wh, Hh, sh.odx * s, sh.ody * s);
@@ -203,6 +229,7 @@ void play_transition_wide(TransitionShellCtx& ctx,
         const SecretSlide slide(kind, ctx.landing,
                                 ctx.state->player.facing_left);
         run_pan(ctx, slide.total(), [&](const PanStep& st) {
+            if (st.f2 > 1) warm(st.p);
             const double t = std::min(1.0, st.pos / slide.frames());
             TransitionShift sh = transition_shift(kind, dir, t, W, H);
             sh.odx = sh.ndx = 0;
@@ -220,6 +247,7 @@ void play_transition_wide(TransitionShellCtx& ctx,
     // The pan over the WHOLE wide view.
     const int n = ctx.smooth_motion ? 36 : 12;   // SCROLL_FRAMES
     run_pan(ctx, n, [&](const PanStep& st) {
+        if (st.f2 > 1) warm(st.p);
         shifted(transition_shift(kind, dir, std::min(1.0, st.p), W, H));
         show(work);
     });
@@ -546,7 +574,12 @@ void play_panorama_wide(TransitionShellCtx& ctx, int old_s, int new_s,
     const int n = ctx.smooth_motion ? 36 : 12;     // SCROLL_FRAMES
     static int seq = 0;
     if (!*ctx.running) return;
+    // The landing screen's wide background, built across the pan after its
+    // first frame instead of at the first steady frame.
+    ctx.wsp->start_bg_warm();
     run_pan(ctx, n, [&](const PanStep& st) {
+        if (st.f2 > 1)
+            ctx.wsp->advance_bg_warm(st.p >= 1.0 ? 1.0 : (st.p - 0.15) / 0.6);
         const double t = std::min(1.0, st.p);
         const int x0 = std::clamp(
             static_cast<int>(std::lround(x0_start + (x0_end - x0_start) * t)),

@@ -3,6 +3,9 @@
 #include "presentation/window_util.hpp"
 
 #include "presentation/env_num.hpp"   // env_int
+#include "presentation/display_query.hpp"
+#include "presentation/pacing.hpp"
+#include "presentation/render/output_filter.hpp"   // sharp_prescale
 
 #include <algorithm>
 #include <cstdio>
@@ -32,9 +35,19 @@ extern const unsigned long embedded_icon_png_len;
 
 namespace olduvai::presentation {
 
+namespace {
+bool g_unthrottled = false;
+}  // namespace
+
+void set_unthrottled(bool on) { g_unthrottled = on; }
+bool unthrottled() { return g_unthrottled; }
+void pace_delay(std::uint32_t ms) {
+    if (!g_unthrottled) SDL_Delay(ms);
+}
+
 void TickPacer::end_tick(SDL_Renderer* ren, SDL_Texture* tex,
                          bool smooth_vsync_ran, bool vga_scan, bool hd) {
-    if (smooth_vsync_ran) {
+    if (smooth_vsync_ran || g_unthrottled) {
         // The vsync render-fill already paced this tick to (about) frame_ms
         // via the panel; keep the ticker in phase without an extra sleep.
         ticker_.arm();
@@ -75,12 +88,92 @@ void TickPacer::end_tick(SDL_Renderer* ren, SDL_Texture* tex,
     ticker_.wait_next();
 }
 
+namespace {
+
+// The sharp output filter: on/off, and its prescaled picture (one renderer's
+// target texture, rebuilt when the size changes).
+struct SharpFilter {
+    bool on = false;
+    SDL_Renderer* ren = nullptr;
+    SDL_Texture* tex = nullptr;
+    int w = 0, h = 0;
+};
+
+SharpFilter& sharp_filter() {
+    static SharpFilter s;
+    return s;
+}
+
+// `tex` onto `dst` through a whole-factor nearest prescale and a linear
+// finish.  False when plain sampling is right, or no target can be made.
+bool show_sharp(SDL_Renderer* ren, SDL_Texture* tex, const SDL_Rect* dst) {
+    int tw = 0, th = 0;
+    if (SDL_QueryTexture(tex, nullptr, nullptr, &tw, &th) != 0 || tw <= 0 ||
+        th <= 0)
+        return false;
+    // The picture's size in output pixels: its logical rect times the scale.
+    float sx = 1.0f, sy = 1.0f;
+    SDL_RenderGetScale(ren, &sx, &sy);
+    int dw = 0, dh = 0;
+    if (dst != nullptr) {
+        dw = dst->w;
+        dh = dst->h;
+    } else {
+        SDL_RenderGetLogicalSize(ren, &dw, &dh);
+        if (dw == 0 || dh == 0) {   // stretch: no logical size
+            SDL_Rect vp{0, 0, 0, 0};
+            SDL_RenderGetViewport(ren, &vp);
+            dw = vp.w;
+            dh = vp.h;
+        }
+    }
+    const int k = sharp_prescale(dw * static_cast<double>(sx) / tw,
+                                 dh * static_cast<double>(sy) / th);
+    if (k == 0 || !SDL_RenderTargetSupported(ren)) return false;
+    SharpFilter& s = sharp_filter();
+    if (s.ren != ren || s.tex == nullptr || s.w != tw * k || s.h != th * k) {
+        release_output_filter(ren);
+        s.tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888,
+                                  SDL_TEXTUREACCESS_TARGET, tw * k, th * k);
+        if (s.tex == nullptr) return false;
+        s.ren = ren;
+        s.w = tw * k;
+        s.h = th * k;
+        SDL_SetTextureScaleMode(s.tex, SDL_ScaleModeLinear);
+        SDL_SetTextureBlendMode(s.tex, SDL_BLENDMODE_NONE);
+    }
+    // A target is drawn 1:1 (SDL keeps the window's logical scaling aside).
+    SDL_SetRenderTarget(ren, s.tex);
+    SDL_RenderClear(ren);
+    SDL_RenderCopy(ren, tex, nullptr, nullptr);
+    SDL_SetRenderTarget(ren, nullptr);
+    SDL_RenderCopy(ren, s.tex, nullptr, dst);
+    return true;
+}
+
+}  // namespace
+
+void set_output_filter(const std::string& filter) {
+    sharp_filter().on = filter == "sharp";
+}
+
+void release_output_filter(SDL_Renderer* ren) {
+    SharpFilter& s = sharp_filter();
+    if (s.ren != ren) return;
+    if (s.tex != nullptr) SDL_DestroyTexture(s.tex);
+    s.tex = nullptr;
+    s.ren = nullptr;
+    s.w = s.h = 0;
+}
+
 void show_texture(SDL_Renderer* ren, SDL_Texture* tex, const SDL_Rect* dst) {
     // Pinned: the renderer is shared, and a stale draw colour would tint the
     // clear (the bars of a pillarbox).
     SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
     SDL_RenderClear(ren);
-    if (tex != nullptr) SDL_RenderCopy(ren, tex, nullptr, dst);
+    if (tex == nullptr) return;
+    if (sharp_filter().on && show_sharp(ren, tex, dst)) return;
+    SDL_RenderCopy(ren, tex, nullptr, dst);
 }
 
 void upload_native_frame(SDL_Texture* tex, const FrameBuffer& fb, int hd_scale,
@@ -109,6 +202,16 @@ LogicalDims set_aspect_logical(SDL_Renderer* ren, int scale,
     SDL_RenderSetLogicalSize(ren, ld.w, ld.h);
     SDL_RenderSetIntegerScale(ren, scale == 1 ? SDL_TRUE : SDL_FALSE);
     return ld;
+}
+
+bool desktop_display_size(int& w, int& h) {
+    SDL_DisplayMode dm;
+    if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0 ||
+        SDL_GetDesktopDisplayMode(0, &dm) != 0)
+        return false;
+    w = dm.w;
+    h = dm.h;
+    return true;
 }
 
 int desktop_integer_scale(int logical_w, int logical_h) {
@@ -287,6 +390,10 @@ void DosTicker::arm() {
 }
 
 void DosTicker::wait_next() {
+    if (g_unthrottled) {   // timedemo: the next tick starts now
+        arm();
+        return;
+    }
     const double now0 = static_cast<double>(SDL_GetPerformanceCounter());
     if (now0 > next_ + 2.0 * period_counts_) {   // fell far behind: resync
         next_ = now0 + period_counts_;

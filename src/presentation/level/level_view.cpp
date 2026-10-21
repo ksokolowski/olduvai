@@ -14,6 +14,7 @@
 #include "presentation/level/level_setup.hpp"       // warm_level_sprites
 #include "presentation/level/level_state.hpp"
 #include "presentation/menu/cheat_picker.hpp"
+#include "presentation/pacing.hpp"                  // unthrottled
 #include "presentation/render/logical_size.hpp"
 #include "presentation/render/smooth_present.hpp"
 
@@ -67,7 +68,8 @@ LevelView::LevelView(LevelSurface& surface, const LevelViewDeps& deps)
       wsp_(ws_ctx(surface, deps.opts, deps.g)),
       fb_{320 * surface.hd_scale(), 200 * surface.hd_scale()},
       banners_(surface.hd_text(), deps.g.state, deps.opts.banner_fx,
-               deps.opts.frames > 0 || !deps.opts.screenshot.empty()),
+               deps.opts.frames > 0 || !deps.opts.screenshot.empty() ||
+                   unthrottled()),
       upload_and_show_([this](FrameBuffer& f, bool with_hud,
                               bool do_present) {
           fp_.present(f, with_hud, do_present);
@@ -132,6 +134,7 @@ LevelView::LevelView(LevelSurface& surface, const LevelViewDeps& deps)
     wsp_.stats = &diag.stats;
     wire_overlay_stats(diag.stats, surface.overlay());
     surface.set_stats(&diag.stats);
+    surface.set_save_notice(&g.save_notice);
 
     if (s > 1) warm_level_sprites(g, s, opts.hd_profile);
 }

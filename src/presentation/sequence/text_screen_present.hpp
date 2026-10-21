@@ -15,6 +15,7 @@
 
 #include "enhance/hd_text.hpp"
 #include "enhance/upscale.hpp"
+#include "presentation/pacing.hpp"   // pace_delay
 #include "presentation/image_out.hpp"   // present_output
 #include "presentation/render/level_surface.hpp"   // TextScreenDeps
 #include "presentation/render/logical_size.hpp"
@@ -76,7 +77,7 @@ inline TextScreenHd make_text_screen_hd(const TextScreenDeps& d,
         if (!capture_gate_frame(ren, dump_env, dump_tag, dump_seq))
             return false;
         present_output(ren);
-        SDL_Delay(d.frame_ms);
+        pace_delay(d.frame_ms);
         (void)h_px;
         return true;
     };

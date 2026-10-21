@@ -24,6 +24,7 @@ struct SettingsSeed {
     bool fullscreen = false;      // caller reads the SDL window flag
     EnhanceFlags flags;
     std::string profile_family;   // "" resolves as desktop (apply_preset)
+    std::string output_filter;    // "" reads as "nearest"
 };
 
 // The seed of the runtime options (a template, as display_settings_of).
@@ -32,7 +33,7 @@ SettingsSeed settings_seed_of(const Opts& o, const EnhanceFlags& flags,
                               bool fullscreen) {
     return {o.enhanced,     o.hd_profile, o.render_scale, o.music_device,
             o.sfx_backend,  o.aspect,     fullscreen,     flags,
-            o.profile_family};
+            o.profile_family, o.output_filter};
 }
 
 template <class Bind>
@@ -47,6 +48,8 @@ void seed_settings_mem(Bind& b, const SettingsSeed& s) {
     b.mem["hd_profile"] = s.hd_profile.empty() ? "native" : s.hd_profile;
     b.mem["render_scale"] = std::to_string(s.render_scale);
     b.mem["aspect"] = s.aspect.empty() ? "keep" : s.aspect;
+    b.mem["output_filter"] =
+        s.output_filter.empty() ? "nearest" : s.output_filter;
     // Remembered for the widescreen gate (see StagingBindings::allowed_values):
     // a value the user opened the menu holding stays offered for that visit,
     // so cycling past it is always reversible.

@@ -69,7 +69,7 @@ TEST_CASE("cli: every numeric flag rejects a non-numeric value") {
     for (const char* flag : {"--level", "--render-scale", "--audio-rate",
                              "--audio-buffer", "--start-screen",
                              "--play-frames", "--play-shot-frame",
-                             "--viewer-frames", "--render-audio-secs"}) {
+                             "--render-audio-secs"}) {
         CAPTURE(flag);
         CliArgs a;
         PlaySettings ps;

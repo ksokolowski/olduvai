@@ -148,7 +148,8 @@ void trace_slow_bubble(const Loaded& g, int frame, int sub, int scale) {
             std::fprintf(stderr,
                          "[BUBTRACE] vy=%.2f f=%d sub=%d y=%.3f "
                          "native_int=%d hd_int=%ld\n",
-                         b.vy, frame, sub, b.y, static_cast<int>(b.y),
+                         static_cast<double>(b.vy), frame, sub,
+                         static_cast<double>(b.y), static_cast<int>(b.y),
                          std::lround(b.y * scale));
             return;
         }

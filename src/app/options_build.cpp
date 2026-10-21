@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <initializer_list>
 #include <sstream>
+#include <cstdlib>
 #include <string>
 #include <utility>
 
@@ -80,6 +81,9 @@ bool validate_choices(PlaySettings& ps, BuildOutcome& oc) {
         return fail(oc,
                     "olduvai: --aspect must be 'keep', '4:3', 'stretch', or "
                     "'widescreen' (got '" + ps.aspect + "')\n");
+    if (!one_of(ps.output_filter, {"nearest", "sharp"}))
+        return fail(oc, "olduvai: --output-filter must be 'nearest' or "
+                        "'sharp' (got '" + ps.output_filter + "')\n");
     if (!one_of(ps.hd_font, {"freckle", "noto"}))
         return fail(oc, "olduvai: --hd-font must be 'freckle' or 'noto' (got '" +
                             ps.hd_font + "')\n");
@@ -161,47 +165,48 @@ BuildOutcome build_game_options(const CliArgs& args, PlaySettings& ps,
     }
 
     olduvai::presentation::GameOptions& go = out;
+    // The saved settings, as resolved, then what changes form on the way.
+    static_cast<presentation::PlayConfig&>(go) =
+        static_cast<const presentation::PlayConfig&>(ps);
+    presentation::PadBindings pad = presentation::pad_bindings_of(go);
+    presentation::upgrade_round1_nintendo(pad);
+    presentation::set_pad_bindings(go, pad);
     go.game_dir = args.game_dir;
     // Sequencer position (FUN_2bd7_04be slots): no --level -> 0 (attract); 1-7
     // jump into that level; 8 = the win ending.  Headless/replay remap 0 -> 1
     // in run_game.
     go.level = args.play_level < 0 ? 0 : args.play_level;
-    presentation::PadBindings pad{ps.pad_jump, ps.pad_attack, ps.pad_confirm,
-                                  ps.pad_back, ps.pad_pause};
-    presentation::upgrade_round1_nintendo(pad);
-    go.pad_jump = pad.jump;
-    go.pad_attack = pad.attack;
-    go.pad_pause = pad.pause;
-    go.pad_confirm = pad.confirm;
-    go.pad_back = pad.back;
-    go.pad_deadzone = ps.pad_deadzone;
-    go.key_left = ps.key_left;
-    go.key_right = ps.key_right;
-    go.key_up = ps.key_up;
-    go.key_down = ps.key_down;
-    go.key_attack = ps.key_attack;
-    go.key_pause = ps.key_pause;
-    go.key_quit = ps.key_quit;
-    go.enhanced = ps.enhanced;
     go.enhance = enhance_flags;
-    go.hd_profile = ps.hd_profile;
-    go.banner_fx = ps.banner_fx;
     go.window_w = args.play_window_w;
     go.window_h = args.play_window_h;
     go.start_screen = args.play_start_screen;
-    go.render_scale = ps.render_scale;
-    go.music_device = ps.music_device;
     go.midi_port = args.play_midi_port;
-    go.rom_dir = ps.rom_dir;
-    go.mt32_model = ps.mt32_model;
-    go.soundfont = ps.soundfont;
-    go.sfx_backend = ps.sfx_backend;
     go.replay = args.play_replay;
+    // OLDUVAI_UNTHROTTLED=1: a scripted run flat out, for benchmarks and
+    // tests (presentation/pacing.hpp).  Only where no one plays: --replay or
+    // a menu script (input per tick, so the run is the same run), or a
+    // bounded headless run; no vsync, which would cap it at the display's
+    // rate, and no audio, which plays in real time.
+    if (const char* u = std::getenv("OLDUVAI_UNTHROTTLED");
+        u != nullptr && std::string(u) == "1") {
+        const bool scripted = !go.replay.empty() ||
+                              std::getenv("OLDUVAI_MENU_SCRIPT") != nullptr ||
+                              args.play_frames > 0 || !args.play_shot.empty();
+        if (scripted)
+            go.unthrottled = true;
+        else
+            oc.warnings.emplace_back(
+                "olduvai: OLDUVAI_UNTHROTTLED needs a scripted run (--replay, "
+                "a menu script, --play-frames or --play-shot); ignored\n");
+    }
+    if (go.unthrottled) {
+        go.music_device = "none";
+        go.sfx_backend = "none";
+    }
     go.trace = args.play_trace;
     go.record_inputs = args.play_record_inputs;
     go.cheats = args.play_cheats;
     go.god = args.play_god;
-    go.autofire = ps.autofire;
     go.debug_collision = args.play_debug_collision;
     go.debug_entities = args.play_debug_entities;
     go.debug_perf = args.play_debug_perf;
@@ -211,19 +216,14 @@ BuildOutcome build_game_options(const CliArgs& args, PlaySettings& ps,
     // Scanout needs vblank pacing, but only CLASSIC uses it — the default-
     // on flag must not silently enable vsync for enhanced/HD runs.
     const bool hd_substrate = ps.enhanced && ps.hd_profile != "native";
-    go.vsync = args.play_vsync || (ps.vga_scan && !hd_substrate);
+    go.vsync = !go.unthrottled &&
+               (args.play_vsync || (ps.vga_scan && !hd_substrate));
     go.fullscreen = args.play_fullscreen;
-    go.display_mode = ps.display_mode;
-    go.audio_rate = ps.audio_rate;
-    go.audio_buffer = ps.audio_buffer;
-    go.transitions = ps.transitions;
-    go.aspect = ps.aspect;
     go.vga_scan = ps.vga_scan;
     go.hd_font = ps.hd_font == "noto" ? "NotoSans-Regular.ttf"
                                       : "FreckleFace-Regular.ttf";
     go.smooth_subframes = smooth_subframes;
     go.smooth_vsync_off = smooth_vsync_off;
-    go.profile_family = ps.profile_family;
     // In-game Options menu → play.json.  Load-modify-save keeps any keys
     // the menu doesn't touch; the app layer owns config I/O.
     go.persist = [](const std::string& key, const std::string& value) {

@@ -139,7 +139,8 @@ private:
 // The boss-arena darkening ramp, by distance from the outer screen edge:
 // `edge` there, 1.0 at the mirror line `denom` columns in.
 double edge_dim(float edge, int from_outer_edge, int denom) {
-    return edge + (1.0 - edge) * (static_cast<double>(from_outer_edge) / denom);
+    const auto e = static_cast<double>(edge);
+    return e + (1.0 - e) * (static_cast<double>(from_outer_edge) / denom);
 }
 
 }  // namespace

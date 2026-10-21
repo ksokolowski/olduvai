@@ -295,8 +295,8 @@ Edit Olduvai.sh to add a flag.  Full details are in the project's docs/AUDIO.md.
 
 6. LICENCE
 ----------
-Olduvai is free software, GPL-3.0-or-later (LICENSE.txt).  Third-party
-components and their licences are in licenses/ and fonts/.  Source code:
+Olduvai is free software, GPL-3.0-or-later; with the xBRZ scaler the binaries
+are conveyed under GPL-3.0.  Every licence is in licenses/.  Source code:
 https://github.com/ksokolowski/olduvai
 README
 

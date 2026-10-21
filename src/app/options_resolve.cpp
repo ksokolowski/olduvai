@@ -48,6 +48,8 @@ const Key kKeys[] = {
     {"hd_profile",   &PS::hd_profile,   Guard::kCli, &PS::Cli::hd, nullptr},
     {"music_device", &PS::music_device, Guard::kCli, &PS::Cli::music_device, nullptr},
     {"sfx_backend",  &PS::sfx_backend,  Guard::kCli, &PS::Cli::sfx_backend, nullptr},
+    // Config-only: a profile pin (the handhelds) or play.json.
+    {"music_auto_gm", &PS::music_auto_gm, Guard::kNone, nullptr, nullptr},
     {"display_mode", &PS::display_mode, Guard::kCli, &PS::Cli::display_mode, nullptr},
     {"transitions",  &PS::transitions,  Guard::kCli, &PS::Cli::transitions, nullptr},
     {"hd_font",      &PS::hd_font,      Guard::kCli, &PS::Cli::hd_font, nullptr},
@@ -55,6 +57,8 @@ const Key kKeys[] = {
     // Guards on the FLAG, not the value: an explicit "--aspect keep" must
     // beat a saved widescreen config (0.9.2 field bug).
     {"aspect",       &PS::aspect,       Guard::kCli, &PS::Cli::aspect, nullptr},
+    {"output_filter", &PS::output_filter, Guard::kCli, &PS::Cli::output_filter,
+                     nullptr},
     // Empty means nobody has said; the flag and the config both fill it.
     {"mt32_model",   &PS::mt32_model,   Guard::kFilled, nullptr, nullptr},
     {"rom_dir",      &PS::rom_dir,      Guard::kFilled, nullptr, nullptr},

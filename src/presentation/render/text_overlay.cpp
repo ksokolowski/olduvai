@@ -141,9 +141,7 @@ void TextOverlay::flush(SDL_Renderer* ren, int logical_w, int logical_h) {
         // Nothing drawn: the texture is already right, so no hash and no
         // upload.
         if (stats_on && uploads_skipped != nullptr) ++*uploads_skipped;
-        OvTimer tb(blit_ms, perf_ms, stats_on);
-        const LogicalScalingOff out(ren, logical_w, logical_h);
-        SDL_RenderCopy(ren, tex_, nullptr, nullptr);
+        blit_rows(ren, logical_w, logical_h);
         return;
     }
 
@@ -199,10 +197,30 @@ void TextOverlay::flush(SDL_Renderer* ren, int logical_w, int logical_h) {
         tex_rows_ = buf_rows_;
         tex_has_content_ = true;
     }
+    blit_rows(ren, logical_w, logical_h);
+}
+
+// Only the texture's rows with content, 1:1: the overlay covers the whole
+// output, and a full-screen blended copy each present is a GPU fill cost the
+// HUD's few rows do not need.  Runs closer than kMergeGap rows go as one copy.
+void TextOverlay::blit_rows(SDL_Renderer* ren, int logical_w, int logical_h) {
     OvTimer t(blit_ms, perf_ms, stats_on);
+    constexpr int kMergeGap = 16;
     // The overlay is at output resolution; the scene's size comes back after.
     const LogicalScalingOff out(ren, logical_w, logical_h);
-    SDL_RenderCopy(ren, tex_, nullptr, nullptr);
+    const auto used = [&](int y) {
+        return tex_rows_[static_cast<std::size_t>(y)] != 0;
+    };
+    int y = 0;
+    while (y < h_) {
+        if (!used(y)) { ++y; continue; }
+        int end = y;   // last used row of this run
+        for (int k = y + 1; k < h_ && k - end <= kMergeGap; ++k)
+            if (used(k)) end = k;
+        const SDL_Rect band{0, y, w_, end - y + 1};
+        SDL_RenderCopy(ren, tex_, &band, &band);
+        y = end + 1;
+    }
 }
 
 void draw_centered_overlay_row(const enhance::Canvas& cv,

@@ -92,7 +92,7 @@ check() {
 }
 
 # Render scale 2 -> 4 (Options -> Video -> Render scale).
-run scale 1 "${OPTIONS} down down enter down down right ${APPLY_SUB}" \
+run scale 1 "${OPTIONS} down down enter down down right right ${APPLY_SUB}" \
     --profile hd --render-scale 2
 check scale "display: rebuilt in place at scale 4" no
 if [ -s "${WORK}/scale/000.png" ] && [ -s "${WORK}/scale/001.png" ]; then
@@ -114,7 +114,7 @@ check audio "display: rebuilt in place at scale 2" yes
 # witness; --play-frames makes the fight the whole run.
 BOSS_OPTIONS="wait wait wait wait wait esc down enter"
 BOSS_AFTER="enter wait wait esc wait wait wait quit"
-run boss_scale 2 "${BOSS_OPTIONS} down down enter down down right esc esc ${BOSS_AFTER}" \
+run boss_scale 2 "${BOSS_OPTIONS} down down enter down down right right esc esc ${BOSS_AFTER}" \
     --profile hd --render-scale 2 --play-frames 150
 check boss_scale "display: rebuilt in place at scale 4" no no
 run boss_style 2 "${BOSS_OPTIONS} right esc ${BOSS_AFTER}" \

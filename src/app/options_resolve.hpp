@@ -10,41 +10,22 @@
 #include <vector>
 
 #include "config.hpp"
+#include "presentation/play_config.hpp"
 
 namespace olduvai::app {
 
 // The settings the saved config can influence, plus which the command line
 // stated (`cli`).  Defaults are the engine defaults: the parser writes CLI
-// values over them, then merge_config() fills what the CLI left.
-struct PlaySettings {
+// values over them, then merge_config() fills what the CLI left.  The
+// pass-through ones are PlayConfig's, which GameOptions shares.
+struct PlaySettings : presentation::PlayConfig {
     bool vga_scan = true;
-    std::string autofire = "off";
-    bool enhanced = false;
     std::string enhance_list;            // --enhance a,b,c (granular subset)
     // enhance_list came from play.json: a stale token there must never stop the
     // game (a typo on the command line is rejected).
     bool enhance_list_from_config = false;
-    std::string hd_profile;
-    int render_scale = 4;                // default 4 → omniscale 1280x800
     std::string game_dir;                // string mirror of main's fs::path
-    std::string pad_jump = "a", pad_attack = "x", pad_pause = "start",
-                pad_confirm = "a", pad_back = "b";
-    int pad_deadzone = 8000;
-    std::string key_left, key_right, key_up, key_down, key_attack, key_pause,
-        key_quit;
-    std::string music_device = "auto";
-    std::string rom_dir;
-    // MT-32 vs CM-32L: different machines, different sound.
-    std::string mt32_model;   // "" = auto
-    std::string soundfont;
-    std::string sfx_backend = "auto";    // pair to music device
-    std::string display_mode = "gpu";    // gpu (GPU scale) | cpu (software)
-    int audio_rate = 0;                  // 0 = device default / auto
-    int audio_buffer = 0;                // 0 = 2048-frame default
-    std::string transitions = "smooth";  // smooth | classic
-    std::string aspect = "keep";         // keep | 4:3 | stretch | widescreen
     std::string hd_font = "freckle";     // freckle | noto
-    std::string banner_fx = "caveman";   // caveman|fire|rainbow|gold|pulse
     // Smooth-present tuning (config-only: no CLI flag, no menu row).  Kept as
     // the raw config text; build_game_options validates, warns, falls back.
     std::string smooth_subframes = "0";   // 0 = auto | 1..12
@@ -68,12 +49,13 @@ struct PlaySettings {
         bool transitions = false;
         bool hd_font = false;
         bool banner_fx = false;
+        bool output_filter = false;
     } cli;
 
     // Outputs of merge_config().
     bool config_game_dir = false;   // game_dir came from the config file
     bool style_answered = false;    // config/profile/CLI ever chose Classic/HD
-    std::string profile_family = "desktop";   // set from layer_config()
+                                    // (profile_family: set from layer_config())
     std::string bug_report_dir;     // config-only; caller applies the side
                                     // effect (set_bug_report_dir is SDL-side)
 };

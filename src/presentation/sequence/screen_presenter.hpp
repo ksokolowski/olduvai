@@ -13,6 +13,7 @@
 
 #include <SDL.h>
 
+#include "presentation/pacing.hpp"   // pace_delay
 #include "presentation/render/game_render.hpp"       // FrameBuffer
 #include "presentation/render/level_surface.hpp"
 #include "presentation/sequence/text_screen_present.hpp"  // capture_gate_frame
@@ -72,7 +73,7 @@ public:
         }
         // Pace by ABSORBING the compose cost, not by adding to it.
         const Uint32 elapsed = SDL_GetTicks() - t0;
-        if (elapsed < frame_ms_) SDL_Delay(frame_ms_ - elapsed);
+        if (elapsed < frame_ms_) pace_delay(frame_ms_ - elapsed);
         return true;
     }
 

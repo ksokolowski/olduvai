@@ -159,7 +159,7 @@ Config builtin_profile(const std::string& name) {
     Config c;
     if (const auto* p = presentation::find_profile(name)) {
         for (std::size_t i = 0; i < p->pin_count; ++i)
-            c[p->pins[i].key] = p->pins[i].value;
+            c[p->pins[i].key] = presentation::pin_value(*p, i);
     }
     return c;
 }

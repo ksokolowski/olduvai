@@ -25,31 +25,33 @@ port_out_dir() {   # <tool name> <out>
     echo "$abs"
 }
 
-# fonts/ with their licences (the OFL requires them to travel together); the
-# Enhanced HD text loads them from <exe dir>/fonts/.
+# fonts/: the Enhanced HD text loads them from <exe dir>/fonts/.  Their
+# licences go to licenses/ with the rest (port_copy_licenses).
 port_copy_fonts() {   # <port dir>
     mkdir -p "$1/fonts"
-    local f
-    for f in "${REPO_ROOT}"/assets/fonts/*.ttf "${REPO_ROOT}"/assets/fonts/*LICENSE*; do
-        [ -e "$f" ] && cp -L "$f" "$1/fonts/"
-    done
-    return 0
+    cp -L "${REPO_ROOT}"/assets/fonts/*.ttf "$1/fonts/"
 }
 
-# LICENSE.txt and licenses/: the set the desktop packages carry
-# (package_windows.sh / make_dmg_macos.sh).  SDL2 is the device's own, loaded
-# dynamically, so no SDL text is owed; THIRD-PARTY-NOTICES.md lists it anyway.
+# licenses/: one flat folder, LICENSE.<component>.txt per component (the
+# PortMaster convention, used by both handheld bundles).  SDL2 is the device's
+# own, loaded dynamically, so no SDL text is owed; THIRD-PARTY-NOTICES.md lists
+# it anyway.  xBRZ is GPL-3.0 only: its text is the GPL's.
 port_copy_licenses() {   # <port dir>
-    mkdir -p "$1/licenses"
-    cp "${REPO_ROOT}/LICENSE" "$1/LICENSE.txt"
-    cp "${REPO_ROOT}/THIRD-PARTY-NOTICES.md" "$1/licenses/"
-    cp "${REPO_ROOT}/third_party/nuked_opl3/LICENSE" "$1/licenses/Nuked-OPL3-LICENSE.txt"
-    cp "${REPO_ROOT}/third_party/mt32emu/COPYING.LESSER.txt" \
-       "$1/licenses/libmt32emu-LICENSE.txt"
-    cp "${REPO_ROOT}/third_party/rtmidi/LICENSE" "$1/licenses/RtMidi-LICENSE.txt"
-    cp "${REPO_ROOT}/third_party/fluidsynth/LICENSE" "$1/licenses/FluidSynth-LICENSE.txt"
-    cp "${REPO_ROOT}/third_party/fluidsynth/gcem/LICENSE" "$1/licenses/gcem-LICENSE.txt"
-    cp "${REPO_ROOT}/third_party/fluidsynth/gcem/NOTICE.txt" "$1/licenses/gcem-NOTICE.txt"
+    local l="$1/licenses" f name
+    mkdir -p "$l"
+    cp "${REPO_ROOT}/LICENSE" "$l/LICENSE.olduvai.txt"
+    cp "${REPO_ROOT}/LICENSE" "$l/LICENSE.xBRZ.txt"
+    cp "${REPO_ROOT}/THIRD-PARTY-NOTICES.md" "$l/"
+    cp "${REPO_ROOT}/third_party/nuked_opl3/LICENSE" "$l/LICENSE.Nuked-OPL3.txt"
+    cp "${REPO_ROOT}/third_party/mt32emu/COPYING.LESSER.txt" "$l/LICENSE.libmt32emu.txt"
+    cp "${REPO_ROOT}/third_party/rtmidi/LICENSE" "$l/LICENSE.RtMidi.txt"
+    cp "${REPO_ROOT}/third_party/fluidsynth/LICENSE" "$l/LICENSE.FluidSynth.txt"
+    cp "${REPO_ROOT}/third_party/fluidsynth/gcem/LICENSE" "$l/LICENSE.gcem.txt"
+    cp "${REPO_ROOT}/third_party/fluidsynth/gcem/NOTICE.txt" "$l/NOTICE.gcem.txt"
+    for f in "${REPO_ROOT}"/assets/fonts/*-LICENSE.txt; do   # OFL texts
+        name=$(basename "$f" -LICENSE.txt)
+        cp -L "$f" "$l/LICENSE.${name}.txt"
+    done
 }
 
 # Empty directories do not survive every archiver; a note keeps each one.

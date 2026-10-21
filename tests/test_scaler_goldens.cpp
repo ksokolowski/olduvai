@@ -104,42 +104,58 @@ int main() {
     const auto& profiles = supported_hd_profiles();
 
     // Hash of upscale_rgba(src, 64, 48, scale, profile), keyed
-    // "<profile>:<scale>".  Pinned 2026-09-24 on arm64 Apple clang; the CI
+    // "<profile>:<scale>".  Pinned 2026-09-24 on arm64 Apple clang (x5 to x7
+    // 2026-10-17: xBRZ and OmniScale take x5 and x6, x7 is past every
+    // scaler's table); the CI
     // platform matrix re-verifies them — a differing cell is the finding.
     static const std::map<std::string, std::uint64_t> kGoldens = {
         {"native:2", 0x9e10db102671c0f3ull},
         {"native:3", 0xa75d99c9a220264aull},
         {"native:4", 0x23a8d1cbfbe43cc3ull},
         {"native:5", 0x67270a0f00e04342ull},
+        {"native:6", 0x376f7ac86cc41973ull},
+        {"native:7", 0xfcdbc1028a146f9aull},    // past the table: nearest
         {"retro:2", 0x9e10db102671c0f3ull},
         {"retro:3", 0xa75d99c9a220264aull},
         {"retro:4", 0x23a8d1cbfbe43cc3ull},
         {"retro:5", 0x67270a0f00e04342ull},
+        {"retro:6", 0x376f7ac86cc41973ull},
+        {"retro:7", 0xfcdbc1028a146f9aull},
         {"smooth:2", 0xdda0fd3c3c1680a8ull},
         {"smooth:3", 0xc8fd78cc8b2c672full},
         {"smooth:4", 0x687604bd309d86acull},
         {"smooth:5", 0x67270a0f00e04342ull},
+        {"smooth:6", 0x376f7ac86cc41973ull},
+        {"smooth:7", 0xfcdbc1028a146f9aull},
         {"eagle:2", 0x374d2ac61b61fd21ull},
         {"eagle:3", 0xc8fd78cc8b2c672full},   // no native 3x → scale3x
         {"eagle:4", 0xdc880b9065f95b4full},
         {"eagle:5", 0x67270a0f00e04342ull},
+        {"eagle:6", 0x376f7ac86cc41973ull},
+        {"eagle:7", 0xfcdbc1028a146f9aull},
         {"xbrz:2", 0x673c832f94b51cbaull},
         {"xbrz:3", 0x8405125d0a86f3d5ull},    // native: not scale3x
         {"xbrz:4", 0x94a869f335c0212full},
-        {"xbrz:5", 0x67270a0f00e04342ull},    // only 2 to 4 exist: nearest
+        {"xbrz:5", 0x93cdfc192fa18e2full},    // native: the scaler takes the factor
+        {"xbrz:6", 0x16dd7706c90d7860ull},
+        {"xbrz:7", 0xfcdbc1028a146f9aull},
         {"mmpx:2", 0x101f5befa0c421baull},
         {"mmpx:3", 0xc8fd78cc8b2c672full},    // no native 3x → scale3x
         {"mmpx:4", 0x6bcf631f031bee98ull},
         {"mmpx:5", 0x67270a0f00e04342ull},
+        {"mmpx:6", 0x376f7ac86cc41973ull},
+        {"mmpx:7", 0xfcdbc1028a146f9aull},
         {"omniscale:2", 0xc3125eb48cdafd0full},
         {"omniscale:3", 0x464d610e77bb4728ull},
         {"omniscale:4", 0xce33f2477c131cecull},
-        {"omniscale:5", 0x67270a0f00e04342ull},    // only 2 to 4 exist: nearest
+        {"omniscale:5", 0x4e5fb3b93782b5b7ull},    // native: the scaler takes the factor
+        {"omniscale:6", 0x979e09d6c5ff982cull},
+        {"omniscale:7", 0xfcdbc1028a146f9aull},
     };
 
     int failures = 0;
     for (const auto& profile : profiles)
-        for (int scale = 2; scale <= 5; ++scale) {
+        for (int scale = 2; scale <= 7; ++scale) {
             const std::uint64_t got =
                 hash_of(upscale_rgba(src, kWidth, kHeight, scale, profile));
             const auto it =
@@ -156,7 +172,7 @@ int main() {
             }
         }
 
-    std::printf("scaler_goldens: %zu profile x 4 scale cells, %d differ\n",
-                profiles.size() * 4, failures);
+    std::printf("scaler_goldens: %zu profile x 6 scale cells, %d differ\n",
+                profiles.size() * 6, failures);
     return failures == 0 ? 0 : 1;
 }

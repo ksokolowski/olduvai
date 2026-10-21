@@ -19,6 +19,7 @@
 #include "formats/pc1.hpp"                // Rgb, Pc1Image
 #include "prepare/exe_tables.hpp"         // ObjectScreens, L3CaveLayouts, LevelTiles
 #include "presentation/render/game_render.hpp"   // LevelRenderAssets
+#include "presentation/render/save_notice.hpp"   // SaveNotice
 #include "systems/fluid_bubbles.hpp"      // FluidBubbleSystem
 #include "systems/player.hpp"             // SystemsState
 #include "systems/spawning.hpp"           // MonsterTables
@@ -110,6 +111,7 @@ struct Loaded {
     // constant Y across the flight screens instead of the original's per-screen
     // rising/falling sea — see bind_screen.  -1 = disabled (faithful).
     int glider_water_y = -1;
+    SaveNotice save_notice;   // the quicksave's on-screen answer
 };
 
 }  // namespace olduvai::presentation

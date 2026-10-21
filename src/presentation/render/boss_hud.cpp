@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #include "enhance/hd_text.hpp"
+#include "formats/hash64.hpp"
 #include "presentation/render/boss_widescreen.hpp"
 #include "presentation/render/hud_render.hpp"
 #include "systems/boss.hpp"
@@ -70,6 +71,21 @@ void BossHud::draw_classic_lives(FrameBuffer& fb) const {
     char buf[8];
     std::snprintf(buf, sizeof buf, "%02d", std::min(std::max(0, *lives_), 99));
     draw_text(fb, *charset_, *palette_, 48, 8, buf);
+}
+
+std::uint64_t BossHud::key(bool draw_lives, int cx_native,
+                           int total_native_w) const {
+    formats::Hash64 k;
+    k.mix(static_cast<std::uint64_t>(*lives_));
+    k.mix(static_cast<std::uint64_t>(*health_));
+    k.mix(draw_lives ? 1u : 2u);
+    k.mix(static_cast<std::uint64_t>(cx_native));
+    k.mix(static_cast<std::uint64_t>(total_native_w));
+    k.mix(static_cast<std::uint64_t>(bar_.left));
+    k.mix(static_cast<std::uint64_t>(bar_.strip_w));
+    k.mix_bytes(bar_.strip.data(), bar_.strip.size());
+    const std::uint64_t h = k.value();
+    return h == 0 ? 1ull : h;   // 0 is TextOverlay::kAlwaysRedraw
 }
 
 void BossHud::draw_into(const enhance::Canvas& cv,

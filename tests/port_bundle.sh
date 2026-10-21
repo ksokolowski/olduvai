@@ -160,8 +160,8 @@ fi
 if [ -e "$P/gamelist.xml" ]; then
     echo "FAIL: public bundle ships a gamelist.xml (would overwrite the player's)"; fail=1
 fi
-for f in olduvai/LICENSE.txt olduvai/licenses/THIRD-PARTY-NOTICES.md \
-         olduvai/licenses/Nuked-OPL3-LICENSE.txt olduvai/gamelist-entry.xml; do
+for f in olduvai/licenses/LICENSE.olduvai.txt olduvai/licenses/THIRD-PARTY-NOTICES.md \
+         olduvai/licenses/LICENSE.Nuked-OPL3.txt olduvai/gamelist-entry.xml; do
     if [ ! -s "$P/$f" ]; then echo "FAIL: public bundle lacks $f"; fail=1; fi
 done
 

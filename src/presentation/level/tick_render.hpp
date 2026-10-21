@@ -5,7 +5,9 @@
 // present, or smooth motion's interpolated sub-frames.
 #pragma once
 
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -13,6 +15,7 @@
 
 #include "presentation/level/level_view_deps.hpp"
 #include "presentation/render/dirty_rects.hpp"   // BlitRecord
+#include "presentation/render/game_render.hpp"   // StaticBgWarmer
 #include "presentation/render/smooth_present.hpp"   // SmoothPacer
 
 namespace olduvai::presentation {
@@ -60,6 +63,9 @@ private:
     void compose_sub(const Bubbles& bubbles);
     bool steady_ok(const Bubbles& bubbles) const;
     void present_frame(const Bubbles& bubbles);
+    // After the tick's presents: the next screen's static background, a band
+    // a tick, so its change does not build it.
+    void warm_ahead();
 
     Loaded& g_;
     LevelSurface& surface_;
@@ -72,6 +78,10 @@ private:
     int hd_scale_;
     SmoothPacer pacer_;
     std::vector<BlitRecord> blits_;   // fb's, from its last compose
+    std::uint64_t tick_t0_ = 0;       // compose()'s performance counter
+    double last_warm_ms_ = 0.0;       // what the last warm step cost
+    std::unique_ptr<StaticBgWarmer> bg_warm_;   // warm_ahead's
+    int bg_warm_screen_ = -1;                   // the screen it started on
     float player_fx_ = 0.0f;   // the sub-frame's interpolated player
     float player_fy_ = 0.0f;
 };

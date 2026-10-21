@@ -68,8 +68,9 @@ public:
     // Output cap height for an output width (8 px native scaled).
     static int cap_px_for(int output_w) { return 8 * output_w / 320; }
 
-    // Upload the buffer and blit it 1:1 over the scene (logical scaling off),
-    // then restore the logical size logical_w/h.  The caller presents.
+    // Upload the buffer and blit its rows with content 1:1 over the scene
+    // (logical scaling off), then restore the logical size logical_w/h.  The
+    // caller presents.
     void flush(SDL_Renderer* ren, int logical_w, int logical_h);
 
     // One pass: begin(), `draw(canvas)` over the buffer, flush().  `key` as
@@ -88,6 +89,7 @@ public:
 
 private:
     void ensure(SDL_Renderer* ren, int ow, int oh);
+    void blit_rows(SDL_Renderer* ren, int logical_w, int logical_h);
     // Hash of the last uploaded buffer, computed from the drawn bytes, so it
     // cannot go stale like a caller key (six call sites draw into this buffer).
     std::uint64_t last_hash_ = 0;

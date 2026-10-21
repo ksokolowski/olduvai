@@ -132,9 +132,11 @@ MenuActionTable make_pause_actions(PauseActionsDeps* d) {
         }},
         {"save_game", [d] {
             const SaveState cp = capture_save(*d->g, d->display_level);
+            bool saved = false;
             if (d->opts->save_path.empty()) {
                 std::fprintf(stderr, "save: no save path configured\n");
             } else if (save_to_file(cp, d->opts->save_path)) {
+                saved = true;
                 std::fprintf(stderr, "save: game written to %s\n",
                              d->opts->save_path.c_str());
             } else {
@@ -143,6 +145,7 @@ MenuActionTable make_pause_actions(PauseActionsDeps* d) {
                 std::fprintf(stderr, "save: FAILED to write %s\n",
                              d->opts->save_path.c_str());
             }
+            d->g->save_notice.post(saved, SDL_GetTicks());
             *d->pause_open = false;
         }},
         {"load_game", [d] {

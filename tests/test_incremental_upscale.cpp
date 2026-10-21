@@ -103,3 +103,21 @@ TEST_CASE("LazyUpscaler: bands on demand equal the whole upscale") {
         }
     }
 }
+
+TEST_CASE("LazyUpscaler: ensure_upto over a transition equals the whole upscale") {
+    std::vector<std::uint8_t> px = backdrop();
+    draw_sprite(px, 50, 30);
+    // Uneven progress, steps under the minimum band held back, then done.
+    const double fracs[] = {0.0, 0.1, 0.12, 0.5, 0.51, 0.9};
+    for (const std::string& profile : supported_hd_profiles()) {
+        olduvai::enhance::LazyUpscaler lazy(px, kW, kH, 3, profile);
+        for (double f : fracs) {
+            lazy.ensure_upto(f);
+            CHECK_FALSE(lazy.complete());
+        }
+        lazy.ensure_upto(1.0);
+        INFO(profile);
+        CHECK(lazy.complete());
+        CHECK(lazy.take() == upscale_rgba(px, kW, kH, 3, profile));
+    }
+}

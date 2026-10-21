@@ -22,7 +22,7 @@ class IncrementalUpscaler {
 public:
     // How far, in native pixels, any profile's output reads its input
     // (the chained x4 profiles included): 2 is the least every profile
-    // passes test_incremental_upscale with (xbr needs it), 4 keeps margin.
+    // passes test_incremental_upscale with (xbrz needs it), 4 keeps margin.
     static constexpr int kReach = 4;
 
     // `px` (w x h RGBA) at `scale` with `profile`, as upscale_rgba returns
@@ -57,14 +57,24 @@ public:
 
     // Make native columns [x0, x1) of hd() final.
     void ensure(int x0, int x1);
+    // Spread the whole image over calls: columns [0, frac * w) final, in
+    // bands of at least kMinBand columns (each band carries the scaler's reach
+    // of context on both sides, so thin ones cost more in all).  frac >= 1
+    // finishes it.
+    static constexpr int kMinBand = 48;
+    void ensure_upto(double frac);
+    bool complete() const { return upto_ >= w_; }
     // (w * scale) x (h * scale) RGBA; final where ensure() covered.
     const std::vector<std::uint8_t>& hd() const { return out_; }
+    // hd(), moved out; the upscaler is spent.
+    std::vector<std::uint8_t> take() { return std::move(out_); }
 
 private:
     const std::vector<std::uint8_t>& px_;
     int w_, h_, scale_;
     std::string profile_;
     std::vector<bool> done_;   // per native column
+    int upto_ = 0;             // ensure_upto's columns so far
     std::vector<std::uint8_t> out_;
 };
 

@@ -138,7 +138,7 @@ TEST_CASE("confirm follows jump, and only the four actions rebind") {
     CHECK(b.jump == before.jump);
 }
 
-TEST_CASE("a face button is named as its family prints it, with its position") {
+TEST_CASE("a face button is named as its family prints it, with its position where letters vary") {
     using olduvai::presentation::pad_button_label;
     using olduvai::presentation::PadFamily;
     CHECK(pad_button_label("a", PadFamily::kXbox) == "A - bottom");
@@ -147,8 +147,10 @@ TEST_CASE("a face button is named as its family prints it, with its position") {
     CHECK(pad_button_label("b", PadFamily::kNintendo) == "A - right");
     CHECK(pad_button_label("x", PadFamily::kNintendo) == "Y - left");
     CHECK(pad_button_label("y", PadFamily::kNintendo) == "X - top");
-    CHECK(pad_button_label("a", PadFamily::kPlayStation) == "Cross - bottom");
-    CHECK(pad_button_label("y", PadFamily::kPlayStation) == "Triangle - top");
+    // A PlayStation shape is one button on every such pad: no position (and
+    // "Triangle - top" overflowed the menu, test_menu_layout).
+    CHECK(pad_button_label("a", PadFamily::kPlayStation) == "Cross");
+    CHECK(pad_button_label("y", PadFamily::kPlayStation) == "Triangle");
     // The rest keep one name on every pad.
     for (PadFamily f : {PadFamily::kXbox, PadFamily::kNintendo,
                         PadFamily::kPlayStation}) {

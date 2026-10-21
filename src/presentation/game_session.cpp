@@ -15,6 +15,7 @@
 
 #include "prepare/game_files.hpp"        // load_game_executable
 #include "presentation/audio/audio.hpp"  // SdlAudio (make_unique)
+#include "presentation/pacing.hpp"                  // set_unthrottled
 #include "presentation/render/smooth_config.hpp"   // smooth_present_config
 #include "prepare/game_archives.hpp"
 #include "presentation/boss_app.hpp"
@@ -56,7 +57,13 @@ class GameSession {
 public:
     explicit GameSession(const GameOptions& opts)
         : opts_(opts), rt_(opts),
-          single_(opts.frames > 0 || !opts.screenshot.empty()) {}
+          single_(opts.frames > 0 || !opts.screenshot.empty()) {
+        // Process-wide from here; the Video menu's preview changes it.
+        set_output_filter(opts.output_filter);
+        set_unthrottled(opts.unthrottled);
+        if (opts.unthrottled)
+            std::fprintf(stderr, "timedemo: unthrottled replay\n");
+    }
     ~GameSession() = default;
     GameSession(const GameSession&) = delete;
     GameSession& operator=(const GameSession&) = delete;
@@ -87,6 +94,7 @@ public:
             carry_ = CarriedState{};
             display_ = 0;
         }
+        release_output_filter(sw_.ren);
         SDL_DestroyRenderer(sw_.ren);
         SDL_DestroyWindow(sw_.win);
         SDL_Quit();
@@ -175,6 +183,7 @@ private:
             set_aspect_logical(sw_.ren, new_scale, rt_.aspect);
             return true;
         }
+        release_output_filter(sw_.ren);
         if (sw_.ren) SDL_DestroyRenderer(sw_.ren);
         if (sw_.win) SDL_DestroyWindow(sw_.win);
         sw_ = create_window(new_scale);

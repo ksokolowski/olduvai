@@ -58,7 +58,7 @@ TEST_CASE("built_in_menu_model: bindings survive generation") {
     bool found_scale = false;
     for (const auto& it : m.screens.at("video").items) {
         if (it.id == "render_scale") {
-            CHECK(it.values == std::vector<std::string>{"2", "4"});
+            CHECK(it.values == std::vector<std::string>{"2", "3", "4", "5", "6"});
             CHECK(it.restart);
             found_scale = true;
         }

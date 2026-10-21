@@ -40,90 +40,46 @@ inline constexpr ProfilePin kDosPins[] = {
     {"hd_profile", "native"},
     {"aspect", "keep"},
 };
-// hd = the full enhanced stack + widescreen peeks.  No profile pins audio: the
-// auto chain (MT-32 ROMs -> SoundFont -> OPL) picks per machine.
+// hd = the full enhanced stack + widescreen peeks.  Audio is the auto chain
+// (MT-32 ROMs -> SoundFont -> OPL), picked per machine.
 inline constexpr ProfilePin kHdPins[] = {
     {"enhanced", "true"},
     {"hd_profile", "omniscale"},
     {"render_scale", "4"},
     {"aspect", "widescreen"},
 };
-// hd-handheld: measured on the TrimUI Smart Pro and Powkiddy A12: x3 fits
-// 1280x720 and 1024x600, discrete path with 2 sub-frames.  xBRZ is the scaler:
-// the same steady frame cost as Scale2x/3x, 0.15 ms a tick more, and a worse
-// burst when a screen's graphics are built.
-inline constexpr ProfilePin kHdHandheldPins[] = {
-    {"enhanced", "true"},
-    {"hd_profile", "xbrz"},
-    {"render_scale", "3"},
-    {"aspect", "widescreen"},
-    {"smooth_subframes", "2"},
-    {"smooth_vsync", "off"},
-};
-
-// The 4:3 handheld family (640x480 on the R36S): both fill the panel at the
-// DOS 4:3 aspect; Enhanced at x2, the panel's own width, measured on the R36S,
-// with xBRZ (close to free there: a 53 ms burst against 11 ms for Scale2x).
-inline constexpr ProfilePin kDosHandheld43Pins[] = {
+// The handheld pair follows the panel the session runs on: "auto" pins are
+// resolved by auto_display() against session_panel() (set at start-up).
+// Enhanced is measured on the TrimUI Smart Pro and Powkiddy A12 (x3, 1280x720
+// and 1024x600) and the R36S (x2 filling 640x480), discrete path with 2
+// sub-frames.  xBRZ is the scaler: the same steady frame cost as Scale2x/3x,
+// 0.15 ms a tick more, and a worse burst when a screen's graphics are built.
+// Audio: auto without the GM SoundFont (FluidSynth is a real cost on a weak
+// chip, and the Sound Blaster is preferred to it): MT-32, then OPL.
+inline constexpr ProfilePin kDosHandheldPins[] = {
     {"enhanced", "false"},
     {"enhance", ""},
     {"hd_profile", "native"},
-    {"aspect", "4:3"},
+    {"aspect", "auto"},
+    {"music_auto_gm", "false"},
 };
-inline constexpr ProfilePin kHdHandheld43Pins[] = {
+inline constexpr ProfilePin kHdHandheldPins[] = {
     {"enhanced", "true"},
     {"hd_profile", "xbrz"},
-    {"render_scale", "2"},
-    {"aspect", "4:3"},
+    {"render_scale", "auto"},
+    {"aspect", "auto"},
     {"smooth_subframes", "2"},
     {"smooth_vsync", "off"},
-};
-
-// The handheld scale follows the panel: the largest scale whose frame fits its
-// height, a step every 200 lines (x2 from 400, x3 from 600, x4 from 800).  A
-// 16:10 panel of 800 lines takes x4 as exactly 1280x800.  hd-handheld above is
-// x3; these are the x2 and x4 pairs for wide panels.  Neither is verified on a
-// device of its class: the R36S at x2 and the TrimUI at render scale 4 are the
-// stand-ins (x4 costs xBRZ 1.9 ms a tick over x3 there, and the pool uses up
-// to 8 threads on a bigger chip).
-inline constexpr ProfilePin kHdHandheldX2Pins[] = {
-    {"enhanced", "true"},
-    {"hd_profile", "xbrz"},
-    {"render_scale", "2"},
-    {"aspect", "widescreen"},
-    {"smooth_subframes", "2"},
-    {"smooth_vsync", "off"},
-};
-inline constexpr ProfilePin kHdHandheldX4Pins[] = {
-    {"enhanced", "true"},
-    {"hd_profile", "xbrz"},
-    {"render_scale", "4"},
-    {"aspect", "widescreen"},
-    {"smooth_subframes", "2"},
-    {"smooth_vsync", "off"},
+    {"music_auto_gm", "false"},
 };
 
 inline constexpr ProfileDef kProfiles[] = {
     {"dos", "desktop", ProfileRole::Classic, kDosPins, std::size(kDosPins)},
     {"hd", "desktop", ProfileRole::Enhanced, kHdPins, std::size(kHdPins)},
-    // dos-handheld has dos's pins: it exists so a launcher can start a
-    // handheld in Classic while the menu still knows its Enhanced member.
-    {"dos-handheld", "handheld", ProfileRole::Classic, kDosPins,
-     std::size(kDosPins)},
+    {"dos-handheld", "handheld", ProfileRole::Classic, kDosHandheldPins,
+     std::size(kDosHandheldPins)},
     {"hd-handheld", "handheld", ProfileRole::Enhanced, kHdHandheldPins,
      std::size(kHdHandheldPins)},
-    {"dos-handheld-43", "handheld-43", ProfileRole::Classic,
-     kDosHandheld43Pins, std::size(kDosHandheld43Pins)},
-    {"hd-handheld-43", "handheld-43", ProfileRole::Enhanced, kHdHandheld43Pins,
-     std::size(kHdHandheld43Pins)},
-    {"dos-handheld-x2", "handheld-x2", ProfileRole::Classic, kDosPins,
-     std::size(kDosPins)},
-    {"hd-handheld-x2", "handheld-x2", ProfileRole::Enhanced, kHdHandheldX2Pins,
-     std::size(kHdHandheldX2Pins)},
-    {"dos-handheld-x4", "handheld-x4", ProfileRole::Classic, kDosPins,
-     std::size(kDosPins)},
-    {"hd-handheld-x4", "handheld-x4", ProfileRole::Enhanced, kHdHandheldX4Pins,
-     std::size(kHdHandheldX4Pins)},
 };
 
 // A session with no profile at all behaves as this family.
@@ -171,6 +127,46 @@ inline std::string profile_names() {
         out += p.name;
     }
     return out;
+}
+
+// The panel a handheld session runs on, for "auto" pins; 0x0 = unknown.
+struct Panel {
+    int w = 0, h = 0;
+};
+inline Panel& session_panel() {
+    static Panel p;
+    return p;
+}
+
+struct AutoDisplay {
+    int render_scale;
+    const char* aspect;
+};
+
+// "auto" for `panel`: a panel narrower than 16:10 is filled at 4:3, a wider
+// one is widescreen in Enhanced (keep in Classic); the scale is the largest,
+// 2 to 4, whose frame (320 wide, 240 or 200 tall) fits the panel.  An unknown
+// panel plays the measured 720p default, x3 widescreen.
+inline AutoDisplay auto_display(const Panel& panel, ProfileRole role) {
+    const bool wide_role = role == ProfileRole::Enhanced;
+    if (panel.w <= 0 || panel.h <= 0)
+        return {3, wide_role ? "widescreen" : "keep"};
+    const bool narrow = panel.w * 10 < panel.h * 16;
+    const int by_h = panel.h / (narrow ? 240 : 200);
+    const int by_w = panel.w / 320;
+    const int s = by_h < by_w ? by_h : by_w;
+    return {s < 2 ? 2 : (s > 4 ? 4 : s),
+            narrow ? "4:3" : (wide_role ? "widescreen" : "keep")};
+}
+
+// A pin's value, "auto" resolved for the session's panel.
+inline std::string pin_value(const ProfileDef& p, std::size_t i) {
+    const std::string v = p.pins[i].value;
+    if (v != "auto") return v;
+    const AutoDisplay a = auto_display(session_panel(), p.role);
+    return std::string(p.pins[i].key) == "render_scale"
+               ? std::to_string(a.render_scale)
+               : std::string(a.aspect);
 }
 
 }  // namespace olduvai::presentation

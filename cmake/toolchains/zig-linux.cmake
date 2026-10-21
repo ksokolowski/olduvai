@@ -69,3 +69,10 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 # ar understands ELF.
 set(CMAKE_AR     ${OLDUVAI_ZIG_XTOOL}/${OLDUVAI_ZIG_PREFIX}-ar     CACHE FILEPATH "" FORCE)
 set(CMAKE_RANLIB ${OLDUVAI_ZIG_XTOOL}/${OLDUVAI_ZIG_PREFIX}-ranlib CACHE FILEPATH "" FORCE)
+# LTO archives hold LLVM bitcode; CMake's IPO support asks for the
+# compiler's own archiver and found none, so OLDUVAI_LTO silently built
+# without LTO.  zig's ar is LLVM's.
+foreach(_lang C CXX)
+    set(CMAKE_${_lang}_COMPILER_AR     ${CMAKE_AR}     CACHE FILEPATH "" FORCE)
+    set(CMAKE_${_lang}_COMPILER_RANLIB ${CMAKE_RANLIB} CACHE FILEPATH "" FORCE)
+endforeach()

@@ -149,12 +149,13 @@ bool is_input_name(const std::string& n) {
 }
 
 // The Config field a pad_* key names, or nullptr.
-BindingList* field_of(const std::string& key) {
-    if (key == "pad_jump") return &g_cfg.jump;
-    if (key == "pad_attack") return &g_cfg.attack;
-    if (key == "pad_confirm") return &g_cfg.confirm;
-    if (key == "pad_back") return &g_cfg.back;
-    if (key == "pad_pause") return &g_cfg.pause;
+// The list a pad_* key sets in `c`, or nullptr for another key.
+BindingList* field_of(Config& c, const std::string& key) {
+    if (key == "pad_jump") return &c.jump;
+    if (key == "pad_attack") return &c.attack;
+    if (key == "pad_confirm") return &c.confirm;
+    if (key == "pad_back") return &c.back;
+    if (key == "pad_pause") return &c.pause;
     return nullptr;
 }
 
@@ -218,11 +219,10 @@ void init(const Config& cfg) {
 
 void init_from_options(const GameOptions& opts) {
     Config pcfg;
-    pcfg.jump = inputs_from_string(opts.pad_jump, pcfg.jump);
-    pcfg.attack = inputs_from_string(opts.pad_attack, pcfg.attack);
-    pcfg.pause = inputs_from_string(opts.pad_pause, pcfg.pause);
-    pcfg.confirm = inputs_from_string(opts.pad_confirm, pcfg.confirm);
-    pcfg.back = inputs_from_string(opts.pad_back, pcfg.back);
+    for (const PadSlot& s : kPadSlots) {
+        BindingList* f = field_of(pcfg, s.key);
+        *f = inputs_from_string(opts.*s.setting, *f);
+    }
     pcfg.deadzone = opts.pad_deadzone;
     init(pcfg);
 }
@@ -277,12 +277,12 @@ bool is_modifier(const std::string& name) { return holds(g_cfg.modifier, name); 
 bool fire_held() { return held(g_cfg.confirm) || held(g_cfg.jump); }
 
 std::string binding(const std::string& key) {
-    const BindingList* f = field_of(key);
+    const BindingList* f = field_of(g_cfg, key);
     return f == nullptr ? std::string{} : join_binding(*f);
 }
 
 bool apply_binding(const std::string& key, const std::string& value) {
-    BindingList* f = field_of(key);
+    BindingList* f = field_of(g_cfg, key);
     if (f == nullptr) return false;
     BindingList names = valid_bindings(value, is_input_name);
     if (names.empty()) return false;

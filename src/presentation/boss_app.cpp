@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "presentation/boss_app.hpp"
+#include "presentation/pacing.hpp"   // pace_delay
 
 #include "presentation/boss/boss_diag.hpp"
 #include "presentation/boss/boss_ending.hpp"
@@ -132,7 +133,7 @@ BossRunResult run_boss_level(GameOptions& opts, int internal_level,
                 nullptr, internal_level,
                 {assets.charset, assets.palette, display.view().present(), sh});
         });
-    if (early_quit) res.quit = true;
+    if (early_quit) res.quit = res.quit_program = true;   // close / capture done
 
     const auto start_music = [&] {
         play_level_music(pipe.audio.get(), opts.game_dir, internal_level);
@@ -264,7 +265,7 @@ BossRunResult run_boss_level(GameOptions& opts, int internal_level,
                 continue;
             }
             present_output(pipe.sw.ren);
-            SDL_Delay(16);
+            pace_delay(16);
             continue;
         }
 

@@ -87,14 +87,14 @@ void BossArenaPresenter::hud_overlay(bool draw_lives) {
     surface_.overlay_pass([&](const enhance::Canvas& cv) {
         hud_.draw_into(cv, draw_lives, /*cx_native=*/0,
                        /*total_native_w=*/320);
-    });
+    }, hud_.key(draw_lives, 0, 320));
 }
 
 void BossArenaPresenter::hud_overlay_wide(bool draw_lives) {
     // Centre origin ws_.M, total native width ws_.w (= 320 + 2M).
     surface_.overlay_pass([&](const enhance::Canvas& cv) {
         hud_.draw_into(cv, draw_lives, ws_.M, ws_.w);
-    });
+    }, hud_.key(draw_lives, ws_.M, ws_.w));
 }
 
 void BossArenaPresenter::present_frame(bool draw_lives, bool do_present) {

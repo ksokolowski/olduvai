@@ -1,16 +1,17 @@
 # Linux: the self-contained AppImage
 
-A single portable `olduvai-x86_64.AppImage` that runs the game with no install.
+A single portable `olduvai-<version>-x86_64.AppImage` that runs the game with no
+install.
 It ships **no game content**; supply your own game files at runtime.
 
 ## Build
 
 ```sh
-./packaging/build_appimage_linux.sh      # → ./olduvai-x86_64.AppImage
+./packaging/build_appimage_linux.sh      # → ./olduvai-<version>-x86_64.AppImage
 ```
 
 All CLI flags pass through the AppImage exactly as for a plain binary:
-`./olduvai-x86_64.AppImage --profile hd --game-dir ~/games/prehistorik --play`
+`./olduvai-*-x86_64.AppImage --profile hd --game-dir ~/games/prehistorik --play`
 works as expected. A double-click launch from a file manager passes no
 flags (that is how desktop launches work on every Linux desktop): the
 first-run dialog and the in-game Options (persisted to
@@ -22,11 +23,26 @@ First run fetches `linuxdeploy` and `appimagetool` into `build/appimage/tools/`
 ## Run
 
 ```sh
-./olduvai-x86_64.AppImage --game-dir /path/to/prehistorik/files --play
+./olduvai-*-x86_64.AppImage --game-dir /path/to/prehistorik/files --play
 ```
 
 A GOG install is auto-discovered, so a GOG copy plays with a bare
-`./olduvai-x86_64.AppImage --play`.
+`./olduvai-*-x86_64.AppImage --play`.
+
+## Updates
+
+The released AppImage carries update information, and every release
+publishes a `.zsync` file beside it.
+[AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (or a
+launcher built on it, such as Gear Lever or AppImageLauncher) brings an
+installed copy to the latest release and downloads only the parts that
+changed.  A local build has no update information:
+`build_appimage_linux.sh --release` adds it.
+
+The AppImage also carries AppStream metadata
+(`usr/share/metainfo/io.github.ksokolowski.olduvai.appdata.xml`): the
+author, the homepage and the licence, which software centres and AppImage
+catalogs show.
 
 ## What's in the bundle
 

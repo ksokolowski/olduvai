@@ -69,6 +69,12 @@ int main() {
     // Out of range still clamps rather than propagating nonsense.
     REQUIRE(hd_scale_for(true, "smooth", 1) == 2);
     REQUIRE(hd_scale_for(true, "smooth", 9) == 4);
+    // Past 4 only the scalers that take the factor: xBRZ and OmniScale to 6
+    // (a desktop 4K screen), the 2x-based ones stay at 4.
+    REQUIRE(hd_scale_for(true, "xbrz", 6) == 6);
+    REQUIRE(hd_scale_for(true, "omniscale", 5) == 5);
+    REQUIRE(hd_scale_for(true, "omniscale", 9) == 6);
+    REQUIRE(hd_scale_for(true, "mmpx", 6) == 4);
     REQUIRE(hd_scale_for(true, "native", 4) == 1);
     REQUIRE(hd_scale_for(false, "smooth", 4) == 1);
 

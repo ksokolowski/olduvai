@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Krzysztof Sokołowski
-# Build a self-contained olduvai-x86_64.AppImage.
+# Build a self-contained olduvai-<version>-x86_64.AppImage.
+#
+#   packaging/build_appimage_linux.sh             # a local build
+#   packaging/build_appimage_linux.sh --release   # also update information and
+#                                                 # its .zsync (the GitHub release)
+#
+# The name is set here, not by a later rename: a .zsync names the file it was
+# made for, so the AppImage must be packed under its release name.
 #
 # Ships NO game content — the user supplies game files at runtime via
 # --game-dir / config / GOG auto-discovery.  Bundles: SDL2 (+ transitive deps,
@@ -15,7 +22,20 @@
 # from the artifact instead of trusting the runner label.
 set -euo pipefail
 
+release=""
+case "${1:-}" in
+    "") ;;
+    --release) release=1 ;;
+    *) echo "usage: $0 [--release]" >&2; exit 2 ;;
+esac
+
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # repo root
+version="$(sed -n 's/^ *VERSION \([0-9][0-9.]*\).*/\1/p' "${here}/CMakeLists.txt" | head -1)"
+[[ -n "${version}" ]] || { echo "!! no VERSION in CMakeLists.txt" >&2; exit 1; }
+app_id="io.github.ksokolowski.olduvai"   # AppStream id = desktop file name
+# AppImageUpdate reads this from the file and fetches the newest release's
+# .zsync from GitHub.
+update_info="gh-releases-zsync|ksokolowski|olduvai|latest|olduvai-*x86_64.AppImage.zsync"
 build_dir="${here}/build/appimage"
 appdir="${build_dir}/AppDir"
 tools_dir="${build_dir}/tools"
@@ -78,8 +98,9 @@ cp "${here}/third_party/fluidsynth/LICENSE" "${appdir}/usr/bin/licenses/FluidSyn
 cp "${here}/third_party/fluidsynth/gcem/LICENSE" "${appdir}/usr/bin/licenses/gcem-LICENSE.txt"
 cp "${here}/third_party/fluidsynth/gcem/NOTICE.txt" "${appdir}/usr/bin/licenses/gcem-NOTICE.txt"
 
-# Desktop entry + icon (the app's own icon, not game content).
-cat > "${build_dir}/olduvai.desktop" <<'EOF'
+# Desktop entry + icon (the app's own icon, not game content).  The desktop
+# file is named for the AppStream id, which its <launchable> must match.
+cat > "${build_dir}/${app_id}.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
 Name=Olduvai
@@ -96,6 +117,24 @@ else
     convert "${here}/assets/icon/icon_src.png" -resize 256x256 "${build_dir}/olduvai.png"
 fi
 
+# AppStream metadata: who makes it, where it lives, its licence, so catalogs
+# and software centres show the author.  The release date is the commit's.
+# Named .appdata.xml, the older of the two names the spec accepts: it is the
+# one appimagetool (1.9.1) and the AppImage catalog look for.
+release_date="$(git -C "${here}" log -1 --format=%cs 2>/dev/null || date -u +%F)"
+metainfo="${appdir}/usr/share/metainfo/${app_id}.appdata.xml"
+install -d "$(dirname "${metainfo}")"
+sed -e "s/@VERSION@/${version}/" -e "s/@DATE@/${release_date}/" \
+    "${here}/packaging/linux/${app_id}.appdata.xml.in" > "${metainfo}"
+if command -v appstreamcli >/dev/null 2>&1; then
+    appstreamcli validate --no-net "${metainfo}"
+elif [[ -n "${release}" ]]; then
+    echo "!! a release build validates its AppStream file: install appstream" >&2
+    exit 1
+else
+    echo ">> appstreamcli not found: AppStream file not validated"
+fi
+
 # 3. Populate deps with linuxdeploy: SDL2 (+ transitive) via ldd;
 #    libasound excluded (it dlopens host plugins — bundling it breaks host MIDI).
 fetch_tool "${LINUXDEPLOY_URL}" "${tools_dir}/linuxdeploy" "${LINUXDEPLOY_SHA256}"
@@ -105,7 +144,7 @@ fetch_tool "${LINUXDEPLOY_URL}" "${tools_dir}/linuxdeploy" "${LINUXDEPLOY_SHA256
 "${tools_dir}/linuxdeploy" \
     --appdir "${appdir}" \
     --executable "${appdir}/usr/bin/olduvai" \
-    --desktop-file "${build_dir}/olduvai.desktop" \
+    --desktop-file "${build_dir}/${app_id}.desktop" \
     --icon-file "${build_dir}/olduvai.png" \
     --exclude-library 'libasound.so*'
 
@@ -234,6 +273,16 @@ done
 
 # 4. Pack.
 fetch_tool "${APPIMAGETOOL_URL}" "${tools_dir}/appimagetool" "${APPIMAGETOOL_SHA256}"
-out="${here}/olduvai-x86_64.AppImage"
-"${tools_dir}/appimagetool" "${appdir}" "${out}"
-echo ">> built ${out}"
+out="${here}/olduvai-${version}-x86_64.AppImage"
+rm -f "${out}" "${out}.zsync"
+if [[ -n "${release}" ]]; then
+    "${tools_dir}/appimagetool" -u "${update_info}" "${appdir}" "${out}"
+    [[ -s "${out}.zsync" ]] || {
+        echo "!! no ${out##*/}.zsync beside the AppImage: updates would not work" >&2
+        exit 1
+    }
+    echo ">> built ${out} and its .zsync (update: ${update_info})"
+else
+    "${tools_dir}/appimagetool" "${appdir}" "${out}"
+    echo ">> built ${out}"
+fi

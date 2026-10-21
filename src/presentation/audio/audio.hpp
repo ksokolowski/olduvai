@@ -38,6 +38,7 @@ public:
 // The devices an SdlAudio opens.
 struct AudioSetup {
     std::string music_device = "auto";
+    bool auto_gm = true;       // "auto" may pick a GM SoundFont
     std::string rom_dir;       // MT-32 / CM-32L ROMs (mt32-builtin)
     std::string soundfont;     // .sf2 (gm-builtin)
     std::string sfx_backend = "auto";
@@ -55,6 +56,7 @@ template <class Opts>
 AudioSetup audio_setup_of(const Opts& o) {
     AudioSetup s;
     s.music_device = o.music_device;
+    s.auto_gm = o.music_auto_gm;
     s.rom_dir = o.rom_dir;
     s.soundfont = o.soundfont;
     s.sfx_backend = o.sfx_backend;
@@ -64,8 +66,8 @@ AudioSetup audio_setup_of(const Opts& o) {
 
 class SdlAudio {
 public:
-    // setup.music_device: "auto" (MT-32, GM, a host MIDI port if one opens, then
-    // OPL), "mt32-builtin", "gm-builtin", "opl", "none"; "host-midi" / "mt32" /
+    // setup.music_device: "auto" (MT-32, GM unless setup.auto_gm is false, a
+    // host MIDI port if one opens, then OPL), "mt32-builtin", "gm-builtin", "opl", "none"; "host-midi" / "mt32" /
     // "gm-host" send music to a MIDI OUT port (RtMidi) instead of rendering it.
     // setup.rom_dir overrides ROM discovery.
     // setup.sfx_backend:
@@ -139,7 +141,7 @@ private:
                               const std::string& rom_dir,
                               const std::string& soundfont,
                               const std::string& midi_port,
-                              const std::string& mt32_model);
+                              const std::string& mt32_model, bool auto_gm);
     // Phases of select_music_backend.
     bool try_host_midi(const char* backend, const std::string& port);
     void try_windows_host_fallback(const std::string& port);

@@ -228,6 +228,7 @@ bool show_text_screen(const std::vector<std::string>& lines) {
             }
         }
     }
+    presentation::release_output_filter(ren);
     if (ren != nullptr) SDL_DestroyRenderer(ren);
     if (win != nullptr) SDL_DestroyWindow(win);
     SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK);

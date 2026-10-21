@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.21)
 project(olduvai
-    VERSION 0.9.10
+    VERSION 0.9.11
     DESCRIPTION "Native recreation of the Prehistorik (1991) engine"
     LANGUAGES CXX C)
 
@@ -33,22 +33,13 @@ else()
     # excluded — its /W3 surface is a separate ledger (see §4b #10's
     # boss-renderer rows).
     #
-    # -Wdouble-promotion is NOT in this set, and the note here used to imply it
-    # was ("6 sites, fixed same day").  Re-measured 2026-08-24: 8 warnings over
-    # SIX locations, so nothing was fixed and nothing guards them —
-    #   render/widescreen.cpp:192,193,218,219  (the margin edge gradient)
-    #   render/lerp_snapshot.hpp:59            (the smooth-motion lerp; three
-    #     of the eight, because an inline header function is reported per TU)
-    #   presentation/game_app.cpp:2452
-    # Deliberately deferred rather than adopted: silencing these means writing
-    # `2.0f` where `2.0` is now, which CHANGES the arithmetic — and every one of
-    # them is in float-sensitive code the hash gates pin (the widescreen margin
-    # compose, the smooth-motion lerp).  That is a numerics change needing the
-    # widescreen/transition goldens re-verified, not a warning cleanup, and it
-    # does not belong in a release cut.  BACKLOG §4b #9.
+    # -Wdouble-promotion: a float meeting a double is promoted explicitly
+    # (static_cast<double>), never by writing the double as a float, which
+    # would change the arithmetic the hash gates pin.
     # The three C++-only flags are scoped to C++ sources: on the vendored C
     # (Nuked-OPL3) cc1 prints "valid for C++/ObjC++ but not for C" per file.
     add_compile_options(-Wcast-qual -Wformat=2 -Wimplicit-fallthrough
+                        -Wdouble-promotion
         "$<$<COMPILE_LANGUAGE:CXX>:-Wold-style-cast;-Wnon-virtual-dtor;-Wextra-semi>")
 endif()
 
@@ -374,7 +365,6 @@ endif()
 if(SDL2_FOUND)
     add_library(olduvai_presentation
         src/presentation/render/banners.cpp
-        src/presentation/diag/viewer.cpp
         src/presentation/input/gamepad.cpp
         src/presentation/input/actions.cpp
         src/presentation/render/game_render.cpp
@@ -658,6 +648,11 @@ if(SDL2_FOUND)
                 coreaudio coremidi framework dart kai native-dls)
             set(enable-${_fs_opt} OFF CACHE BOOL "" FORCE)
         endforeach()
+        # The vendored gcem, named outright: FindGCEM's find_path searches
+        # only the sysroot in a cross build, misses it and downloads gcem.
+        set(GCEM_INCLUDE_DIR
+            ${CMAKE_SOURCE_DIR}/third_party/fluidsynth/gcem/include
+            CACHE PATH "gcem headers (vendored)" FORCE)
         add_subdirectory(third_party/fluidsynth EXCLUDE_FROM_ALL)
         olduvai_silence_vendored_target(libfluidsynth-OBJ)
         olduvai_silence_vendored_target(libfluidsynth)
@@ -756,6 +751,13 @@ if(SDL2_FOUND)
                                           ${OLDUVAI_SDL2})
     target_compile_definitions(olduvai PRIVATE OLDUVAI_HAVE_SDL=1)
 endif()
+# zig cross builds (the handhelds): use glibc's memset/memcpy/memmove, not the
+# compiler runtime's byte loops (src/app/glibc_mem.c says why).
+if(DEFINED OLDUVAI_ZIG_TRIPLE AND OLDUVAI_ZIG_TRIPLE MATCHES "-linux-gnu")
+    target_sources(olduvai PRIVATE src/app/glibc_mem.c)
+    set_source_files_properties(src/app/glibc_mem.c PROPERTIES
+        COMPILE_OPTIONS "-fno-builtin")
+endif()
 
 
 # ── trace harness (oracle-diff client) ──────────────────────────────────────
@@ -841,6 +843,8 @@ add_executable(olduvai_tests EXCLUDE_FROM_ALL
     tests/test_wav_io.cpp
     tests/test_opl_music.cpp
     tests/test_options_resolve.cpp
+    tests/test_save_notice.cpp
+    tests/test_output_filter.cpp
     tests/test_options_build.cpp
     tests/test_config.cpp
     tests/test_banner_shader.cpp
@@ -930,6 +934,7 @@ add_executable(test_settings_apply EXCLUDE_FROM_ALL
     tests/test_settings_apply.cpp
     src/presentation/menu/settings_apply.cpp)
 target_include_directories(test_settings_apply PRIVATE src)
+target_link_libraries(test_settings_apply PRIVATE olduvai_formats)   # max_hd_scale
 add_test(NAME settings_apply COMMAND test_settings_apply)
 
 add_executable(test_settings_session EXCLUDE_FROM_ALL
@@ -948,6 +953,7 @@ add_executable(test_settings_flow EXCLUDE_FROM_ALL
     src/presentation/menu/settings_session.cpp
     src/presentation/menu/confirm_dialog.cpp)
 target_include_directories(test_settings_flow PRIVATE src)
+target_link_libraries(test_settings_flow PRIVATE olduvai_formats)   # max_hd_scale
 add_test(NAME settings_flow COMMAND test_settings_flow)
 
 # Pure (no-SDL) widescreen neighbor-resolution decision-table test.
@@ -1048,7 +1054,8 @@ if(SDL2_FOUND)
         tests/test_about_info.cpp
         tests/test_sound_card.cpp
         tests/test_scaler_table.cpp
-        tests/test_actions.cpp)
+        tests/test_actions.cpp
+        tests/test_menu_layout.cpp)
     target_include_directories(olduvai_sdl_tests SYSTEM PRIVATE third_party)
     target_compile_definitions(olduvai_sdl_tests PRIVATE
         OLDUVAI_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
@@ -1875,6 +1882,51 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
+    # The Enhanced presentation sequences (screen pan, fades, secret slide, L3
+    # descent) run no game ticks: the same replays with smooth and with instant
+    # transitions give identical traces, so a key held through one acts at the
+    # next tick as after the original's fades. Skips (77) without game data.
+    # The timedemo (OLDUVAI_UNTHROTTLED=1 with --replay): an Enhanced smooth
+    # replay reports more than 18.2 ticks/s.  That it is the same run is held
+    # by the golden traces, which run unthrottled (trace_gate.sh) but two.
+    # Skips (77) without game data.
+    add_test(NAME timedemo
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/timedemo.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(timedemo PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    add_test(NAME transitions_stop_time
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/transitions_stop_time.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(transitions_stop_time PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # The sharp output filter: a fractional Enhanced window differs from
+    # nearest, a whole multiple and Classic do not.  Skips (77) without data.
+    add_test(NAME output_filter
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/output_filter.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(output_filter PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
+    # A quicksave says so on screen ("Saved" / "Save failed") on the Classic,
+    # Enhanced 4:3 and widescreen paths, and leaves nothing behind once gone.
+    # Skips (77) without game data.
+    add_test(NAME save_notice
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/save_notice.sh"
+                "${CMAKE_SOURCE_DIR}/game_data"
+                "$<TARGET_FILE:olduvai>")
+    set_tests_properties(save_notice PROPERTIES
+        SKIP_RETURN_CODE 77
+        DEPENDS olduvai)
+
     # The Quit key (F10 by default, rebindable) asks "Exit game?" on No; only Yes
     # quits. Platform level, boss fight and a rebound key. Skips (77) without data.
     add_test(NAME quit_shortcut
@@ -1950,17 +2002,6 @@ if(SDL2_FOUND AND _olduvai_shell_tests)
         SKIP_RETURN_CODE 77
         DEPENDS olduvai)
 
-    # Asset-viewer compose gate.  viewer.cpp was the only file in the tree
-    # measuring 0.0% coverage BOTH with and without assets — a shipped,
-    # user-reachable feature no test executed.  The hooks it needs
-    # (--viewer-frames/--viewer-shot) already existed, unwired.
-    add_test(NAME viewer_shot
-        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/viewer_shot.sh"
-                "${CMAKE_SOURCE_DIR}/game_data"
-                "$<TARGET_FILE:olduvai>")
-    set_tests_properties(viewer_shot PROPERTIES
-        SKIP_RETURN_CODE 77
-        DEPENDS olduvai)
 endif()
 
 # ── Test-gate honesty: label the data-gated tests ──────────────────────────
@@ -1981,6 +2022,18 @@ endif()
 # list of 18 names is precisely the thing that drifts, and a new gated test
 # would silently join the invisible set.  Must run after the last add_test —
 # DIRECTORY PROPERTY TESTS only sees what has been registered so far.
+#
+# The gated tests run unthrottled (OLDUVAI_UNTHROTTLED, presentation/pacing.hpp):
+# their runs are scripted (a replay, a menu script, a bounded frame count), so
+# a run without the 18.2 Hz waits is the same run.  Measured 2026-10-09 with
+# it forced on everywhere: 72 of 75 passed.  These stay paced, because time
+# is what they check or show: save_notice (a 1.5 s wall-clock notice),
+# boss_report (OLDUVAI_DUMP_OUTPUT is capped at 60 frames a second),
+# menu_script (its Audio screens; an unthrottled run has no audio), and
+# transitions_stop_time (the wall-clock smooth transitions).  Two golden
+# traces stay paced too (TRACE_GATE_PACED, tests/lib/trace_gate.sh).
+set(_olduvai_paced_tests save_notice boss_report menu_script
+                         transitions_stop_time)
 get_property(_olduvai_tests DIRECTORY PROPERTY TESTS)
 set(_olduvai_gated 0)
 foreach(_test IN LISTS _olduvai_tests)
@@ -1988,6 +2041,10 @@ foreach(_test IN LISTS _olduvai_tests)
     if(_olduvai_skip_rc STREQUAL "77")
         set_property(TEST ${_test} APPEND PROPERTY LABELS assets)
         math(EXPR _olduvai_gated "${_olduvai_gated} + 1")
+        if(NOT _test IN_LIST _olduvai_paced_tests)
+            set_property(TEST ${_test} APPEND PROPERTY ENVIRONMENT
+                         OLDUVAI_UNTHROTTLED=1)
+        endif()
     endif()
 endforeach()
 list(LENGTH _olduvai_tests _olduvai_total)
@@ -1997,7 +2054,7 @@ list(LENGTH _olduvai_tests _olduvai_total)
 # register only the two non-SDL gated tests (screen_tiles, sqz_parity) — as do
 # builds with no shell interpreter, since the other 18 are all .sh-driven.
 if(SDL2_FOUND AND _olduvai_shell_tests)
-    set(_olduvai_gated_expected 72)   # +1: quit_shortcut, +1: sigterm_quits, +1: enhanced_time_stop, +1: golden_trace_l5s9_trunk_warp, +1: dirty_verify, +1: l3_descent, +1: reinit_in_place, +1: aspect_live, +1: title_style_smooth, +1: boss_pause_midinterp, +1: play_shot_determinism, +1: level_edge_margins, +1: aspect_hd_text, +1: balloon_flyaway, +1: food_gate_transition, +1: boss_report, +1: golden_trace_l5s18_exit, +1: tally_no_flash, +1: hd_text_screens, +2: L4/L6 fights, +1: L6 slam-hd, +2: pause 4:3/stretch, +1: gameover_shot, +10: the adopted oracle scenarios (§3.15 item 2), +2: boss_l2/l6_victory
+    set(_olduvai_gated_expected 75)   # +1: timedemo, -1: viewer_shot (the viewer removed), +1: output_filter, +1: save_notice, +1: transitions_stop_time, +1: quit_shortcut, +1: sigterm_quits, +1: enhanced_time_stop, +1: golden_trace_l5s9_trunk_warp, +1: dirty_verify, +1: l3_descent, +1: reinit_in_place, +1: aspect_live, +1: title_style_smooth, +1: boss_pause_midinterp, +1: play_shot_determinism, +1: level_edge_margins, +1: aspect_hd_text, +1: balloon_flyaway, +1: food_gate_transition, +1: boss_report, +1: golden_trace_l5s18_exit, +1: tally_no_flash, +1: hd_text_screens, +2: L4/L6 fights, +1: L6 slam-hd, +2: pause 4:3/stretch, +1: gameover_shot, +10: the adopted oracle scenarios (§3.15 item 2), +2: boss_l2/l6_victory
 else()
     set(_olduvai_gated_expected 2)
 endif()

@@ -197,9 +197,6 @@ std::vector<Flag> flag_table(CliArgs& a, PlaySettings& ps,
         {"--play", nullptr, kGeneral,
          "      --play              Launch the game.\n",
          toggle(a.play, true)},
-        {"--viewer", nullptr, kGeneral,
-         "      --viewer            Open the asset/image browser.\n",
-         toggle(a.viewer, true)},
         {"--level", nullptr, kGeneral,
          "      --level <n>         Sequence position to start at: 0 = intro/\n"
          "                          title, 1-7 = play levels (display numbering),\n"
@@ -245,6 +242,11 @@ std::vector<Flag> flag_table(CliArgs& a, PlaySettings& ps,
          "                          the desktop's shape, since a 16:10 one has\n"
          "                          no margins to show.\n",
          setting(ps.aspect, ps.cli.aspect)},
+        {"--output-filter", nullptr, kDisplay,
+         "      --output-filter <m> nearest|sharp (default: nearest).  sharp:\n"
+         "                          a window that is not a whole multiple of\n"
+         "                          the picture keeps every pixel one size.\n",
+         setting(ps.output_filter, ps.cli.output_filter)},
         {"--autofire", nullptr, kDisplay,
          "      --autofire [speed]  Hold the attack key to keep swinging (no\n"
          "                          mashing): slow|medium|fast (bare = fast;\n"
@@ -340,9 +342,9 @@ std::vector<Flag> flag_table(CliArgs& a, PlaySettings& ps,
          "                          level's screen count.\n",
          number(a.play_start_screen)},
         {"--profile", nullptr, kConfig,
-         "      --profile <name>    Built-in profile: dos|hd (handhelds:\n"
-         "                          dos-handheld[-43|-x2|-x4]|\n"
-         "                          hd-handheld[-43|-x2|-x4]).  Overrides the\n"
+         "      --profile <name>    Built-in profile: dos|hd, or on a handheld\n"
+         "                          dos-handheld|hd-handheld (scale and aspect\n"
+         "                          follow the panel).  Overrides the\n"
          "                          saved config (CLI flags still win): dos =\n"
          "                          byte-faithful; hd = full enhanced +\n"
          "                          widescreen peeks (add --aspect 4:3 for the\n"
@@ -401,13 +403,6 @@ std::vector<Flag> flag_table(CliArgs& a, PlaySettings& ps,
          "      --play-shot-frame <n>   Frame at which to capture --play-shot\n"
          "                              (default: 1).\n",
          number(a.play_shot_frame)},
-        {"--viewer-frames", nullptr, kDev,
-         "      --viewer-frames <n> Run the viewer for n frames then exit (default: -1,\n"
-         "                          unlimited).\n",
-         number(a.viewer_frames)},
-        {"--viewer-shot", nullptr, kDev,
-         "      --viewer-shot <file>    Save a screenshot of the viewer to <file>.\n",
-         text(a.viewer_shot)},
         {"--render-audio", nullptr, kDev,
          "      --render-audio <smf>    Render a MIDI file through the synth and\n"
          "                              print a digest, or write --render-audio-out.\n",

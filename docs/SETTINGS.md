@@ -24,14 +24,8 @@ returns to the defaults.
 |---|---|
 | `dos` | The 1991 game, faithful to its quirks (the engine defaults). |
 | `hd` | Enhanced: HD upscaling, widescreen, smooth motion, vector HUD. |
-| `dos-handheld` | `dos`, in the handheld family. |
-| `hd-handheld` | `hd` tuned for 720p / 600p handheld panels (`xbrz` ×3, lighter pacing). |
-| `dos-handheld-43` | `dos` filling a 4:3 handheld panel (640×480), in its own family. |
-| `hd-handheld-43` | `hd-handheld` for a 4:3 panel: `xbrz` ×2, filling it at 4:3. |
-| `dos-handheld-x2` | `dos`, in the handheld family for wide panels of 400 to 599 lines. |
-| `hd-handheld-x2` | `hd-handheld` for those panels: `xbrz` ×2, widescreen. Untested on a device of its class. |
-| `dos-handheld-x4` | `dos`, in the handheld family for panels of 800 lines and up. |
-| `hd-handheld-x4` | `hd-handheld` for those panels: `xbrz` ×4 (a 1280×800 panel is exactly 4×). Untested on a device of its class. |
+| `dos-handheld` | `dos` for a handheld: a panel narrower than 16:10 (640×480, 1024×768) is filled at 4:3. |
+| `hd-handheld` | `hd` for a handheld: `xbrz` and lighter pacing, at the largest scale (×2 to ×4) whose frame fits the panel, filling a panel narrower than 16:10 at 4:3 and widescreen otherwise. The panel is the display's own size, or `OLDUVAI_PANEL=WxH` (the PortMaster launcher passes PortMaster's). The log's `display: panel` line says what it chose. |
 
 *Options → Style* switches between Classic and Enhanced within the family
 the session started in.
@@ -51,8 +45,9 @@ the session started in.
 |---|---|
 | `enhanced` | `true` / `false` — the Enhanced HD umbrella |
 | `hd_profile` | `native`, `retro`, `smooth`, `eagle`, `xbrz`, `mmpx`, `omniscale` (default); an old `xbr` reads as `xbrz` |
-| `render_scale` | `2`, `4` |
+| `render_scale` | `2` to `6` (a handheld profile picks 2 to 4 for the panel).  `5` and `6` are for a desktop 4K screen, with `xbrz` or `omniscale` only; the other upscalers stop at `4` |
 | `aspect` | `keep`, `4:3`, `stretch`, `widescreen` |
+| `output_filter` | `nearest` (default) or `sharp`: in a window that is not a whole multiple of the picture, `sharp` keeps every pixel the same size and softens only its edges (Enhanced; Classic always scales by whole multiples). *Options → Video → Filter.* |
 | `fullscreen` | `true` / `false` (ALT+ENTER toggles) |
 | `vga_scan` | `true` / `false` — the VGA hold-frame scanout (Classic) |
 | `transitions` | `smooth`, `classic` |
@@ -63,22 +58,27 @@ the session started in.
 | `smooth_vsync` | `auto`, `off` |
 
 What `hd_profile` runs at each `render_scale`. The names describe a look;
-at x3 three of them are the same scaler, and the game says so on the first use.
+at x3 three of them are the same scaler, and *Options → Video → Runs* says
+which one runs before you apply a change.
 
-| `hd_profile` | x2 | x3 | x4 |
-|---|---|---|---|
-| `retro` | nearest | nearest | nearest |
-| `smooth` | Scale2x | Scale3x | Scale2x, two passes |
-| `eagle` | Eagle | Scale3x (Eagle has no 3x form) | Eagle, two passes |
-| `xbrz` | xBRZ | xBRZ | xBRZ |
-| `mmpx` | MMPX | Scale3x (MMPX has no 3x form) | MMPX, two passes |
-| `omniscale` | OmniScale | OmniScale | OmniScale |
+| `hd_profile` | x2 | x3 | x4 | x5, x6 |
+|---|---|---|---|---|
+| `retro` | nearest | nearest | nearest | (x4) |
+| `smooth` | Scale2x | Scale3x | Scale2x, two passes | (x4) |
+| `eagle` | Eagle | Scale3x (Eagle has no 3x form) | Eagle, two passes | (x4) |
+| `xbrz` | xBRZ | xBRZ | xBRZ | xBRZ |
+| `mmpx` | MMPX | Scale3x (MMPX has no 3x form) | MMPX, two passes | (x4) |
+| `omniscale` | OmniScale | OmniScale | OmniScale | OmniScale |
+
+On a 4K screen x4 is stretched about 2.7 times by the GPU; x6 draws the
+curves at 1920x1200 itself, a little crisper, for about 30% more work.
 
 **Audio** (the backends and what they need: [AUDIO.md](AUDIO.md))
 
 | Key | Values |
 |---|---|
 | `music_device` | `auto`, `opl`, `mt32-builtin`, `gm-builtin`, `host-midi`, `gm-host`, `none` |
+| `music_auto_gm` | `true` (default) / `false`: whether `auto` music may use a General MIDI SoundFont after the Roland ROMs.  The handheld profiles set `false` (Roland, then Sound Blaster); an explicit `gm-builtin` still plays one.  Config only. |
 | `sfx_backend` | `auto` (pairs with the music), `opl`, `sb-dac`, `mt32-sfx`, `gm-sfx`, `midi`, `none` |
 | `music_volume`, `sfx_volume` | `0`-`100` |
 | `rom_dir` | folder with MT-32 / CM-32L ROM images |
@@ -104,7 +104,7 @@ A `pad_back` of `back` saved with the first Nintendo layout reads as B.
 
 The keyboard moves with the arrows or WASD; Space or Left Ctrl attacks, Esc
 pauses and backs out, and Enter, Keypad Enter or Space confirms. In play,
-F6 quicksaves, F9 quickloads, F7 opens cheats (with `--cheats`) and F5 the
+F6 quicksaves ("Saved" shows under the HUD, or "Save failed"), F9 quickloads, F7 opens cheats (with `--cheats`) and F5 the
 bug report; on a pad, hold Select and press R1, L1, the top or the left
 button. F10 asks "Exit game?" (the same question as *Pause → Exit Game*), and
 it opens on No, so a single key press never ends a run; `key_quit` moves it.

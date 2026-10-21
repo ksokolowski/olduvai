@@ -4,6 +4,7 @@
 // title_menu_flow.hpp.
 
 #include "presentation/title_menu_flow.hpp"
+#include "presentation/pacing.hpp"   // pace_delay
 
 #include <cstdint>
 #include <cstdio>
@@ -72,7 +73,7 @@ struct TitlePresenter {
         upload_native_frame(tex, f, ctx.hd_scale, ctx.rt.hd_profile);
         show_texture(ctx.pipe.sw.ren, tex);
         present_output(ctx.pipe.sw.ren);
-        SDL_Delay(kFrameMs);
+        pace_delay(kFrameMs);
         return true;
     }
     bool stopped() const { return ctx.quit_requested || to_menu; }
@@ -243,7 +244,7 @@ public:
                 want_quit_ = true;
             }
             present_output(ctx_.pipe.sw.ren);
-            SDL_Delay(kFrameMs);
+            pace_delay(kFrameMs);
             if (want_start_ || want_quit_) break;
         }
         if (want_quit_) ctx_.quit_requested = true;

@@ -56,6 +56,8 @@ struct StagingBindings : MenuBindings {
     SoundCardAvail sound_avail;
     // The layout "Reset" returns the pad to: the device family's.
     std::string default_layout = "xbox";
+    // Render scale 5 and 6 are offered on the desktop only.
+    bool handheld = false;
     // Live preview beyond the cheap keys; null = staged only (boss).
     std::string* live_hd_profile = nullptr;   // same-scale hd_profile swap
     std::function<void(const std::string&)> apply_aspect;   // logical size only
@@ -81,6 +83,7 @@ struct StagingBindings : MenuBindings {
         for (const KeyAction& k : kKeyActions) mem[k.key] = key_binding(k.key);
         if (const char* id = family_button_layout(o.profile_family))
             default_layout = id;
+        handheld = o.profile_family == "handheld";
     }
 
     // After an adopt replaced the pipeline: its audio and window, and the
@@ -108,6 +111,7 @@ struct StagingBindings : MenuBindings {
             for (const ButtonLayout& l : kButtonLayouts) ids.emplace_back(l.id);
             return ids;
         }
+        if (it.key == "render_scale") return render_scales(it);
         if (it.key != "aspect") return it.values;
         const auto e = mem.find("enhanced");
         const auto p = mem.find("hd_profile");
@@ -122,6 +126,20 @@ struct StagingBindings : MenuBindings {
         std::vector<std::string> out;
         for (const auto& v : it.values)
             if (v != "widescreen") out.push_back(v);
+        return out;
+    }
+
+    // Render scale past 4: on the desktop, with a scaler that has the factor
+    // (enhance::max_hd_scale), read from the staged Upscaler.  Menu::adjust
+    // splices a held value back in.
+    std::vector<std::string> render_scales(const MenuItem& it) const {
+        const auto p = mem.find("hd_profile");
+        const int top = handheld ? 4
+                                 : enhance::max_hd_scale(
+                                       p == mem.end() ? cur.hd_profile : p->second);
+        std::vector<std::string> out;
+        for (const auto& v : it.values)
+            if (std::atoi(v.c_str()) <= top) out.push_back(v);
         return out;
     }
 

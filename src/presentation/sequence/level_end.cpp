@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "presentation/sequence/level_end.hpp"
+#include "presentation/pacing.hpp"   // pace_delay
 
 #include <cstdio>
 #include <cstdlib>
@@ -79,7 +80,7 @@ void fade_wide_to_black(Loaded& g, WidescreenPresenter& wsp,
             if (handle_fullscreen_toggle(e2, win)) continue;
             if (e2.type == SDL_QUIT) { running = false; quit = true; }
         }
-        SDL_Delay(frame_ms);
+        pace_delay(frame_ms);
     }
 }
 

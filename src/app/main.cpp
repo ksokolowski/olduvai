@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
-// Olduvai entry point.  Current state: game-file detection + the M2 asset
-// viewer (--viewer).
+// Olduvai entry point: game-file detection, then the game or a tool command.
 
 #include <cctype>
 #include <cstdio>
@@ -19,6 +18,7 @@
 #include "cli_args.hpp"
 #include "legacy_cache.hpp"
 #include "options_build.hpp"
+#include "parse_num.hpp"
 #ifdef OLDUVAI_HAVE_SDL
 #include "first_run.hpp"
 #endif
@@ -36,7 +36,7 @@
 #include "presentation/audio/audio.hpp"
 #include "presentation/game_app.hpp"
 #include "presentation/audio/host_midi.hpp"
-#include "presentation/diag/viewer.hpp"
+#include "presentation/display_query.hpp"
 #endif
 
 
@@ -189,7 +189,7 @@ void print_usage() {
         "\n"
         "Runs game-file detection in game_dir.  With no mode flag it reports\n"
         "whether the required files are present and prints this help; --play\n"
-        "launches the game and --viewer opens the asset browser.  Original\n"
+        "launches the game.  Original\n"
         "Prehistorik game files are required (FILESA.CUR, FILESB.CUR,\n"
         "FILESA.VGA, FILESB.VGA, and HISTORIK.EXE — or PREH.SQZ as the GOG\n"
         "release ships it).  A GOG install root works directly as game_dir\n"
@@ -293,6 +293,35 @@ bool ensure_launch_game_files(olduvai::app::CliArgs& args,
     return true;
 }
 
+// The panel "auto" pins follow, when a handheld profile is in play:
+// OLDUVAI_PANEL=WxH (tests, or to try another device's panel), else the
+// display's desktop mode.  Left unknown otherwise.
+void detect_panel(const olduvai::app::CliArgs& args) {
+    namespace pres = olduvai::presentation;
+    const auto handheld = [](const std::string& name) {
+        const pres::ProfileDef* p = pres::find_profile(name);
+        return p != nullptr && std::string(p->family) == "handheld";
+    };
+    if (!handheld(args.profile) && !handheld(args.default_profile)) return;
+    pres::Panel& panel = pres::session_panel();
+    if (const char* env = std::getenv("OLDUVAI_PANEL")) {
+        const std::string wh = env;
+        const auto x = wh.find('x');
+        if (x == std::string::npos ||
+            !olduvai::app::parse_int(wh.substr(0, x), panel.w) ||
+            !olduvai::app::parse_int(wh.substr(x + 1), panel.h))
+            panel = {};   // unknown: auto plays the 720p default
+    } else {
+#ifdef OLDUVAI_HAVE_SDL
+        if (!pres::desktop_display_size(panel.w, panel.h)) panel = {};
+#endif
+    }
+    const pres::AutoDisplay hd =
+        pres::auto_display(panel, pres::ProfileRole::Enhanced);
+    std::fprintf(stderr, "display: panel %dx%d (Enhanced auto: x%d, %s)\n",
+                 panel.w, panel.h, hd.render_scale, hd.aspect);
+}
+
 // The settings as the precedence rules layer them, into `ps` (and the game
 // directory into `args`); --save-config writes the CLI-stated keys.
 void apply_settings(olduvai::app::CliArgs& args,
@@ -304,6 +333,7 @@ void apply_settings(olduvai::app::CliArgs& args,
     // CLI flags (options_resolve.hpp).  --profile states intent and beats
     // the saved config; --default-profile (a launcher's device defaults)
     // yields to it.
+    detect_panel(args);
     const olduvai::app::LayeredConfig lc = olduvai::app::layer_config(
         file_cfg, args.profile, args.default_profile);
     for (const auto& w : lc.warnings) std::fputs(w.c_str(), stderr);
@@ -407,20 +437,6 @@ int play_command(const olduvai::app::CliArgs& args,
 #endif
 }
 
-// --viewer: the asset viewer.
-int viewer_command(const olduvai::app::CliArgs& args) {
-#ifdef OLDUVAI_HAVE_SDL
-    olduvai::presentation::ViewerOptions vo;
-    vo.game_dir = args.game_dir;
-    vo.frames = args.viewer_frames;
-    vo.screenshot = args.viewer_shot;
-    return olduvai::presentation::run_viewer(vo);
-#else
-    std::printf("This build has no presentation layer (SDL2 missing).\n");
-    return 1;
-#endif
-}
-
 int run(int argc, char** argv) {
     // One-shot migration: earlier versions left a cache directory behind that
     // nothing reads any more (see legacy_cache.hpp).  Silent and best-effort.
@@ -444,7 +460,7 @@ int run(int argc, char** argv) {
     // standalone verb must be listed here: launched_from_gui is just "no tty on
     // stdin and stderr", so a missing verb becomes --play in any piped or CI
     // shell.
-    if (!args.play && !args.viewer && !args.do_list_midi_ports &&
+    if (!args.play && !args.do_list_midi_ports &&
         olduvai::app::launched_from_gui()) {
         args.play = true;
     }
@@ -469,7 +485,6 @@ int run(int argc, char** argv) {
     if (!ensure_launch_game_files(args, ps)) return 1;
 
     if (args.play) return play_command(args, ps);
-    if (args.viewer) return viewer_command(args);
 
     // No mode and the files were found: say where, then print the help.  No
     // trailing period (a path ending "/" would read "/.").

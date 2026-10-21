@@ -36,8 +36,7 @@ src/
                     cinematics, the L3 trunk descent, loading and tally
                     screens.
     diag/         — not part of playing the game: F5 bug capture and form,
-                    draw log, frame stats, the headless menu script, the
-                    asset viewer.
+                    draw log, frame stats, the headless menu script.
   app/            — main, CLI and config resolution (main.cpp);
                     trace_main.cpp is the trace harness binary.
 packaging/        — platform packaging: Info.plist/rc templates, dmg/
@@ -114,13 +113,10 @@ Profiles (`presentation/menu/profile_table.hpp`):
 - `dos`: the faithful original DOS experience (engine defaults).
 - `hd`: enhanced presentation (upscaling, smooth motion, vector HUD);
   audio picks the best available backend and degrades gracefully.
-- `dos-handheld`, `hd-handheld`: the same two families, the enhanced one
-  tuned for handheld screens and CPUs.
-- `dos-handheld-43`, `hd-handheld-43`: the handheld pair for 4:3 panels,
-  filling them at 4:3 (Enhanced at x2).
-- `dos-handheld-x2`, `hd-handheld-x2` and `dos-handheld-x4`,
-  `hd-handheld-x4`: the handheld pairs for wide panels of 400 and of 800 lines
-  and up (Enhanced at x2 and x4); `hd-handheld` is the x3 step between them.
+- `dos-handheld`, `hd-handheld`: the handheld family, the enhanced one tuned
+  for handheld CPUs.  Their `auto` pins (render scale, aspect) are resolved
+  against the panel at start-up (`auto_display`, `session_panel`), so one
+  pair fits every panel; a player's own choice in play.json still wins.
 
 The in-game Options menu stages every change and writes `play.json` on
 Apply; it is the only settings surface on handhelds.

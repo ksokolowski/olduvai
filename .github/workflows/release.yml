@@ -60,7 +60,7 @@ jobs:
           apt-get update -qq
           apt-get install -y -qq cmake g++ make libsdl2-dev libasound2-dev \
                                  imagemagick file curl \
-                                 ca-certificates
+                                 ca-certificates appstream
       - name: Configure
         run: cmake --preset release
       - name: Build
@@ -69,14 +69,13 @@ jobs:
         run: ctest --preset release
       # libmt32emu and FluidSynth are vendored and compiled in
       # (third_party/), so neither can be missing from a build.
+      # --release: the update information and its .zsync, which AppImageUpdate
+      # fetches from the latest release, and a validated AppStream file.
       - name: Package AppImage
-        run: |
-          bash packaging/build_appimage_linux.sh
-          ver=$(sed -n 's/^ *VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt | head -1)
-          mv olduvai-x86_64.AppImage "olduvai-${ver}-linux-x86_64.AppImage"
+        run: bash packaging/build_appimage_linux.sh --release
       - name: Smoke-run the artifact
         run: |
-          art=$(ls olduvai-*-linux-x86_64.AppImage)
+          art=$(ls olduvai-*-x86_64.AppImage)
           v=$(APPIMAGE_EXTRACT_AND_RUN=1 "./${art}" --version)
           echo "${v}"
           # A release binary names its commit, cleanly.  "unknown" means the
@@ -89,14 +88,16 @@ jobs:
           esac
       - name: Manifest (everything that ships inside)
         run: |
-          art=$(ls olduvai-*-linux-x86_64.AppImage)
+          art=$(ls olduvai-*-x86_64.AppImage)
           "./${art}" --appimage-extract >/dev/null
           find squashfs-root -type f -o -type l | sort
           rm -rf squashfs-root
       - uses: actions/upload-artifact@v7
         with:
           name: linux
-          path: olduvai-*-linux-x86_64.AppImage
+          path: |
+            olduvai-*-x86_64.AppImage
+            olduvai-*-x86_64.AppImage.zsync
           if-no-files-found: error
 
   # MSVC (the shipped Windows toolchain): /MT static CRT — no VC++
@@ -210,17 +211,20 @@ jobs:
           [*Prehistorik 1+2* on GOG.com](https://www.gog.com/game/prehistorik_12).
           Olduvai ships no game content.
 
-          **Handhelds (KNULLI):** `olduvai-*-knulli-trimui.zip` (TrimUI Smart
-          Pro) and `olduvai-*-knulli-a12.zip` (Powkiddy A12); install steps
-          in `docs/HANDHELD.md`.
+          **Handhelds:** `olduvai-*-portmaster.zip` for PortMaster (64-bit and
+          32-bit ARM), and for KNULLI `olduvai-*-knulli-trimui.zip` (TrimUI Smart
+          Pro) and `olduvai-*-knulli-a12.zip` (Powkiddy A12); install steps in
+          [docs/HANDHELD.md](https://github.com/ksokolowski/olduvai/blob/main/docs/HANDHELD.md).
 
           Binaries are **not code-signed**: on macOS right-click the app and
           choose *Open* on first launch; on Windows SmartScreen click
           *More info → Run anyway*.  Verify downloads against
           `SHA256SUMS.txt`.
 
-          Olduvai is GPL-3.0-or-later; the corresponding source for this
-          release is the *Source code* archive attached below.  Bundled
+          Olduvai's own source is GPL-3.0-or-later; the binaries include the
+          xBRZ scaler (GPL-3.0 only) and are conveyed under GPL-3.0.  The
+          corresponding source for this release is the *Source code* archive
+          attached below.  Bundled
           third-party components and their licenses: `licenses/` inside
           each artifact (see `THIRD-PARTY-NOTICES.md`).
           EOF

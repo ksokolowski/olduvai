@@ -6,6 +6,80 @@ candidates for 1.0.0.
 
 ## Unreleased
 
+## 0.9.11 — 2026-10-21
+
+- **Fixed: the 32-bit handheld build runs on Cortex-A8 and A9 chips.**
+  0.9.10's armhf binary assumed a hardware divide those chips lack and
+  stopped at start on them; it now runs on every ARMv7 handheld with NEON,
+  and is still faster than 0.9.10's on the A12.
+- **Changed: the Linux AppImage is `olduvai-<version>-x86_64.AppImage`**,
+  without `linux` in the name, as AppImages are usually named.
+- **Added: the AppImage updates itself.**  It carries update information and
+  each release publishes a `.zsync` beside it, so
+  [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate)
+  fetches only what changed.
+- **Added: AppStream metadata in the AppImage** (author, homepage, licence),
+  so software centres and AppImage catalogs say who makes Olduvai.
+- **Faster handheld builds:** the ARM binaries clear and copy memory with
+  the system library's fast routines; they had been using a simple
+  byte-at-a-time version from the build toolchain.  Their build no longer
+  downloads anything either: a vendored header library was being fetched
+  from the internet when cross-compiling.
+- **Changed: one handheld profile pair fits every panel.**  `hd-handheld`
+  now picks its scale (x2 to x4) and aspect (4:3 fill on a panel narrower
+  than 16:10, widescreen otherwise) from the panel it runs on, so the
+  `-43`, `-x2` and `-x4` profiles are gone: pass `hd-handheld` or
+  `dos-handheld`.  A 1024x768 panel is now filled at 4:3 instead of
+  letterboxed.  Your own choices in Options still win: if Enhanced stutters,
+  *Options → Video → Render scale* now steps 4 → 3 → 2 (x3 was missing from
+  the menu).
+- **Added, for benchmarking: a timedemo.**  `OLDUVAI_UNTHROTTLED=1` with
+  `--replay` plays a recorded run as fast as the machine can, the same run,
+  and `OLDUVAI_FRAME_STATS=1` reports the ticks per second it reached.
+- **Removed: `--viewer`**, the old asset browser.  It had not been used for
+  a long time; the game itself is unchanged.
+- **Added: render scale x5 and x6 for big screens** (*Options → Video →
+  Render scale*, desktop only, with the xBRZ or OmniScale upscaler).  On a
+  4K screen the picture is drawn at up to 1920x1200 before the final
+  stretch, so curves come out a little crisper.
+- **Changed: handheld music picks Roland, then Sound Blaster.**  With no
+  Roland ROMs, a handheld now plays the Sound Blaster's FM music even when a
+  SoundFont is in the port: General MIDI costs a small chip too much.  Pick
+  it under *Options → Audio → Sound card*, or set `"music_auto_gm": true`.
+- **Lighter Enhanced HUD, most on the handhelds:** the HUD text is drawn
+  again only when it changes in every display mode and in the boss fights,
+  and only its own rows are copied to the screen.  On the A12 a boss fight's
+  frame costs a quarter of what it did.
+- **Smoother screen changes in Enhanced**, most on the handhelds: most of
+  the picture work a screen change did now happens earlier, while the game
+  has time to spare, or a little at a time during the scroll or fade (one
+  piece of it was being done twice, another not needed at all).
+- **Added: a sharp output filter** (*Options → Video → Filter*, or
+  `--output-filter sharp`).  In a window that is not a whole multiple of the
+  picture, Enhanced pixels came out in two widths; Sharp keeps them one size
+  and softens only their edges.  Nearest stays the default.
+- **Added: a quicksave says so on screen.**  "Saved" shows under the HUD for
+  a moment, or "Save failed" when the file could not be written (a read-only
+  folder, a full card); the sound alone said neither.
+- **Fixed: closing the window on the loading card or a boss tally quits**,
+  as it already did on the level tally.
+- **Fixed (Classic): skipping the ending cuts to black while the music
+  fades**, as the original does; the last frame used to stay on screen.
+- **Fixed: with a PlayStation-style pad, the Gamepad controls screen's text
+  overlapped.**  Its buttons now read "Cross", "Circle", "Square" and
+  "Triangle"; Xbox and Nintendo pads keep the position ("A - bottom"), since
+  their letters sit in different places.
+- **Changed: the PortMaster package follows PortMaster's conventions**: a
+  shorter launcher that leaves to PortMaster what it already does, a 640x480
+  screenshot, and every licence in one `licenses/` folder (the KNULLI bundles
+  too).  On the Powkiddy A12, PortMaster's own `gptokeyb` is built for the
+  wrong architecture; the launcher no longer works around it, so its
+  Start+Select quit waits for a PortMaster fix there (the game still plays,
+  and the pause menu still quits).
+- **Under the hood:** the saved settings are one struct shared by the
+  settings resolver and the game, and the key and pad binding tables name the
+  setting each binding fills, so a new setting or binding is written once.
+
 ## 0.9.10 — 2026-10-06
 
 **PortMaster, a sharper upscaler, and animations that stop the clock.**

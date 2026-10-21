@@ -21,7 +21,7 @@
 #include <optional>
 #include <string>
 
-#include "presentation/input/button_layout.hpp"   // PadFamily
+#include "presentation/input/button_layout.hpp"   // PadFamily, kPadSlots
 
 namespace olduvai::presentation {
 struct GameOptions;   // (game_app.hpp) — for init_from_options

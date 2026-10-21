@@ -248,3 +248,83 @@ TEST_CASE("options_build: the profile family reaches GameOptions") {
     REQUIRE(build_game_options(a, s, go).ok);
     CHECK(go.profile_family == "handheld");
 }
+
+TEST_CASE("options_build: the saved settings reach GameOptions as resolved") {
+    CliArgs a;
+    PlaySettings s;   // every PlayConfig field off its default
+    s.enhanced = true;
+    s.hd_profile = "mmpx";
+    s.render_scale = 3;
+    s.aspect = "4:3";
+    s.music_device = "opl";
+    s.rom_dir = "/roms";
+    s.mt32_model = "cm32l";
+    s.soundfont = "/sf/gm.sf2";
+    s.sfx_backend = "sb-dac";
+    s.autofire = "fast";
+    s.pad_jump = "y";
+    s.pad_attack = "b";
+    s.pad_pause = "back";
+    s.pad_confirm = "y";
+    s.pad_back = "a";
+    s.pad_deadzone = 5000;
+    s.key_left = "J";
+    s.key_right = "L";
+    s.key_up = "I";
+    s.key_down = "K";
+    s.key_attack = "U";
+    s.key_pause = "P";
+    s.key_quit = "F9";
+    s.display_mode = "cpu";
+    s.audio_rate = 44100;
+    s.audio_buffer = 1024;
+    s.transitions = "classic";
+    s.banner_fx = "fire";
+    s.profile_family = "handheld";
+    GameOptions go;
+    REQUIRE(build_game_options(a, s, go).ok);
+    CHECK(go.enhanced);
+    CHECK(go.hd_profile == "mmpx");
+    CHECK(go.render_scale == 3);
+    CHECK(go.aspect == "4:3");
+    CHECK(go.music_device == "opl");
+    CHECK(go.rom_dir == "/roms");
+    CHECK(go.mt32_model == "cm32l");
+    CHECK(go.soundfont == "/sf/gm.sf2");
+    CHECK(go.sfx_backend == "sb-dac");
+    CHECK(go.autofire == "fast");
+    CHECK(go.pad_jump == "y");
+    CHECK(go.pad_attack == "b");
+    CHECK(go.pad_pause == "back");
+    CHECK(go.pad_confirm == "y");
+    CHECK(go.pad_back == "a");
+    CHECK(go.pad_deadzone == 5000);
+    CHECK(go.key_left == "J");
+    CHECK(go.key_right == "L");
+    CHECK(go.key_up == "I");
+    CHECK(go.key_down == "K");
+    CHECK(go.key_attack == "U");
+    CHECK(go.key_pause == "P");
+    CHECK(go.key_quit == "F9");
+    CHECK(go.display_mode == "cpu");
+    CHECK(go.audio_rate == 44100);
+    CHECK(go.audio_buffer == 1024);
+    CHECK(go.transitions == "classic");
+    CHECK(go.banner_fx == "fire");
+    CHECK(go.profile_family == "handheld");
+}
+
+TEST_CASE("options_build: round 1's Nintendo mapping is upgraded on the way") {
+    CliArgs a;
+    PlaySettings s;
+    s.pad_jump = "b";
+    s.pad_attack = "a";
+    s.pad_confirm = "b";
+    s.pad_back = "back";
+    s.pad_pause = "start";
+    GameOptions go;
+    REQUIRE(build_game_options(a, s, go).ok);
+    CHECK(go.pad_back == "a");      // today's nintendo
+    CHECK(go.pad_jump == "b");
+    CHECK(go.pad_pause == "start");
+}

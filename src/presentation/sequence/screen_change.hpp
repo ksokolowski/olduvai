@@ -38,6 +38,10 @@ struct TransitionState {
     // composed after it.  `wide` false = the 320 fp.present path.
     std::vector<std::uint8_t> old_wide;
     bool wide = false;
+    // A kind-1 pan between adjacent surface screens: the continuous panorama,
+    // which builds its own strip and never reads `old_wide`.  Set before the
+    // rebind.
+    bool panorama = false;
 
     // The secret slides' wide outgoing frame, built at capture: the exit's
     // needs the room as it was left, restored before the pan/fade wide block

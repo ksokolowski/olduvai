@@ -10,6 +10,7 @@
 
 #include "enhance/enhanced_hud.hpp"          // compute/draw_enhanced_hud_*
 #include "enhance/upscale.hpp"               // upscale_rgba
+#include "formats/hash64.hpp"
 #include "presentation/diag/frame_stats.hpp" // FrameStats / note_present
 #include "presentation/render/game_render.hpp"      // FrameBuffer
 #include "presentation/image_out.hpp"        // capture_renderer_output
@@ -33,6 +34,15 @@ void FramePresenter::draw_hud_for(FrameBuffer& target) {
         // Classic: bitmap HUD directly onto the 320x200 buffer.
         draw_hud(target, state, *charset, render->entity_sprites,
                  render->palette, false);
+        if (const char* t = surface->save_notice_text()) {
+            const int x = (320 - text_width(*charset, t)) / 2;
+            draw_text_rgb(target, *charset, x + 1, SaveNotice::kBaselineY + 1,
+                          t, {0, 0, 0});
+            draw_text_rgb(target, *charset, x, SaveNotice::kBaselineY, t,
+                          surface->save_notice()->saved()
+                              ? formats::Rgb{255, 255, 255}
+                              : formats::Rgb{255, 85, 85});
+        }
         return;
     }
 
@@ -189,6 +199,8 @@ void FramePresenter::draw_text_pass(const enhance::EnhancedHudLayout* hud) {
                            !confirm_->is_open() && menu_->is_open();
     const bool show_confirm = menu_ != nullptr && vector && confirm_->is_open();
     if (hud == nullptr && !show_cheat && !show_menu && !show_confirm) return;
+    const bool hud_only = hud != nullptr && !show_cheat && !show_menu &&
+                          !show_confirm;
     surface->overlay_pass([&](const enhance::Canvas& cv) {
         const int ow = cv.w, oh = cv.h;
         const int lw = surface->lsz().w(), lh = surface->lsz().h();
@@ -217,7 +229,22 @@ void FramePresenter::draw_text_pass(const enhance::EnhancedHudLayout* hud) {
         if (show_cheat) draw_cheat_rows(cv);
         if (show_menu) draw_menu_vector(cv, text, *menu_, 0.0f, pic);
         if (show_confirm) draw_confirm_vector(cv, text, *confirm_, pic);
-    });
+    }, hud_only ? hud_key(*hud) : TextOverlay::kAlwaysRedraw);
+}
+
+// The HUD-only pass's key: the wide key (texts, banners, margin) plus the
+// logical size and the mapping, which place the text in the output.
+std::uint64_t FramePresenter::hud_key(
+    const enhance::EnhancedHudLayout& hud) const {
+    const std::uint64_t k = wsp->overlay_key(hud, 0, 0);
+    if (k == TextOverlay::kAlwaysRedraw) return k;
+    formats::Hash64 key;
+    key.mix(k);
+    key.mix(static_cast<std::uint64_t>(surface->lsz().w()));
+    key.mix(static_cast<std::uint64_t>(surface->lsz().h()));
+    key.mix(wsp->active() ? 2u : 3u);
+    const std::uint64_t h = key.value();
+    return h == TextOverlay::kAlwaysRedraw ? 1ull : h;
 }
 
 void FramePresenter::present_paused(const Menu& menu,

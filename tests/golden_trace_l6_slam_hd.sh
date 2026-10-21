@@ -62,7 +62,8 @@
 # Skip (77) when game data or the binary is absent.
 
 TRACE_GATE_FLAGS="--enhanced --hd-profile mmpx --render-scale 2" \
-    exec env OLDUVAI_FORCE_SMOOTH=1 sh "$(dirname "$0")/lib/trace_gate.sh" \
+    exec env OLDUVAI_FORCE_SMOOTH=1 TRACE_GATE_PACED=1 \
+    sh "$(dirname "$0")/lib/trace_gate.sh" \
     golden_trace_l6_slam_hd 6 - \
     l6_slam_deaths.jsonl golden_trace_l6_slam_hd.jsonl 600 180 \
     "${OLDUVAI_GAME_DATA:-${1:-$(dirname "$0")/../game_data}}" \

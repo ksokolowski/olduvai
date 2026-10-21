@@ -4,6 +4,7 @@
 // FUN_2276_03d9 (Phase 2).
 
 #include "presentation/sequence/l3_end_level.hpp"
+#include "presentation/pacing.hpp"   // pace_delay
 
 #include <SDL.h>
 #include <algorithm>
@@ -500,7 +501,7 @@ public:
             present_wide(f, with_hud);
         }
         const Uint32 spent = SDL_GetTicks() - t0;
-        if (spent < step_ms) SDL_Delay(step_ms - spent);
+        if (spent < step_ms) pace_delay(step_ms - spent);
         return true;
     }
 

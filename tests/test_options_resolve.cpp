@@ -9,6 +9,8 @@
 
 #include "app/config.hpp"
 #include "app/options_resolve.hpp"
+#include "presentation/input/action_map.hpp"
+#include "presentation/input/button_layout.hpp"
 #include "presentation/menu/profile_table.hpp"
 
 using olduvai::app::Config;
@@ -367,12 +369,44 @@ TEST_CASE("options: smooth keys are config-only and fill from the config") {
     CHECK(s.smooth_vsync == "off");
 }
 
+TEST_CASE("options: every binding key is a play.json key that fills its setting") {
+    // The key and pad tables name the PlayConfig field each key sets; the
+    // resolve table must accept the same key and fill that same field.
+    for (const auto& k : olduvai::presentation::kKeyActions) {
+        PlaySettings s;
+        CHECK_MESSAGE(adopt_profile_key(s, k.key, "F11"), k.key);
+        CHECK_MESSAGE(s.*k.setting == "F11", k.key);
+    }
+    for (const auto& p : olduvai::presentation::kPadSlots) {
+        PlaySettings s;
+        CHECK_MESSAGE(adopt_profile_key(s, p.key, "y"), p.key);
+        CHECK_MESSAGE(s.*p.setting == "y", p.key);
+    }
+}
+
 TEST_CASE("options: adopt_profile_key takes the smooth keys") {
     PlaySettings s;
     CHECK(adopt_profile_key(s, "smooth_subframes", "2"));
     CHECK(adopt_profile_key(s, "smooth_vsync", "off"));
     CHECK(s.smooth_subframes == "2");
     CHECK(s.smooth_vsync == "off");
+}
+
+TEST_CASE("options: the handheld profiles keep auto music off the GM SoundFont") {
+    PlaySettings s;
+    CHECK(s.music_auto_gm);   // desktop and no profile: the full auto chain
+    for (const char* p : {"hd-handheld", "dos-handheld"}) {
+        const LayeredConfig lc = layer_config({}, "", p);
+        CHECK_MESSAGE(lc.merged.at("music_auto_gm") == "false", p);
+        PlaySettings h;
+        merge_config(h, lc.merged);
+        CHECK_MESSAGE(!h.music_auto_gm, p);
+    }
+    // play.json may say otherwise.
+    const LayeredConfig own = layer_config({{"music_auto_gm", "true"}}, "",
+                                           "hd-handheld");
+    CHECK(own.merged.at("music_auto_gm") == "true");
+    CHECK(layer_config({}, "", "hd").merged.count("music_auto_gm") == 0);
 }
 
 TEST_CASE("layers: --default-profile seeds below play.json") {
@@ -407,9 +441,7 @@ TEST_CASE("layers: a handheld device defaults to the Nintendo button layout") {
     // Both handhelds print Nintendo labels on SDL's positions, so the
     // device default puts jump and confirm on the right button (printed A).
     for (const char* dev :
-         {"hd-handheld", "dos-handheld", "hd-handheld-43", "dos-handheld-43",
-          "hd-handheld-x2", "dos-handheld-x2", "hd-handheld-x4",
-          "dos-handheld-x4"}) {
+         {"hd-handheld", "dos-handheld"}) {
         const LayeredConfig lc = layer_config({}, "", dev);
         CHECK(lc.merged.at("pad_jump") == "b");
         CHECK(lc.merged.at("pad_attack") == "a");
@@ -479,40 +511,86 @@ TEST_CASE("save-config: the file, --profile and CLI keys — never the default l
     CHECK(with_profile.at("hd_profile") == "omniscale");
 }
 
-TEST_CASE("profiles: dos-handheld pins exactly what dos pins") {
-    CHECK(builtin_profile("dos-handheld") == builtin_profile("dos"));
-}
-
-TEST_CASE("profiles: the 4:3 handheld pair fills the panel, Style stays in it") {
-    using olduvai::presentation::resolve_preset;
-    CHECK(std::string(resolve_preset("handheld-43", "hd").name) ==
-          "hd-handheld-43");
-    CHECK(std::string(resolve_preset("handheld-43", "dos").name) ==
-          "dos-handheld-43");
-    for (const char* p : {"hd-handheld-43", "dos-handheld-43"})
-        CHECK(builtin_profile(p).at("aspect") == "4:3");
-    CHECK(builtin_profile("hd-handheld-43").at("render_scale") == "2");
-    CHECK(layer_config({}, "", "hd-handheld-43").family == "handheld-43");
-}
-
-TEST_CASE("profiles: the handheld scale pairs are xBRZ at x2 and x4, Style stays in them") {
-    using olduvai::presentation::resolve_preset;
-    const struct { const char* family; const char* hd; const char* dos; const char* scale; } pairs[] = {
-        {"handheld-x2", "hd-handheld-x2", "dos-handheld-x2", "2"},
-        {"handheld-x4", "hd-handheld-x4", "dos-handheld-x4", "4"},
-    };
-    for (const auto& p : pairs) {
-        CAPTURE(p.family);
-        CHECK(std::string(resolve_preset(p.family, "hd").name) == p.hd);
-        CHECK(std::string(resolve_preset(p.family, "dos").name) == p.dos);
-        CHECK(builtin_profile(p.hd).at("hd_profile") == "xbrz");
-        CHECK(builtin_profile(p.hd).at("render_scale") == p.scale);
-        CHECK(builtin_profile(p.hd).at("aspect") == "widescreen");
-        CHECK(builtin_profile(p.dos) == builtin_profile("dos"));
-        CHECK(layer_config({}, "", p.hd).family == p.family);
+namespace {
+// The process-wide panel for one test, reset after it.
+struct PanelGuard {
+    explicit PanelGuard(int w, int h) {
+        olduvai::presentation::session_panel() = {w, h};
     }
-    // the family steps: x2 below, x3 in hd-handheld, x4 above
-    CHECK(builtin_profile("hd-handheld").at("render_scale") == "3");
+    ~PanelGuard() { olduvai::presentation::session_panel() = {}; }
+    PanelGuard(const PanelGuard&) = delete;
+    PanelGuard& operator=(const PanelGuard&) = delete;
+};
+}  // namespace
+
+TEST_CASE("profiles: auto fits the frame to the panel, 4:3 below 16:10") {
+    using olduvai::presentation::auto_display;
+    using olduvai::presentation::ProfileRole;
+    const struct { int w, h, scale; const char* hd; const char* dos; } panels[] = {
+        {640, 480, 2, "4:3", "4:3"},              // R36S
+        {800, 600, 2, "4:3", "4:3"},
+        {960, 720, 3, "4:3", "4:3"},
+        {1024, 768, 3, "4:3", "4:3"},
+        {1280, 960, 4, "4:3", "4:3"},
+        {720, 720, 2, "4:3", "4:3"},              // square: width-bound
+        {320, 240, 2, "4:3", "4:3"},              // the floor
+        {854, 480, 2, "widescreen", "keep"},
+        {1024, 600, 3, "widescreen", "keep"},     // A12
+        {1280, 720, 3, "widescreen", "keep"},     // TrimUI Smart Pro
+        {1280, 800, 4, "widescreen", "keep"},     // 16:10, exactly x4
+        {1920, 1080, 4, "widescreen", "keep"},    // the cap
+        {0, 0, 3, "widescreen", "keep"},          // unknown: the 720p default
+    };
+    for (const auto& p : panels) {
+        CAPTURE(p.w);
+        CAPTURE(p.h);
+        const auto hd = auto_display({p.w, p.h}, ProfileRole::Enhanced);
+        const auto dos = auto_display({p.w, p.h}, ProfileRole::Classic);
+        CHECK(hd.render_scale == p.scale);
+        CHECK(std::string(hd.aspect) == p.hd);
+        CHECK(std::string(dos.aspect) == p.dos);
+    }
+}
+
+TEST_CASE("profiles: the handheld pair's auto pins read the session panel") {
+    {
+        const PanelGuard g(640, 480);
+        CHECK(builtin_profile("hd-handheld").at("render_scale") == "2");
+        CHECK(builtin_profile("hd-handheld").at("aspect") == "4:3");
+        CHECK(builtin_profile("dos-handheld").at("aspect") == "4:3");
+    }
+    {
+        const PanelGuard g(1280, 720);
+        CHECK(builtin_profile("hd-handheld").at("render_scale") == "3");
+        CHECK(builtin_profile("hd-handheld").at("aspect") == "widescreen");
+        CHECK(builtin_profile("dos-handheld").at("aspect") == "keep");
+        // the player's play.json still wins over the device default
+        const LayeredConfig lc = layer_config({{"render_scale", "2"}}, "", "hd-handheld");
+        CHECK(lc.merged.at("render_scale") == "2");
+    }
+    // the rest of the pair is fixed
+    CHECK(builtin_profile("hd-handheld").at("hd_profile") == "xbrz");
+    CHECK(layer_config({}, "", "dos-handheld").family == "handheld");
+}
+
+TEST_CASE("profiles: dos-handheld is dos, its aspect following the panel and "
+          "its auto music off the GM SoundFont") {
+    Config want = builtin_profile("dos");
+    want["music_auto_gm"] = "false";
+    CHECK(builtin_profile("dos-handheld") == want);   // unknown panel
+    const PanelGuard g(640, 480);
+    want["aspect"] = "4:3";
+    CHECK(builtin_profile("dos-handheld") == want);
+}
+
+TEST_CASE("profiles: four, and no pin is left unresolved") {
+    CHECK(std::size(olduvai::presentation::kProfiles) == 4);
+    for (const auto& p : olduvai::presentation::kProfiles)
+        for (const auto& kv : builtin_profile(p.name)) {
+            CAPTURE(p.name);
+            CAPTURE(kv.first);
+            CHECK(kv.second != "auto");
+        }
 }
 
 TEST_CASE("save-config: every setting the command line stated, as --help says") {

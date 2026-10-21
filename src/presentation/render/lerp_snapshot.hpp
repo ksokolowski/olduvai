@@ -39,7 +39,8 @@ inline float snap_lerp_f(int prev, int cur, float alpha, bool force = false) {
 inline int snap_lerp_i(int prev, int cur, float alpha, bool force = false) {
     if (snap_jumped(prev, cur, force)) return cur;
     return prev + static_cast<int>(
-                      std::lround(static_cast<double>(cur - prev) * alpha));
+                      std::lround(static_cast<double>(cur - prev) *
+                                 static_cast<double>(alpha)));
 }
 
 // ---- The pair form ----

@@ -22,6 +22,12 @@
 # through to the binary — e.g. the enhanced/mmpx stack golden_trace_l6_slam_hd
 # needs.  Keep it for DISPLAY/RENDER flags only: level, replay, trace, frames
 # and game-dir are this driver's own parameters.
+#
+# The replay runs unthrottled (OLDUVAI_UNTHROTTLED, presentation/pacing.hpp):
+# the logic is tick-indexed, so the trace is the paced run's, minus the
+# waiting (l1_full_clear 212 s -> 2 s).  TRACE_GATE_PACED=1 keeps the 18.2 Hz
+# pacing: golden_trace_secret and golden_trace_l6_slam_hd do, so the paced
+# path (the PIT tick, smooth sub-frames, vsync) still meets a golden.
 
 NAME="$1"; LEVEL="$2"; SS="$3"; INPUT="$4"; GOLDEN_NAME="$5"
 FRAMES="$6"; TMO="$7"; GAME_DIR="$8"; BINARY="$9"
@@ -47,6 +53,11 @@ fi
 
 export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}"
 export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}"
+if [ "${TRACE_GATE_PACED:-0}" = 1 ]; then
+    unset OLDUVAI_UNTHROTTLED
+else
+    export OLDUVAI_UNTHROTTLED=1
+fi
 CFG_DIR="$(mktemp -d /tmp/olduvai_cfg.XXXXXX)"
 ACTUAL="$(mktemp "/tmp/${NAME}.XXXXXX")"
 

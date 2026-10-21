@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -164,6 +165,13 @@ public:
     // what a do_present=false call left.
     void flip() const;
 
+    // Warm the current screen's cached wide background across a transition's
+    // frames (WideBgWarmer), so the first steady frame after it does not build
+    // it: start once the new screen is bound, then advance with the
+    // transition's progress (0..1); 1 finishes it.
+    void start_bg_warm();
+    void advance_bg_warm(double frac);
+
     // Wide-buffer wraps for the transition and fade paths.
     void wrap_wide(const FrameBuffer& center, std::vector<std::uint8_t>& out);
     void wrap_wide_bezel(const FrameBuffer& center,
@@ -210,6 +218,8 @@ private:
     // The FOND backdrop for the wide composers, or nullptr when this screen has
     // none.
     const FrameBuffer* ws_backdrop() const;
+    // The peek as the wide static-bg cache reads it.
+    WidePeek wide_peek() const;
     bool secret_selftile() const;
     bool surface_selffill() const;
     void refresh_level_state();   // build_backdrop + update_cache
@@ -239,6 +249,7 @@ private:
     // Bumped on every peek rebuild; keys the wide static-bg HD cache to the
     // peek content.
     std::uint64_t peek_generation_ = 0;
+    std::unique_ptr<WideBgWarmer> bg_warm_;   // start_bg_warm
     // The fast present's HD wide frame, kept between presents and repainted
     // only where it changed (dirty_frame.hpp); `hud_rects_` are the bars'.
     DirtyFrame dirty_;

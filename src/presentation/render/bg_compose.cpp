@@ -11,10 +11,13 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 
 #include "core/game_tables.hpp"
+#include "enhance/incremental_upscale.hpp"   // LazyUpscaler
 #include "enhance/upscale.hpp"
 #include "presentation/render/edge_margin_policy.hpp"
 #include "presentation/render/widescreen.hpp"
@@ -157,8 +160,10 @@ std::uint64_t static_bg_key(const systems::SystemsState& state,
                             const std::string& profile) {
     formats::Hash64 key;
     auto mix = [&](std::uint64_t v) { key.mix(v); };
+    // Not the screen number: the layer is its tiles, and the outgoing frame of
+    // a screen change is composed after the number moved, before the tiles
+    // did (a second upscale of the same pixels, once per change).
     mix(static_cast<std::uint64_t>(state.current_level));
-    mix(static_cast<std::uint64_t>(state.current_screen));
     mix(state.cave_flag ? 1u : 0u);
     mix(static_cast<std::uint64_t>(state.cave_index) + 1);
     mix(state.secret_flag ? 1u : 0u);
@@ -177,35 +182,79 @@ std::uint64_t static_bg_key(const systems::SystemsState& state,
 
 namespace {
 
-struct StaticBgEntry { std::uint64_t key; std::vector<std::uint8_t> hd; };
+struct StaticBgEntry {
+    std::uint64_t key;
+    std::vector<std::uint8_t> hd;
+    bool verified = false;   // OLDUVAI_BG_CACHE_VERIFY
+};
 std::deque<StaticBgEntry> g_static_bg_cache;   // front = most-recently-used
 constexpr std::size_t kStaticBgCacheMax = 6;
 
-const std::vector<std::uint8_t>& get_static_bg_hd(
-    systems::SystemsState& state, const LevelRenderAssets& a, int scale,
-    const std::string& profile) {
-    const std::uint64_t key = static_bg_key(state, a, scale, profile);
-    for (auto& e : g_static_bg_cache) {
-        if (e.key == key) return e.hd;
-    }
-    // Miss: compose at 320x200, upscale the whole layer once, cache it.
+bool bg_cache_verify() {
+    static const bool on = std::getenv("OLDUVAI_BG_CACHE_VERIFY") != nullptr;
+    return on;
+}
+
+// The native 320x200 layer get_static_bg_hd upscales.
+std::vector<std::uint8_t> compose_static_bg(systems::SystemsState& state,
+                                            const LevelRenderAssets& a) {
     std::vector<std::uint8_t> native(320u * 200u * 4u, 0);
     RenderTarget nt{native.data(), 320, 200, 1, nullptr, nullptr};
     nt.clip_y = 1 << 28;
     draw_bg_base(nt, state, a);
     draw_bg_tiles(nt, state, a);
     extend_top_backdrop(nt, a);
-    g_static_bg_cache.push_front(StaticBgEntry{
-        key, enhance::upscale_rgba(native, 320, 200, scale, profile)});
+    return native;
+}
+
+StaticBgEntry* find_static_bg(std::uint64_t key) {
+    for (auto& e : g_static_bg_cache)
+        if (e.key == key) return &e;
+    return nullptr;
+}
+
+void store_static_bg(std::uint64_t key, std::vector<std::uint8_t> hd) {
+    g_static_bg_cache.push_front(StaticBgEntry{key, std::move(hd)});
     while (g_static_bg_cache.size() > kStaticBgCacheMax)
         g_static_bg_cache.pop_back();
+}
+
+const std::vector<std::uint8_t>& get_static_bg_hd(
+    systems::SystemsState& state, const LevelRenderAssets& a, int scale,
+    const std::string& profile) {
+    const std::uint64_t key = static_bg_key(state, a, scale, profile);
+    const auto build = [&] {
+        return enhance::upscale_rgba(compose_static_bg(state, a), 320, 200,
+                                     scale, profile);
+    };
+    for (auto it = g_static_bg_cache.begin(); it != g_static_bg_cache.end();
+         ++it) {
+        if (it->key != key) continue;
+        // OLDUVAI_BG_CACHE_VERIFY=1: rebuilt and compared at its first hit.
+        if (bg_cache_verify() && !it->verified) {
+            it->verified = true;
+            std::fprintf(stderr, "bg-cache-verify: 320 screen %d %s\n",
+                         state.current_screen,
+                         build() == it->hd ? "ok" : "MISMATCH");
+        }
+        // To the front: a warmed neighbour must not evict the live screen.
+        std::rotate(g_static_bg_cache.begin(), it, it + 1);
+        return g_static_bg_cache.front().hd;
+    }
+    // Miss: compose at 320x200, upscale the whole layer once, cache it.
+    store_static_bg(key, build());
     return g_static_bg_cache.front().hd;
 }
 
 // Widescreen static-bg HD cache: the wide background (centre + margins) is
 // static per screen, so upscale it once and per frame only copy it and draw
 // sprites.  Key: static_bg_key + margin + neighbour screens + backdrop.
-struct WideBgEntry { std::uint64_t key; int margin; std::vector<std::uint8_t> hd; };
+struct WideBgEntry {
+    std::uint64_t key;
+    int margin;
+    std::vector<std::uint8_t> hd;
+    bool verified = false;   // OLDUVAI_BG_CACHE_VERIFY
+};
 std::deque<WideBgEntry> g_static_wide_bg_cache;   // front = most-recently-used
 constexpr std::size_t kStaticWideBgCacheMax = 4;
 }  // namespace
@@ -213,6 +262,31 @@ constexpr std::size_t kStaticWideBgCacheMax = 4;
 void redraw_bg_tiles(RenderTarget& t, systems::SystemsState& state,
                      const LevelRenderAssets& a) {
     draw_bg_tiles(t, state, a);   // anon-namespace impl, visible in this TU
+}
+
+StaticBgWarmer::StaticBgWarmer(systems::SystemsState& state,
+                               const LevelRenderAssets& assets, int scale,
+                               const std::string& profile)
+    : key_(static_bg_key(state, assets, scale, profile)) {
+    if (find_static_bg(key_) != nullptr) {
+        done_ = true;
+        return;
+    }
+    native_ = compose_static_bg(state, assets);
+    up_ = std::make_unique<enhance::LazyUpscaler>(native_, 320, 200, scale,
+                                                  profile);
+}
+
+StaticBgWarmer::~StaticBgWarmer() = default;
+
+void StaticBgWarmer::step() {
+    if (done_) return;
+    cols_ = std::min(320, cols_ + enhance::LazyUpscaler::kMinBand);
+    up_->ensure(0, cols_);
+    if (cols_ < 320) return;
+    done_ = true;
+    if (find_static_bg(key_) == nullptr) store_static_bg(key_, up_->take());
+    up_.reset();
 }
 
 void continue_l1_end_water(const systems::SystemsState& state,
@@ -477,60 +551,134 @@ void compose_static_wide_bg_native(
     extend_top_backdrop(wide_t, a);
 }
 
-const std::vector<std::uint8_t>& get_static_wide_bg_hd(
-    systems::SystemsState& state, const LevelRenderAssets& a, int scale,
-    const std::string& profile, int margin, const WidePeek& peek,
-    std::uint64_t* key_out) {
-    static const std::vector<LevelRenderAssets::TileDraw> kNoTiles;
-    const FrameBuffer* left = peek.left;
-    const int left_screen = peek.left_screen;
-    const FrameBuffer* right = peek.right;
-    const int right_screen = peek.right_screen;
-    const FrameBuffer* backdrop = peek.backdrop;
-    const std::vector<LevelRenderAssets::TileDraw>& left_seam =
-        peek.left_seam != nullptr ? *peek.left_seam : kNoTiles;
-    const std::vector<LevelRenderAssets::TileDraw>& right_seam =
-        peek.right_seam != nullptr ? *peek.right_seam : kNoTiles;
-    const std::vector<LevelRenderAssets::TileDraw>& left_bridge =
-        peek.left_bridge != nullptr ? *peek.left_bridge : kNoTiles;
-    const std::vector<LevelRenderAssets::TileDraw>& right_bridge =
-        peek.right_bridge != nullptr ? *peek.right_bridge : kNoTiles;
-    const std::uint64_t peek_generation = peek.generation;
+namespace {
+
+// The wide cache key: static_bg_key, the screen, the peek (by generation,
+// screens and seam tiles), the margin and the backdrop.
+std::uint64_t static_wide_bg_key(systems::SystemsState& state,
+                                 const LevelRenderAssets& a, int scale,
+                                 const std::string& profile, int margin,
+                                 const WidePeek& peek) {
     std::uint64_t key = static_bg_key(state, a, scale, profile);
     auto mix = [&](std::uint64_t v) { key ^= v; key *= 1099511628211ull; };
     mix(0x57494445ull);   // "WIDE" salt — never collide with the 320 cache
+    // The screen itself: the L1-end water (continue_l1_end_water) reads it.
+    mix(static_cast<std::uint64_t>(state.current_screen));
     // The peek buffers bake in neighbour entity state (a destroyed L7 spike
     // rock, food); the caller bumps the generation on every rebuild.
-    mix(peek_generation);
+    mix(peek.generation);
     mix(static_cast<std::uint64_t>(margin));
-    mix(static_cast<std::uint64_t>(left ? (left_screen + 1) : 0));
-    mix(static_cast<std::uint64_t>(right ? (right_screen + 1) : 0));
-    mix(backdrop ? 1u : 0u);
+    mix(static_cast<std::uint64_t>(peek.left ? (peek.left_screen + 1) : 0));
+    mix(static_cast<std::uint64_t>(peek.right ? (peek.right_screen + 1) : 0));
+    mix(peek.backdrop ? 1u : 0u);
     // Seam tiles change the pixels, so they are part of the key.
-    for (const auto* seam : {&left_seam, &right_seam, &left_bridge,
-                             &right_bridge}) {
-        mix(static_cast<std::uint64_t>(seam->size()));
-        for (const auto& t : *seam) {
+    static const std::vector<LevelRenderAssets::TileDraw> kNoTiles;
+    for (const auto* seam : {peek.left_seam, peek.right_seam, peek.left_bridge,
+                             peek.right_bridge}) {
+        const auto& tiles = seam != nullptr ? *seam : kNoTiles;
+        mix(static_cast<std::uint64_t>(tiles.size()));
+        for (const auto& t : tiles) {
             mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(t.sprite_idx)));
             mix((static_cast<std::uint64_t>(static_cast<std::uint32_t>(t.x)) << 32) |
                 static_cast<std::uint32_t>(t.y));
         }
     }
-    if (key_out != nullptr) *key_out = key;   // margin is mixed in above
-    for (auto& e : g_static_wide_bg_cache) {
-        if (e.key == key && e.margin == margin) return e.hd;
-    }
-    // Miss: compose at native 320, upscale the whole wide layer once, cache it.
-    const int wide_w = 320 + 2 * margin;
+    return key;
+}
+
+// The native wide layer get_static_wide_bg_hd upscales.
+std::vector<std::uint8_t> compose_wide_bg(systems::SystemsState& state,
+                                          const LevelRenderAssets& a,
+                                          int margin, const WidePeek& peek) {
+    static const std::vector<LevelRenderAssets::TileDraw> kNoTiles;
+    const auto tiles = [](const std::vector<LevelRenderAssets::TileDraw>* t)
+        -> const std::vector<LevelRenderAssets::TileDraw>& {
+        return t != nullptr ? *t : kNoTiles;
+    };
     std::vector<std::uint8_t> wide;
-    compose_static_wide_bg_native(state, a, margin, left, right, backdrop, wide,
-                                  SeamTiles{left_seam, right_seam, left_bridge,
-                                            right_bridge});
-    g_static_wide_bg_cache.push_front(WideBgEntry{
-        key, margin, enhance::upscale_rgba(wide, wide_w, 200, scale, profile)});
+    compose_static_wide_bg_native(state, a, margin, peek.left, peek.right,
+                                  peek.backdrop, wide,
+                                  SeamTiles{tiles(peek.left_seam),
+                                            tiles(peek.right_seam),
+                                            tiles(peek.left_bridge),
+                                            tiles(peek.right_bridge)});
+    return wide;
+}
+
+WideBgEntry* find_wide_bg(std::uint64_t key, int margin) {
+    for (auto& e : g_static_wide_bg_cache)
+        if (e.key == key && e.margin == margin) return &e;
+    return nullptr;
+}
+
+const std::vector<std::uint8_t>& store_wide_bg(std::uint64_t key, int margin,
+                                               std::vector<std::uint8_t> hd) {
+    g_static_wide_bg_cache.push_front(WideBgEntry{key, margin, std::move(hd)});
     while (g_static_wide_bg_cache.size() > kStaticWideBgCacheMax)
         g_static_wide_bg_cache.pop_back();
     return g_static_wide_bg_cache.front().hd;
+}
+
+}  // namespace
+
+const std::vector<std::uint8_t>& get_static_wide_bg_hd(
+    systems::SystemsState& state, const LevelRenderAssets& a, int scale,
+    const std::string& profile, int margin, const WidePeek& peek,
+    std::uint64_t* key_out) {
+    const std::uint64_t key =
+        static_wide_bg_key(state, a, scale, profile, margin, peek);
+    if (key_out != nullptr) *key_out = key;   // margin is mixed in above
+    const auto build = [&] {
+        // Compose at native 320, upscale the whole wide layer once.
+        const std::vector<std::uint8_t> wide =
+            compose_wide_bg(state, a, margin, peek);
+        return enhance::upscale_rgba(wide, 320 + 2 * margin, 200, scale,
+                                     profile);
+    };
+    if (WideBgEntry* e = find_wide_bg(key, margin)) {
+        // OLDUVAI_BG_CACHE_VERIFY=1: an entry's first hit is rebuilt and
+        // compared, so a key missing an input (or a warmed entry built
+        // differently) shows as a mismatch.
+        if (bg_cache_verify() && !e->verified) {
+            e->verified = true;
+            std::fprintf(stderr, "bg-cache-verify: screen %d %s\n",
+                         state.current_screen,
+                         build() == e->hd ? "ok" : "MISMATCH");
+        }
+        return e->hd;
+    }
+    return store_wide_bg(key, margin, build());
+}
+
+WideBgWarmer::WideBgWarmer(systems::SystemsState& state,
+                           const LevelRenderAssets& a, int scale,
+                           std::string profile, int margin,
+                           const WidePeek& peek)
+    : state_(state), a_(a), scale_(scale), profile_(std::move(profile)),
+      margin_(margin), peek_(peek) {}
+
+WideBgWarmer::~WideBgWarmer() = default;
+
+void WideBgWarmer::advance(double frac) {
+    if (done_ || frac <= 0.0) return;
+    if (!up_) {
+        key_ = static_wide_bg_key(state_, a_, scale_, profile_, margin_, peek_);
+        if (find_wide_bg(key_, margin_) != nullptr) {
+            done_ = true;
+            return;
+        }
+        native_ = compose_wide_bg(state_, a_, margin_, peek_);
+        up_ = std::make_unique<enhance::LazyUpscaler>(
+            native_, 320 + 2 * margin_, 200, scale_, profile_);
+    }
+    up_->ensure_upto(frac);
+    if (!up_->complete()) return;
+    done_ = true;
+    // Cache it only if nothing the key covers moved since the compose.
+    if (static_wide_bg_key(state_, a_, scale_, profile_, margin_, peek_) == key_ &&
+        find_wide_bg(key_, margin_) == nullptr)
+        store_wide_bg(key_, margin_, up_->take());
+    up_.reset();
 }
 
 void draw_background(RenderTarget& t, systems::SystemsState& state,

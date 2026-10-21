@@ -103,8 +103,9 @@
       "items": [
         { "id": "hd_profile", "type": "choice", "label": "Upscaler", "key": "hd_profile", "values": ["native", "retro", "smooth", "eagle", "xbrz", "mmpx", "omniscale"], "value_labels": ["Off", "Nearest", "Scale2x/3x", "Eagle", "xBRZ", "MMPX", "OmniScale"], "hint": "live" },
         { "id": "aspect", "type": "choice", "label": "Aspect", "key": "aspect", "values": ["keep","widescreen","4:3","stretch"], "value_labels": ["Keep","Widescreen","4:3","Stretch"], "hint": "live" },
-        { "id": "render_scale", "type": "choice", "label": "Render scale", "key": "render_scale", "values": [2, 4], "restart": true, "hint": "applies now" },
+        { "id": "render_scale", "type": "choice", "label": "Render scale", "key": "render_scale", "values": [2, 3, 4, 5, 6], "restart": true, "hint": "applies now" },
         { "id": "hd_runs", "type": "readout", "label": "Runs", "key": "hd_runs" },
+        { "id": "output_filter", "type": "choice", "label": "Filter", "key": "output_filter", "values": ["nearest","sharp"], "value_labels": ["Nearest","Sharp"], "hint": "live" },
         { "id": "fullscreen", "type": "toggle", "label": "Fullscreen", "key": "fullscreen" },
         { "id": "back", "type": "back", "label": "Back" }
       ]

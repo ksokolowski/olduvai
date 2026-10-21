@@ -11,6 +11,24 @@
 
 namespace olduvai::presentation {
 
+std::optional<enhance::EnhancedHudLayout> LevelSurface::hud_layout(
+    const systems::SystemsState& state) {
+    if (!use_hd_text()) return std::nullopt;
+    enhance::EnhancedHudLayout L =
+        enhance::compute_enhanced_hud_layout(hd_text_, state);
+    if (const char* t = save_notice_text()) {
+        // Centred in the 320 picture (hd_text_ is at the native cap here),
+        // over a shadow so it reads on the sky's white clouds.
+        const formats::Rgb ink = save_notice_->saved()
+                                     ? formats::Rgb{235, 235, 235}
+                                     : formats::Rgb{210, 55, 45};
+        const int x = (320 - hd_text_.measure(t)) / 2;
+        L.texts.push_back({x + 1, SaveNotice::kBaselineY + 1, t, {0, 0, 0}});
+        L.texts.push_back({x, SaveNotice::kBaselineY, t, ink});
+    }
+    return L;
+}
+
 LevelSurface::LevelSurface(SDL_Window* win, SDL_Renderer* ren, bool hd,
                            int hd_scale, const std::string& hd_font,
                            const std::string& hd_profile, LogicalDims initial)

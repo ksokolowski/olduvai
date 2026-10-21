@@ -5,6 +5,7 @@
 
 #include "presentation/input/actions.hpp"   // key_is, play_key_is
 #include "presentation/input/gamepad.hpp"
+#include "presentation/pacing.hpp"   // pace_delay
 
 #include <SDL.h>
 
@@ -332,7 +333,8 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                     nullptr, display_level,
                     {g.charset, g.render.palette, display.view().present(), hd});
             })) {
-        running = false;
+        running = false;   // a window close or a finished capture: quit
+        outcome = LevelOutcome::kQuitProgram;
     }
 
     // Level music starts after the loading screen, with the level (as the
@@ -427,7 +429,7 @@ LevelOutcome run_platform_level(GameOptions& opts, int display_level,
                 outcome = LevelOutcome::kQuitProgram;
                 break;
             }
-            SDL_Delay(frame_ms);
+            pace_delay(frame_ms);
             continue;
         }
         if (pfr == PauseService::FreezeResult::kReinitDisplay) {

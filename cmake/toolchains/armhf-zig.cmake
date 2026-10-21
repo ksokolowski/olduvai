@@ -18,10 +18,11 @@
 # zig leg demonstrated for the TrimUI Smart Pro; packaging/build_knulli_release.sh
 # builds the A12 release bundle through it.
 #
-# CPU: cortex_a7.  The target's baseline is ARMv7-A + NEON WITHOUT hardware
-# divide, so every a / b by a variable is an __aeabi_idiv call; the A7 has
-# sdiv, and the code is scheduled for its in-order core.  The binary then
-# needs an A7 or later: a PortMaster armhf build must choose its own floor.
+# CPU: cortex_a7 minus hardware divide.  Scheduled for the A7's in-order core,
+# but without sdiv/udiv (an a / b by a variable is an __aeabi_idiv call), so
+# the binary also runs on a Cortex-A8 / A9, which lack them: the A7-tuned
+# build died there with an illegal instruction under QEMU.  NEON stays: the
+# target baseline already requires it.
 #
 # Requires two paths, both outside the tree:
 #   -DOLDUVAI_ZIG_XTOOL=<dir with arm-linux-gnueabihf-g++/gcc/ar/ranlib wrappers>
@@ -30,5 +31,5 @@
 set(OLDUVAI_ZIG_TRIPLE    "arm-linux-gnueabihf.2.17")
 set(OLDUVAI_ZIG_PREFIX    "arm-linux-gnueabihf")
 set(OLDUVAI_ZIG_PROCESSOR "arm")
-set(OLDUVAI_ZIG_CPU       "cortex_a7")
+set(OLDUVAI_ZIG_CPU       "cortex_a7-hwdiv_arm-hwdiv")
 include("${CMAKE_CURRENT_LIST_DIR}/zig-linux.cmake")

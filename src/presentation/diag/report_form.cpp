@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "presentation/diag/report_form.hpp"
+#include "presentation/pacing.hpp"   // pace_delay
 
 #include <cstdio>
 #include <vector>
@@ -147,7 +148,7 @@ bool ReportFormService::service_freeze(const FreezeDeps& d) {
                   d.cursor, d.cursor_palette);
     }
     d.show(pf);
-    SDL_Delay(d.frame_ms);
+    pace_delay(d.frame_ms);
     return true;
 }
 

@@ -23,7 +23,7 @@ the rest.  No game data ships here, and CI makes sure it stays that way
 
 ## Status
 
-**Release candidate: 0.9.10.**  The whole game plays, on the desktop and on
+**Release candidate: 0.9.11.**  The whole game plays, on the desktop and on
 handhelds: seven levels, three boss fights, caves, secret rooms, the balloon
 flights and the ending.  No known bugs.  Every frame is checked against an
 independent reference implementation, in lockstep, with zero tolerance.
@@ -89,7 +89,7 @@ On the [Releases page](../../releases/latest):
 
 | Platform | File |
 |---|---|
-| Linux x86_64 (any distro) | `olduvai-<version>-linux-x86_64.AppImage` |
+| Linux x86_64 (any distro) | `olduvai-<version>-x86_64.AppImage` |
 | Windows x86_64 (portable) | `olduvai-<version>-windows-x86_64.zip` |
 | macOS (universal) | `olduvai-<version>-macos-universal.dmg` |
 | TrimUI Smart Pro (KNULLI) | `olduvai-<version>-knulli-trimui.zip` |
@@ -109,7 +109,8 @@ goal](#supporting-the-project)):
   allow it under *System Settings → Privacy & Security → Open Anyway*;
   if Gatekeeper still refuses, `xattr -cr /Applications/Olduvai.app`.
 - **Windows:** SmartScreen → *More info* → *Run anyway*.
-- **Linux:** `chmod +x olduvai-*.AppImage`.
+- **Linux:** `chmod +x olduvai-*.AppImage`.  It can update itself with
+  [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate).
 
 Verify a download: `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`.
 

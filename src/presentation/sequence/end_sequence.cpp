@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "prepare/game_files.hpp"
 #include "presentation/window_util.hpp"
+#include "presentation/pacing.hpp"   // pace_delay
 #include "presentation/sequence/end_sequence.hpp"
 
 #include <SDL.h>
@@ -88,7 +89,7 @@ void show_game_over_screen(const std::filesystem::path& game_dir,
         if (abort) break;
         show_texture(sw.ren, gtex);
         present_output(sw.ren);
-        SDL_Delay(1000 / 18);
+        pace_delay(1000 / 18);
     }
     // FADE the death music out — do NOT hard-cut it (EXE FUN_2bd7_02e7 ends
     // with MDI_FadeStop; a hard stop chops MORT.MDI mid-loop, audibly wrong).
@@ -240,7 +241,7 @@ Rise rise_caveman(EndingCanvas& canvas, ScaledWindow& sw, bool smooth,
             return Rise::kQuit;
         }
         present_output(sw.ren);
-        if (delay_ms > 0) SDL_Delay(delay_ms);
+        if (delay_ms > 0) pace_delay(delay_ms);
         return Rise::kTop;
     };
     const bool vsync = smooth_try_enable_vsync(sw.ren, smooth);
@@ -288,11 +289,11 @@ bool wait_press_release(SDL_Window* win) {
 }
 
 // Enhanced: the frame a press left on screen fades to black while FIN.MDI
-// ramps down with it, instead of the hard cut to the intro.  Three seconds,
-// paced by the clock so a slow present does not stretch it.  A QoL
-// divergence like the tally's music fade; whether the EXE darkens here is
-// unrecorded.  OLDUVAI_ENDING_SHOT (with
-// OLDUVAI_ENDING_SKIP) dumps fade frame OLDUVAI_ENDING_SHOT_FRAME and quits.
+// ramps down with it.  Three seconds, paced by the clock so a slow present
+// does not stretch it.  A QoL divergence like the tally's music fade: the EXE
+// cuts the picture to black and fades only the music (cut_ending).
+// OLDUVAI_ENDING_SHOT (with OLDUVAI_ENDING_SKIP) dumps fade frame
+// OLDUVAI_ENDING_SHOT_FRAME and quits.
 constexpr int kEndingFadeFrames = 54;   // 3 s at 18 frames/s
 
 void fade_ending(EndingCanvas& canvas, SdlAudio& audio, ScaledWindow& sw,
@@ -317,8 +318,22 @@ void fade_ending(EndingCanvas& canvas, SdlAudio& audio, ScaledWindow& sw,
         const Uint32 due =
             start + static_cast<Uint32>(frame + 1) * 1000 / 18;
         const Uint32 now = SDL_GetTicks();
-        if (due > now) SDL_Delay(due - now);
+        if (due > now) pace_delay(due - now);
     }
+}
+
+// Classic: after the press the EXE clears the frame to black and shows it
+// (0x02b4 fill colour 0, 0x02ca copy to the screen), then fades the music
+// (0x02d2) over the black screen.  OLDUVAI_ENDING_SHOT (with
+// OLDUVAI_ENDING_SKIP) dumps that black frame and quits.
+void cut_ending(ScaledWindow& sw, bool& quit_requested) {
+    show_texture(sw.ren, nullptr);
+    if (const char* shot = std::getenv("OLDUVAI_ENDING_SHOT")) {
+        capture_renderer_output(sw.ren, shot);
+        quit_requested = true;
+        return;
+    }
+    present_output(sw.ren);
 }
 
 }  // namespace
@@ -342,8 +357,12 @@ void show_win_ending(const std::filesystem::path& game_dir, SdlAudio& audio,
         Rise end = rise_caveman(canvas, sw, smooth_motion, quit_requested);
         if (end == Rise::kTop)   // hold the final frame for a press
             end = wait_press_release(sw.win) ? Rise::kSkipped : Rise::kQuit;
-        if (enhanced && end == Rise::kSkipped)
-            fade_ending(canvas, audio, sw, quit_requested);
+        if (end == Rise::kSkipped) {
+            if (enhanced)
+                fade_ending(canvas, audio, sw, quit_requested);
+            else
+                cut_ending(sw, quit_requested);
+        }
     }
     // FADE the last music of the game out, as the EXE does: 0x02d2 is
     // MDI_FadeStop + MDI_FreeSlot(0), the same ramp the game-over screen and

@@ -91,6 +91,7 @@ struct FramePresenter {
     // One output-resolution text pass: HUD text, cheat rows, pause menu or
     // confirm (a second begin/flush would not composite).
     void draw_text_pass(const enhance::EnhancedHudLayout* hud);
+    std::uint64_t hud_key(const enhance::EnhancedHudLayout& hud) const;
     // After the upload: the canvas, the text pass, a pending shot, the flip.
     void finish(bool wide_frame, const enhance::EnhancedHudLayout* hud,
                 bool do_present);

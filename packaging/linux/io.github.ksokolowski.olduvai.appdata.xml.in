@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- AppStream metadata for the AppImage.  build_appimage_linux.sh fills
+     @VERSION@ and @DATE@ and validates the result with appstreamcli. -->
+<component type="desktop-application">
+  <id>io.github.ksokolowski.olduvai</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <name>Olduvai</name>
+  <summary>Native recreation of a 1991 game engine</summary>
+  <developer id="io.github.ksokolowski">
+    <name>Krzysztof Sokołowski</name>
+  </developer>
+  <developer_name>Krzysztof Sokołowski</developer_name>
+  <description>
+    <p>
+      Olduvai is a from-scratch C++ and SDL2 recreation of the engine of
+      Prehistorik (1991), the DOS caveman platformer. It plays the whole game
+      from your own copy of its files: Classic DOS exactly as it was, or
+      Enhanced HD with smooth motion, widescreen margins and sharp upscaled
+      graphics.
+    </p>
+    <p>
+      No game data ships with Olduvai. You need the original game files,
+      for example from GOG.com.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.ksokolowski.olduvai.desktop</launchable>
+  <url type="homepage">https://github.com/ksokolowski/olduvai</url>
+  <url type="bugtracker">https://github.com/ksokolowski/olduvai/issues</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Enhanced HD, widescreen</caption>
+      <image>https://raw.githubusercontent.com/ksokolowski/olduvai/main/assets/screenshots/enhanced-widescreen-l1.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Classic DOS</caption>
+      <image>https://raw.githubusercontent.com/ksokolowski/olduvai/main/assets/screenshots/classic-l1.png</image>
+    </screenshot>
+  </screenshots>
+  <categories>
+    <category>Game</category>
+    <category>ArcadeGame</category>
+  </categories>
+  <content_rating type="oars-1.1">
+    <content_attribute id="violence-cartoon">mild</content_attribute>
+  </content_rating>
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

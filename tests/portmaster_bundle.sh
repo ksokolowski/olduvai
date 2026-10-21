@@ -34,14 +34,21 @@ bad() { echo "FAIL: $*"; fail=1; }
 # 1. PortMaster's layout: the listing at the root, the port in olduvai/.
 for f in port.json README.md screenshot.png gameinfo.xml Olduvai.sh \
          olduvai/olduvai.aarch64 olduvai/olduvai.armhf olduvai/olduvai.gptk \
-         olduvai/README.txt olduvai/licenses/FluidSynth-LICENSE.txt \
-         olduvai/licenses/LICENSE olduvai/licenses/THIRD-PARTY-NOTICES.md \
+         olduvai/README.txt olduvai/licenses/LICENSE.olduvai.txt \
+         olduvai/licenses/LICENSE.xBRZ.txt olduvai/licenses/LICENSE.FluidSynth.txt \
+         olduvai/licenses/LICENSE.NotoSans.txt olduvai/licenses/THIRD-PARTY-NOTICES.md \
          olduvai/fonts/NotoSans-Regular.ttf; do
     [ -s "$P/$f" ] || bad "missing $f"
 done
-for f in Olduvai.sh olduvai/olduvai.aarch64 olduvai/olduvai.armhf; do
+# One flat licenses/ folder (PortMaster's convention): no copy at the root, no
+# licence text among the fonts.
+[ ! -e "$P/olduvai/LICENSE.txt" ] || bad "a LICENSE.txt at the port root"
+[ -z "$(find "$P/olduvai/fonts" -iname '*LICENSE*')" ] || bad "licences in fonts/"
+for f in olduvai/olduvai.aarch64 olduvai/olduvai.armhf; do
     [ -x "$P/$f" ] || bad "$f is not executable"
 done
+# PortMaster commits launchers 644; the launcher sets the binary's bit itself.
+[ ! -x "$P/Olduvai.sh" ] || bad "Olduvai.sh is executable (PortMaster keeps it 644)"
 
 # 2. port.json: version 4, the fields build_release.py reads, an allowed
 #    genre, the engine's name, both architectures, and no ready-to-run flag
@@ -78,45 +85,49 @@ if g:
     img = g[0].findtext("image") or ""
     import os
     need(os.path.isfile(os.path.join(p, img)), "gameinfo image does not ship")
-# The screenshot: PNG, 4:3, at least 640x480.
+# The screenshot: PNG, 640x480 (the size PortMaster asks for).
 with open(f"{p}/screenshot.png", "rb") as f:
     head = f.read(24)
 w, h = struct.unpack(">II", head[16:24])
 need(head[:8] == b"\x89PNG\r\n\x1a\n", "screenshot is not a PNG")
-need(w * 3 == h * 4 and w >= 640, f"screenshot {w}x{h} is not 4:3 >= 640x480")
+need((w, h) == (640, 480), f"screenshot {w}x{h} is not 640x480")
 for e in errs:
     print("FAIL: " + e)
 sys.exit(1 if errs else 0)
 PY
 
 # 3. The launcher: valid bash, PortMaster's own setup, player state in the
-#    port, the profile from the panel PortMaster reports, and no device fact
-#    or debug hook set by hand.
+#    port, the profile from the panel PortMaster reports, and nothing that
+#    control.txt already does, nor a device fact or debug hook set by hand.
 L="$P/Olduvai.sh"
 bash -n "$L" || bad "launcher is not valid bash"
-for want in 'source $controlfolder/control.txt' 'device_info.txt' 'get_controls' \
-            'GAMEDIR="/$directory/ports/olduvai"' 'XDG_CONFIG_HOME="$GAMEDIR/conf"' \
-            'OLDUVAI_BUG_DIR="$GAMEDIR/bug_reports"' 'SDL_GAMECONTROLLERCONFIG' \
-            '$GPTOKEYB "olduvai.${DEVICE_ARCH}"' 'gptokeyb.${DEVICE_ARCH}' \
-            'DISPLAY_HEIGHT' '--default-profile "$PROFILE"' 'pm_finish'; do
+for want in 'source $controlfolder/control.txt' 'get_controls' \
+            'GAMEDIR=/$directory/ports/olduvai' 'BINARY=olduvai.${DEVICE_ARCH}' \
+            'XDG_CONFIG_HOME="$GAMEDIR/conf"' 'OLDUVAI_BUG_DIR="$GAMEDIR/bug_reports"' \
+            'SDL_GAMECONTROLLERCONFIG' 'chmod +x "$GAMEDIR/$BINARY"' \
+            '$GPTOKEYB "$BINARY"' 'DISPLAY_HEIGHT' '--default-profile "$PROFILE"' \
+            'pm_finish'; do
     grep -qF -- "$want" "$L" || bad "launcher lacks: $want"
 done
-if grep -v '^[[:space:]]*#' "$L" | grep -qE 'SDL_VIDEODRIVER|XDG_RUNTIME_DIR|OLDUVAI_FRAME_STATS|--profile '; then
+if grep -v '^[[:space:]]*#' "$L" | grep -qE 'SDL_VIDEODRIVER|XDG_RUNTIME_DIR|OLDUVAI_FRAME_STATS|--profile |olduvai\.env'; then
     bad "launcher hand-sets a device fact, a debug hook or --profile"
 fi
+# control.txt sources device_info.txt, opens tty/uinput and sets $GPTOKEYB.
+if grep -v '^[[:space:]]*#' "$L" | grep -qE 'device_info\.txt|chmod 666|PORT_32BIT|gptokeyb\.'; then
+    bad "launcher repeats what PortMaster's control.txt already does"
+fi
 # The profile each panel starts on, run from the launcher's own block.
-PICK="$(sed -n '/^W=\${DISPLAY_WIDTH/,/^fi$/p' "$L")"
+PICK="$(sed -n '/^export OLDUVAI_PANEL=/,/^fi$/p' "$L")"
 [ -n "$PICK" ] || bad "launcher has no panel -> profile block"
-for panel in 1280x720:hd-handheld 1024x600:hd-handheld 720x720:hd-handheld \
-             800x480:hd-handheld-x2 854x480:hd-handheld-x2 960x544:hd-handheld-x2 \
-             640x480:hd-handheld-43 320x240:dos-handheld 480x320:dos-handheld \
-             0x0:dos-handheld 1280x800:hd-handheld-x4 1600x900:hd-handheld-x4 \
-             1920x1080:hd-handheld-x4 2560x1440:hd-handheld-x4; do
+# (Scale and aspect per panel: auto_display, test_options_resolve.)
+for panel in 1280x720:hd-handheld 1024x600:hd-handheld 640x480:hd-handheld \
+             1024x768:hd-handheld 800x480:hd-handheld 320x240:dos-handheld \
+             480x320:dos-handheld 0x0:dos-handheld; do
     wh="${panel%%:*}"; want="${panel#*:}"
     got="$(DISPLAY_WIDTH="${wh%x*}" DISPLAY_HEIGHT="${wh#*x}" \
            bash -c "$PICK"'
-echo "$PROFILE"')"
-    [ "$got" = "$want" ] || bad "panel $wh starts $got, want $want"
+echo "$PROFILE $OLDUVAI_PANEL"')"
+    [ "$got" = "$want $wh" ] || bad "panel $wh starts '$got', want '$want $wh'"
 done
 
 # 4. Nothing of the player's: no game data, ROMs, SoundFonts or settings.
@@ -153,7 +164,7 @@ m = re.search(r"<image>\./(.*?)</image>", z.read("olduvai/gameinfo.xml").decode(
     if "olduvai/gameinfo.xml" in names else None
 if not m or m.group(1) not in names:
     errs.append("gameinfo.xml's image %r is not in the zip" % (m and m.group(1)))
-for exe in ("Olduvai.sh", "olduvai/olduvai.aarch64", "olduvai/olduvai.armhf"):
+for exe in ("olduvai/olduvai.aarch64", "olduvai/olduvai.armhf"):
     if exe in names and not (z.getinfo(exe).external_attr >> 16) & 0o111:
         errs.append(exe + " is not executable in the zip")
 bad = [n for n in names if n.lower().endswith((".cur", ".vga", ".rom", ".sf2", ".sf3", ".exe", ".sqz"))

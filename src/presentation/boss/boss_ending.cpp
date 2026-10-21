@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Krzysztof Sokołowski
 #include "presentation/boss/boss_ending.hpp"
+#include "presentation/pacing.hpp"   // pace_delay
 
 #include <cstdlib>
 #include <cstring>
@@ -89,13 +90,13 @@ void play_l2_victory(const BossEnding& c, int& last_flash) {
                     },
                     /*draw_lives=*/false);
                 tick.end();
-                SDL_Delay(kFlashExtraMs);
+                pace_delay(kFlashExtraMs);
             } else if (c.arena.wide_on()) {
                 c.arena.present_wide_native(vnat, /*draw_lives=*/false);  // resize fallback
-                SDL_Delay(kFlashExtraMs);
+                pace_delay(kFlashExtraMs);
             } else {
                 c.arena.present_frame(/*draw_lives=*/false);
-                SDL_Delay(kFlashExtraMs);
+                pace_delay(kFlashExtraMs);
             }
         }
     }
@@ -217,7 +218,7 @@ void play_l6_victory(const BossEnding& c, L6BossState& l6, bool smooth,
             }
             tick.end();
             const Uint32 vspent = SDL_GetTicks() - vt0;
-            if (vspent < c.frame_ms) SDL_Delay(c.frame_ms - vspent);
+            if (vspent < c.frame_ms) pace_delay(c.frame_ms - vspent);
         }
     }
 }
@@ -252,7 +253,7 @@ void fade_to_tally(const BossEnding& c, int internal_level,
                                      /*do_present=*/true,
                                      /*draw_hud=*/false);
                 if (!poll_screen_events(c.surface.win())) c.res.quit = true;
-                SDL_Delay(c.frame_ms);
+                pace_delay(c.frame_ms);
             }
         } else {
             for (int f2 = 0; f2 <= kFadeFrames && !c.res.quit; ++f2) {
@@ -262,7 +263,7 @@ void fade_to_tally(const BossEnding& c, int internal_level,
                 c.arena.present_wide_native(faded, /*draw_lives=*/false,
                                     /*do_present=*/true, /*draw_hud=*/false);
                 if (!poll_screen_events(c.surface.win())) c.res.quit = true;
-                SDL_Delay(c.frame_ms);
+                pace_delay(c.frame_ms);
             }
         }
         // The tally stays on the wide logical (see above).
@@ -308,8 +309,10 @@ void fade_to_tally(const BossEnding& c, int internal_level,
                                c.surface.use_hd_text(), c.player.lives,
                                c.player.score, display_level, c.assets.charset,
                                c.assets.palette, c.lpresent, c.audio,
-                               c.game_dir, c.enhanced}))
-            c.res.quit = true;
+                               c.game_dir, c.enhanced})) {
+            c.res.quit = true;   // as the platform tally: the program ends
+            c.res.quit_program = true;
+        }
     }
 }
 

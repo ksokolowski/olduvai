@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "enhance/upscale.hpp"   // the gap trace
 #include "presentation/render/logical_size.hpp"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -84,10 +85,56 @@ void maybe_dump_steady(const void* pixels, int w, int h) {
     note_dump_time(dir, name);
 }
 
+namespace {
+double g_present_wait_ms = 0.0;
+}  // namespace
+
+namespace {
+// OLDUVAI_GAP_TRACE=<ms>: each gap between two presents over <ms> (end to
+// end: the work between them and the second one's present), with the upscales
+// inside it.  A stall as the player sees it; run it in the timedemo so pacing
+// waits do not count.
+void trace_gap(Uint64 now) {
+    static double limit_ms = -1.0;
+    static Uint64 last = 0;
+    static unsigned long n = 0;
+    if (limit_ms < 0.0) {
+        const char* v = std::getenv("OLDUVAI_GAP_TRACE");
+        char* end = nullptr;
+        limit_ms = v != nullptr ? std::strtod(v, &end) : 0.0;
+        if (v != nullptr && (end == v || *end != '\0')) limit_ms = 0.0;
+        enhance::set_upscale_log(limit_ms > 0.0);
+    }
+    if (limit_ms <= 0.0) return;
+    ++n;
+    const double gap = last == 0 ? 0.0
+        : static_cast<double>(now - last) * 1000.0 /
+              static_cast<double>(SDL_GetPerformanceFrequency());
+    last = now;
+    const std::vector<enhance::UpscaleCall> calls = enhance::take_upscale_log();
+    if (gap <= limit_ms) return;
+    double up = 0.0;
+    for (const auto& c : calls) up += c.ms;
+    std::fprintf(stderr, "gap-trace: present %lu gap %.1f ms upscale %.1f ms",
+                 n, gap, up);
+    for (const auto& c : calls)
+        if (c.ms >= 1.0 || c.w * c.h >= 40 * 100)
+            std::fprintf(stderr, " [%dx%d x%d %.1f]", c.w, c.h, c.scale, c.ms);
+    std::fprintf(stderr, "\n");
+}
+}  // namespace
+
 void present_output(SDL_Renderer* ren) {
     maybe_dump_output(ren);
+    const Uint64 t0 = SDL_GetPerformanceCounter();
     SDL_RenderPresent(ren);
+    const Uint64 t1 = SDL_GetPerformanceCounter();
+    g_present_wait_ms += static_cast<double>(t1 - t0) * 1000.0 /
+                         static_cast<double>(SDL_GetPerformanceFrequency());
+    trace_gap(t1);
 }
+
+double present_wait_ms() { return g_present_wait_ms; }
 
 void maybe_dump_output(SDL_Renderer* ren) {
     const char* dir = std::getenv("OLDUVAI_DUMP_OUTPUT");
