@@ -162,10 +162,17 @@ Read  ports/olduvai/log.txt .  Its first line names the build; quote it in a
 bug report.  A missing game file names the folder searched and the files wanted.
 
 
+REPORTING A PROBLEM
+-------------------
+Select + left saves a bug report into ports/olduvai/bug_reports/.  Attach it to
+an issue at https://github.com/ksokolowski/olduvai/issues, or post it in the
+Olduvai thread on the PortMaster Discord.
+
+
 LICENCE
 -------
-Olduvai is free software, GPL-3.0-or-later; with the xBRZ scaler the binaries
-are conveyed under GPL-3.0.  Every licence is in licenses/.  Source code:
+Olduvai is free software, GPL-3.0-or-later.  Every licence is in licenses/.
+Source code:
 https://github.com/ksokolowski/olduvai
 README
 
@@ -173,21 +180,23 @@ README
 # One curated still (assets/screenshots/README.md allows a port's store
 # listing): 640x480, the size PortMaster asks for, the frame at 2x with bars.
 cp "${REPO_ROOT}/assets/screenshots/classic-l1-640x480.png" "${OUT_ABS}/screenshot.png"
-cp "${OUT_ABS}/screenshot.png" "${PORT}/screenshot.png"
 
-DESC="The 1991 caveman platformer on Olduvai, a native recreation of its engine. Classic DOS plays it exactly as it was; Enhanced HD adds smooth motion, widescreen margins and sharp upscaled graphics. Switch any time under Options - Style."
+# The store's search reads only title and desc, so both name the game; the
+# title is PortMaster's alone: everywhere else the product is Olduvai.
+TITLE="Prehistorik (Olduvai)"
+DESC="Prehistorik, the 1991 caveman platformer, on Olduvai, a native recreation of its engine. Classic DOS plays it exactly as it was; Enhanced HD adds smooth motion, widescreen margins and sharp upscaled graphics. Switch any time under Options - Style."
 INST="Needs your own copy of the game (GOG's Prehistorik 1+2, or the DOS original): copy FILESA.CUR, FILESB.CUR, FILESA.VGA, FILESB.VGA and HISTORIK.EXE (or GOG's PREH.SQZ) into ports/olduvai/game/. Roland MT-32 / CM-32L ROMs (ports/olduvai/mt32-roms/) or a SoundFont (ports/olduvai/soundfonts/) are optional; without them the AdLib / Sound Blaster sound plays."
 ARCH_JSON=$(printf '"%s", ' "${ARCHES[@]}"); ARCH_JSON="[${ARCH_JSON%, }]"
-python3 - "$OUT_ABS/port.json" "$PORTER" "$DESC" "$INST" "$ARCH_JSON" <<'PY'
+python3 - "$OUT_ABS/port.json" "$TITLE" "$PORTER" "$DESC" "$INST" "$ARCH_JSON" <<'PY'
 import json, sys
-path, porter, desc, inst, arch = sys.argv[1:]
+path, title, porter, desc, inst, arch = sys.argv[1:]
 port = {
     "version": 4,
     "name": "olduvai.zip",
     "items": ["Olduvai.sh", "olduvai"],
     "items_opt": [],
     "attr": {
-        "title": "Olduvai",
+        "title": title,
         "porter": [porter],
         "desc": desc,
         "desc_md": None,
@@ -200,6 +209,14 @@ port = {
         "runtime": [],
         "min_glibc": "2.17",
         "reqs": [],
+        "store": [
+            {
+                "name": "GOG",
+                "gameurl": "https://www.gog.com/en/game/prehistorik_12",
+                "developerurl": "https://en.wikipedia.org/wiki/Titus_Interactive",
+            }
+        ],
+        "availability": "paid",
         "arch": json.loads(arch),
     },
 }
@@ -208,14 +225,14 @@ with open(path, "w", encoding="utf-8") as f:
     f.write("\n")
 PY
 
-# <name> is the engine's, never the game's (owner, 2026-09-14); <developer>
-# is ours: naming the original's would say they made this port.
+# <name> is the store title; <developer> is ours: naming the original's would
+# say they made this port.
 cat > "${OUT_ABS}/gameinfo.xml" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <gameList>
   <game>
     <path>./Olduvai.sh</path>
-    <name>Olduvai</name>
+    <name>${TITLE}</name>
     <desc>${DESC}</desc>
     <releasedate>19910101T000000</releasedate>
     <developer>${PORTER}</developer>
@@ -244,6 +261,12 @@ firmwares PortMaster's own refresh does not take effect.
 
 Thanks to Titus Interactive, who created Prehistorik in 1991. Olduvai is not
 affiliated with or endorsed by them or by any rights holder.
+
+## Reporting problems
+
+Select + left saves a bug report into `ports/olduvai/bug_reports/`. Attach it to
+an issue at https://github.com/ksokolowski/olduvai/issues, or post it in the
+Olduvai thread on the PortMaster Discord.
 
 ## Controls
 
@@ -290,7 +313,7 @@ if [ -n "${RELEASE_ZIP}" ]; then
     python3 - "${OUT_ABS}" "${ZIP_ABS}" <<'PY'
 import os, sys, zipfile
 src, dst = sys.argv[1], sys.argv[2]
-INSIDE = ("port.json", "gameinfo.xml", "README.md")   # root -> olduvai/
+INSIDE = ("port.json", "gameinfo.xml", "README.md", "screenshot.png")   # root -> olduvai/
 if os.path.exists(dst):
     os.remove(dst)
 with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as z:

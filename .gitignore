@@ -27,5 +27,5 @@ olduvai-*-windows-x86_64.zip
 *.profraw
 *.profdata
 
-# Per-job test venv (windows CI builds it from tests/requirements.txt with uv)
+# Test venv (gate_local and windows CI build it from tests/requirements.txt with uv)
 .venv-tests/

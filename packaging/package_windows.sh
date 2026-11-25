@@ -30,20 +30,11 @@ cp "${BUILD_DIR}"/fonts/*.ttf "${BUILD_DIR}"/fonts/*LICENSE* "${stage}/olduvai/f
 mkdir -p "${stage}/olduvai/data"
 cp LICENSE "${stage}/olduvai/LICENSE.txt"
 # Third-party license texts (binary distribution obligation — see
-# THIRD-PARTY-NOTICES.md; Nuked-OPL3 is LGPL-2.1 compiled in, SDL2 static).
+# THIRD-PARTY-NOTICES.md), one list for every package.
 mkdir -p "${stage}/olduvai/licenses"
 cp THIRD-PARTY-NOTICES.md "${stage}/olduvai/licenses/"
-cp third_party/nuked_opl3/LICENSE "${stage}/olduvai/licenses/Nuked-OPL3-LICENSE.txt"
-# libmt32emu is vendored and statically linked (LGPL-2.1 §3 conversion to
-# GPL, same as Nuked-OPL3) — its text must ship with the binary.
-cp third_party/mt32emu/COPYING.LESSER.txt \
-   "${stage}/olduvai/licenses/libmt32emu-LICENSE.txt"
-cp third_party/rtmidi/LICENSE "${stage}/olduvai/licenses/RtMidi-LICENSE.txt"
-# FluidSynth (LGPL-2.1) and the gcem headers it builds with (Apache-2.0),
-# vendored and compiled in (third_party/fluidsynth/OLDUVAI-VENDORING.md).
-cp third_party/fluidsynth/LICENSE "${stage}/olduvai/licenses/FluidSynth-LICENSE.txt"
-cp third_party/fluidsynth/gcem/LICENSE "${stage}/olduvai/licenses/gcem-LICENSE.txt"
-cp third_party/fluidsynth/gcem/NOTICE.txt "${stage}/olduvai/licenses/gcem-NOTICE.txt"
+. packaging/licenses.sh
+copy_license_texts . "${stage}/olduvai/licenses" desktop
 cat > "${stage}/olduvai/README-windows.txt" <<'EOF'
 Olduvai - portable Windows build
 ================================

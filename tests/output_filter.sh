@@ -53,7 +53,7 @@ check() {   # <name> <window> <same|differ> <flags...>
     fi
 }
 
-HD="--enhanced --hd-profile xbrz --render-scale 2 --aspect keep"
+HD="--enhanced --hd-profile xbrf --render-scale 2 --aspect keep"
 # shellcheck disable=SC2086  # HD is a flag list
 check enhanced_fraction 1000x625 differ ${HD}
 # shellcheck disable=SC2086

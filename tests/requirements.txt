@@ -5,6 +5,7 @@
 # game data is present scripts/ctest_audit.sh fails that skip.
 #   Windows CI: a uv venv built from this file (.gitea/workflows/windows.yml).
 #   Linux CI:   the distro packages python3-numpy / python3-pil (ci.yml).
-#   Locally:    uv pip install -r tests/requirements.txt  (or your distro's).
+#   gate_local: a uv venv built from this file, on Python 3.14.
+#   Raw ctest:  PATH="$PWD/.venv-tests/bin:$PATH" after a gate run, or your distro's.
 numpy
 pillow

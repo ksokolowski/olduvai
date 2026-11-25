@@ -25,7 +25,7 @@ returns to the defaults.
 | `dos` | The 1991 game, faithful to its quirks (the engine defaults). |
 | `hd` | Enhanced: HD upscaling, widescreen, smooth motion, vector HUD. |
 | `dos-handheld` | `dos` for a handheld: a panel narrower than 16:10 (640×480, 1024×768) is filled at 4:3. |
-| `hd-handheld` | `hd` for a handheld: `xbrz` and lighter pacing, at the largest scale (×2 to ×4) whose frame fits the panel, filling a panel narrower than 16:10 at 4:3 and widescreen otherwise. The panel is the display's own size, or `OLDUVAI_PANEL=WxH` (the PortMaster launcher passes PortMaster's). The log's `display: panel` line says what it chose. |
+| `hd-handheld` | `hd` for a handheld: `xbrf` and lighter pacing, at the largest scale (×2 to ×4) whose frame fits the panel, filling a panel narrower than 16:10 at 4:3 and widescreen otherwise. The panel is the display's own size, or `OLDUVAI_PANEL=WxH` (the PortMaster launcher passes PortMaster's). The log's `display: panel` line says what it chose. |
 
 *Options → Style* switches between Classic and Enhanced within the family
 the session started in.
@@ -44,8 +44,8 @@ the session started in.
 | Key | Values |
 |---|---|
 | `enhanced` | `true` / `false` — the Enhanced HD umbrella |
-| `hd_profile` | `native`, `retro`, `smooth`, `eagle`, `xbrz`, `mmpx`, `omniscale` (default); an old `xbr` reads as `xbrz` |
-| `render_scale` | `2` to `6` (a handheld profile picks 2 to 4 for the panel).  `5` and `6` are for a desktop 4K screen, with `xbrz` or `omniscale` only; the other upscalers stop at `4` |
+| `hd_profile` | `native`, `retro`, `smooth`, `eagle`, `xbrf`, `mmpx`, `omniscale` (default); an old `xbr` or `xbrz` reads as `xbrf` |
+| `render_scale` | `2` to `6` (a handheld profile picks 2 to 4 for the panel).  `5` and `6` are for a desktop 4K screen, with `xbrf` or `omniscale` only; the other upscalers stop at `4` |
 | `aspect` | `keep`, `4:3`, `stretch`, `widescreen` |
 | `output_filter` | `nearest` (default) or `sharp`: in a window that is not a whole multiple of the picture, `sharp` keeps every pixel the same size and softens only its edges (Enhanced; Classic always scales by whole multiples). *Options → Video → Filter.* |
 | `fullscreen` | `true` / `false` (ALT+ENTER toggles) |
@@ -66,7 +66,7 @@ which one runs before you apply a change.
 | `retro` | nearest | nearest | nearest | (x4) |
 | `smooth` | Scale2x | Scale3x | Scale2x, two passes | (x4) |
 | `eagle` | Eagle | Scale3x (Eagle has no 3x form) | Eagle, two passes | (x4) |
-| `xbrz` | xBRZ | xBRZ | xBRZ | xBRZ |
+| `xbrf` | xBRF | xBRF | xBRF | xBRF |
 | `mmpx` | MMPX | Scale3x (MMPX has no 3x form) | MMPX, two passes | (x4) |
 | `omniscale` | OmniScale | OmniScale | OmniScale | OmniScale |
 

@@ -5,7 +5,7 @@
 <component type="desktop-application">
   <id>io.github.ksokolowski.olduvai</id>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>GPL-3.0-only</project_license>
+  <project_license>GPL-3.0-or-later</project_license>
   <name>Olduvai</name>
   <summary>Native recreation of a 1991 game engine</summary>
   <developer id="io.github.ksokolowski">

@@ -22,6 +22,7 @@
 #ifdef OLDUVAI_HAVE_SDL
 #include "first_run.hpp"
 #endif
+#include "enhance/cpu_kernels.hpp"
 #include "enhance/upscale.hpp"
 #include "prepare/exe_tables.hpp"
 #include "prepare/game_files.hpp"
@@ -320,6 +321,8 @@ void detect_panel(const olduvai::app::CliArgs& args) {
         pres::auto_display(panel, pres::ProfileRole::Enhanced);
     std::fprintf(stderr, "display: panel %dx%d (Enhanced auto: x%d, %s)\n",
                  panel.w, panel.h, hd.render_scale, hd.aspect);
+    std::fprintf(stderr, "cpu: kernels %s\n",
+                 olduvai::enhance::kernel_description().c_str());
 }
 
 // The settings as the precedence rules layer them, into `ps` (and the game

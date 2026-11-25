@@ -26,7 +26,7 @@ using olduvai::enhance::upscale_rgba;
 namespace {
 
 // Deterministic 64x48 RGBA covering what the scalers branch on.  A 4-colour
-// alphabet keeps the EQUALITY branching dense — a scale2x/eagle/mmpx/xbrz rule
+// alphabet keeps the EQUALITY branching dense — a scale2x/eagle/mmpx/xbrf rule
 // fires only when neighbours compare equal, so hash noise would exercise just
 // the pass-through.  The bands lay flat runs, hard stripes, checker, diagonal
 // edges, a gradient with fractional alpha and isolated dots next to each
@@ -105,7 +105,7 @@ int main() {
 
     // Hash of upscale_rgba(src, 64, 48, scale, profile), keyed
     // "<profile>:<scale>".  Pinned 2026-09-24 on arm64 Apple clang (x5 to x7
-    // 2026-10-17: xBRZ and OmniScale take x5 and x6, x7 is past every
+    // 2026-10-17: xBRF and OmniScale take x5 and x6, x7 is past every
     // scaler's table); the CI
     // platform matrix re-verifies them — a differing cell is the finding.
     static const std::map<std::string, std::uint64_t> kGoldens = {
@@ -133,12 +133,12 @@ int main() {
         {"eagle:5", 0x67270a0f00e04342ull},
         {"eagle:6", 0x376f7ac86cc41973ull},
         {"eagle:7", 0xfcdbc1028a146f9aull},
-        {"xbrz:2", 0x673c832f94b51cbaull},
-        {"xbrz:3", 0x8405125d0a86f3d5ull},    // native: not scale3x
-        {"xbrz:4", 0x94a869f335c0212full},
-        {"xbrz:5", 0x93cdfc192fa18e2full},    // native: the scaler takes the factor
-        {"xbrz:6", 0x16dd7706c90d7860ull},
-        {"xbrz:7", 0xfcdbc1028a146f9aull},
+        {"xbrf:2", 0x673c832f94b51cbaull},
+        {"xbrf:3", 0x8405125d0a86f3d5ull},    // native: not scale3x
+        {"xbrf:4", 0x94a869f335c0212full},
+        {"xbrf:5", 0x93cdfc192fa18e2full},    // native: the scaler takes the factor
+        {"xbrf:6", 0x16dd7706c90d7860ull},
+        {"xbrf:7", 0xfcdbc1028a146f9aull},
         {"mmpx:2", 0x101f5befa0c421baull},
         {"mmpx:3", 0xc8fd78cc8b2c672full},    // no native 3x → scale3x
         {"mmpx:4", 0x6bcf631f031bee98ull},

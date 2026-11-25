@@ -13,7 +13,7 @@ src/
   systems/        — player physics, monster AI, spawning, collisions,
                     screen transitions, cave/secret logic, the frame step
                     (frame_runner).  Headless.
-  enhance/        — the optional HD layer: pixel upscalers (xBRZ, MMPX,
+  enhance/        — the optional HD layer: pixel upscalers (xBRF, MMPX,
                     OmniScale, the Scale2x/3x and Eagle family), the HD
                     asset cache, vector text and the vector HUD, and the
                     RGBA draw target they share (canvas.hpp).  No SDL.
@@ -144,5 +144,5 @@ fails a new entry or any moved number.
 
 C++17 is the language ceiling (handheld toolchains). Dependencies: SDL2 and
 vendored in-tree libraries (`third_party/`: doctest, stb, RtMidi,
-Nuked-OPL3, libmt32emu, FluidSynth, xBRZ; fonts under `assets/fonts/`), no git
+Nuked-OPL3, libmt32emu, FluidSynth; fonts under `assets/fonts/`), no git
 submodules.

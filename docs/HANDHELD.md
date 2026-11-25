@@ -73,9 +73,9 @@ Video → Render scale*, one step at a time (4 → 3 → 2). It is the biggest
 lever, it applies at once, and your choice is kept. Enhanced picks the
 largest scale your panel fits, which suits any recent handheld; an older chip
 on a big panel can be asked for more than it has. Next, *Options → Video →
-Upscaler*: Scale2x/3x and Nearest are lighter than xBRZ.
+Upscaler*: Scale2x/3x and Nearest are lighter than xBRF.
 
-The **Runs** line under them shows what your choice really runs. xBRZ (the
+The **Runs** line under them shows what your choice really runs. xBRF (the
 handheld default), OmniScale and Nearest keep their look at every scale;
 Eagle and MMPX have no x3 form, so at x3 they run Scale3x and Runs says so:
 to keep their look, step from x4 straight to x2. Every upscaler still
@@ -141,7 +141,7 @@ or icon.
   the change takes effect when you leave Options
   and choose Apply, and is saved for the next launch.
 - **Style:** both the TrimUI Smart Pro and the Powkiddy A12 start in
-  **Enhanced HD** (smooth motion, widescreen, xBRZ at x3). Switch under
+  **Enhanced HD** (smooth motion, widescreen, xBRF at x3). Switch under
   *Options → Style* in the pause menu to **Classic DOS**, which runs on the A12
   at the original game's full speed; your choice is remembered at the next
   launch. Enhanced on the A12 is smooth but a little slower than the original.

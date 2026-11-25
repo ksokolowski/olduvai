@@ -54,6 +54,16 @@ if [ ! -f game_data/FILESA.VGA ]; then
     exit 1
 fi
 
+# Test-side Python deps in a uv venv, first on PATH, as windows.yml does: a
+# Homebrew Python upgrade otherwise drops Pillow and the audit fails the skip.
+# Without uv, the python3 on PATH has to have them (tests/requirements.txt).
+if command -v uv >/dev/null 2>&1; then
+    uv venv --quiet --clear --python 3.14 .venv-tests
+    uv pip install --quiet --python .venv-tests -r tests/requirements.txt
+    PATH="${ROOT}/.venv-tests/bin:${PATH}"
+    export PATH
+fi
+
 STATUS=0
 SUMMARY=""
 PLATFORM_SKIPS=""

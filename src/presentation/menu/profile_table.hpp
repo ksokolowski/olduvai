@@ -52,7 +52,7 @@ inline constexpr ProfilePin kHdPins[] = {
 // resolved by auto_display() against session_panel() (set at start-up).
 // Enhanced is measured on the TrimUI Smart Pro and Powkiddy A12 (x3, 1280x720
 // and 1024x600) and the R36S (x2 filling 640x480), discrete path with 2
-// sub-frames.  xBRZ is the scaler: the same steady frame cost as Scale2x/3x,
+// sub-frames.  xBRF is the scaler: the same steady frame cost as Scale2x/3x,
 // 0.15 ms a tick more, and a worse burst when a screen's graphics are built.
 // Audio: auto without the GM SoundFont (FluidSynth is a real cost on a weak
 // chip, and the Sound Blaster is preferred to it): MT-32, then OPL.
@@ -65,7 +65,7 @@ inline constexpr ProfilePin kDosHandheldPins[] = {
 };
 inline constexpr ProfilePin kHdHandheldPins[] = {
     {"enhanced", "true"},
-    {"hd_profile", "xbrz"},
+    {"hd_profile", "xbrf"},
     {"render_scale", "auto"},
     {"aspect", "auto"},
     {"smooth_subframes", "2"},

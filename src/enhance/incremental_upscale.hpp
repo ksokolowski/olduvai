@@ -22,7 +22,7 @@ class IncrementalUpscaler {
 public:
     // How far, in native pixels, any profile's output reads its input
     // (the chained x4 profiles included): 2 is the least every profile
-    // passes test_incremental_upscale with (xbrz needs it), 4 keeps margin.
+    // passes test_incremental_upscale with (xbrf needs it), 4 keeps margin.
     static constexpr int kReach = 4;
 
     // `px` (w x h RGBA) at `scale` with `profile`, as upscale_rgba returns

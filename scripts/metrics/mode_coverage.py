@@ -163,7 +163,7 @@ def main():
             ("aspect", "--aspect", ("keep", "4:3", "stretch", "widescreen"),
              "keep"),
             ("hd-profile", "--hd-profile", ("native", "mmpx", "omniscale",
-                                            "xbr", "smooth"), "native"),
+                                            "xbrf", "smooth"), "native"),
             ("transitions", "--transitions", ("smooth", "classic"), "smooth")):
         used = {}
         for _, runs, seen in rows:

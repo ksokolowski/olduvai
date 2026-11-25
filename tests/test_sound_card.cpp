@@ -139,8 +139,8 @@ TEST_CASE("upscaler row: Runs shows what the staged profile and scale execute") 
     CHECK(b.get("hd_runs") == "MMPX");
     b.mem["render_scale"] = "4";
     CHECK(b.get("hd_runs") == "MMPX, two passes");
-    b.mem["hd_profile"] = "xbrz";
-    CHECK(b.get("hd_runs") == "xBRZ");
+    b.mem["hd_profile"] = "xbrf";
+    CHECK(b.get("hd_runs") == "xBRF");
     b.mem["hd_profile"] = "omniscale";
     CHECK(b.get("hd_runs") == "OmniScale");
     b.mem["enhanced"] = "false";            // Classic: nothing is upscaled

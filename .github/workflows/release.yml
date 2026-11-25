@@ -221,8 +221,7 @@ jobs:
           *More info → Run anyway*.  Verify downloads against
           `SHA256SUMS.txt`.
 
-          Olduvai's own source is GPL-3.0-or-later; the binaries include the
-          xBRZ scaler (GPL-3.0 only) and are conveyed under GPL-3.0.  The
+          Olduvai is GPL-3.0-or-later, its binaries included.  The
           corresponding source for this release is the *Source code* archive
           attached below.  Bundled
           third-party components and their licenses: `licenses/` inside

@@ -645,7 +645,7 @@ void WidescreenPresenter::present_transition(std::vector<std::uint8_t>& wide,
     // OLDUVAI_WIDE_TRANSITION_DUMP=<dir>: the wide HD buffer after the HUD-bar
     // splice, before upload (no vector text: float-rasterized, not
     // hash-stable). Hashed by tests/wide_transition.sh; needs an integer
-    // hd_profile (mmpx/xbr).
+    // hd_profile (mmpx).
     if (const char* wd = std::getenv("OLDUVAI_WIDE_TRANSITION_DUMP")) {
         static int wtseq = 0;
         char wtpath[512];

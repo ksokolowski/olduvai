@@ -36,7 +36,7 @@ int main() {
     REQUIRE(classify_change("aspect", "keep", cur) == ApplyTier::Live);
 
     // hd_profile among same-scale non-native profiles → live.
-    REQUIRE(classify_change("hd_profile", "xbrz", cur) == ApplyTier::Live);
+    REQUIRE(classify_change("hd_profile", "xbrf", cur) == ApplyTier::Live);
     REQUIRE(classify_change("hd_profile", "omniscale", cur) == ApplyTier::Live);
 
     // hd_profile crossing to native (hd_scale 2 -> 1) → reinit (window resize).
@@ -69,9 +69,9 @@ int main() {
     // Out of range still clamps rather than propagating nonsense.
     REQUIRE(hd_scale_for(true, "smooth", 1) == 2);
     REQUIRE(hd_scale_for(true, "smooth", 9) == 4);
-    // Past 4 only the scalers that take the factor: xBRZ and OmniScale to 6
+    // Past 4 only the scalers that take the factor: xBRF and OmniScale to 6
     // (a desktop 4K screen), the 2x-based ones stay at 4.
-    REQUIRE(hd_scale_for(true, "xbrz", 6) == 6);
+    REQUIRE(hd_scale_for(true, "xbrf", 6) == 6);
     REQUIRE(hd_scale_for(true, "omniscale", 5) == 5);
     REQUIRE(hd_scale_for(true, "omniscale", 9) == 6);
     REQUIRE(hd_scale_for(true, "mmpx", 6) == 4);
@@ -164,7 +164,7 @@ int main() {
         rec.mem.clear();
         rec.mem["profile_family"] = "handheld";
         apply_preset(rec, "hd");
-        REQUIRE(has("hd_profile", "xbrz"));
+        REQUIRE(has("hd_profile", "xbrf"));
         REQUIRE(has("render_scale", "3"));
         REQUIRE(has("smooth_subframes", "2"));
         REQUIRE(has("smooth_vsync", "off"));
@@ -212,8 +212,8 @@ int main() {
     // A set that does NOT cross the boundary falls back to per-key tiers
     // (same-scale profile swap stays Live).
     const std::vector<std::pair<std::string, std::string>> swap_set = {
-        {"hd_profile", "xbrz"}};
-    REQUIRE(classify_change_in_set("hd_profile", "xbrz", hd2, swap_set) ==
+        {"hd_profile", "xbrf"}};
+    REQUIRE(classify_change_in_set("hd_profile", "xbrf", hd2, swap_set) ==
             ApplyTier::Live);
     // Empty set degenerates to classify_change exactly.
     REQUIRE(classify_change_in_set("enhanced", "true", classic2, {}) ==

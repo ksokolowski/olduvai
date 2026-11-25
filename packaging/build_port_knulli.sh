@@ -57,9 +57,9 @@ while [ $# -gt 0 ]; do
     esac
 done
 # The device's starting style — a DEFAULT under the player's play.json, so a
-# menu choice still sticks.  Both start Enhanced HD (xBRZ x3).  The A12 started
+# menu choice still sticks.  Both start Enhanced HD (xBRF x3).  The A12 started
 # in Classic while Enhanced there ran ~15 Hz logic against the original's 18.2
-# (measured 2026-09-13); the dirty-rect present and xBRZ since put it near 17,
+# (measured 2026-09-13); the dirty-rect present and the edge scaler since put it near 17,
 # and the owner (2026-10-04) finds it very playable.  Classic stays one menu
 # choice away.
 case "$DEVICE" in
@@ -295,8 +295,8 @@ Edit Olduvai.sh to add a flag.  Full details are in the project's docs/AUDIO.md.
 
 6. LICENCE
 ----------
-Olduvai is free software, GPL-3.0-or-later; with the xBRZ scaler the binaries
-are conveyed under GPL-3.0.  Every licence is in licenses/.  Source code:
+Olduvai is free software, GPL-3.0-or-later.  Every licence is in licenses/.
+Source code:
 https://github.com/ksokolowski/olduvai
 README
 

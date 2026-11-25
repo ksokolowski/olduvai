@@ -33,21 +33,15 @@ port_copy_fonts() {   # <port dir>
 }
 
 # licenses/: one flat folder, LICENSE.<component>.txt per component (the
-# PortMaster convention, used by both handheld bundles).  SDL2 is the device's
-# own, loaded dynamically, so no SDL text is owed; THIRD-PARTY-NOTICES.md lists
-# it anyway.  xBRZ is GPL-3.0 only: its text is the GPL's.
+# PortMaster convention, used by both handheld bundles); the third-party texts
+# from packaging/licenses.sh.
 port_copy_licenses() {   # <port dir>
     local l="$1/licenses" f name
     mkdir -p "$l"
     cp "${REPO_ROOT}/LICENSE" "$l/LICENSE.olduvai.txt"
-    cp "${REPO_ROOT}/LICENSE" "$l/LICENSE.xBRZ.txt"
     cp "${REPO_ROOT}/THIRD-PARTY-NOTICES.md" "$l/"
-    cp "${REPO_ROOT}/third_party/nuked_opl3/LICENSE" "$l/LICENSE.Nuked-OPL3.txt"
-    cp "${REPO_ROOT}/third_party/mt32emu/COPYING.LESSER.txt" "$l/LICENSE.libmt32emu.txt"
-    cp "${REPO_ROOT}/third_party/rtmidi/LICENSE" "$l/LICENSE.RtMidi.txt"
-    cp "${REPO_ROOT}/third_party/fluidsynth/LICENSE" "$l/LICENSE.FluidSynth.txt"
-    cp "${REPO_ROOT}/third_party/fluidsynth/gcem/LICENSE" "$l/LICENSE.gcem.txt"
-    cp "${REPO_ROOT}/third_party/fluidsynth/gcem/NOTICE.txt" "$l/NOTICE.gcem.txt"
+    . "${REPO_ROOT}/packaging/licenses.sh"
+    copy_license_texts "${REPO_ROOT}" "$l" port || return 1
     for f in "${REPO_ROOT}"/assets/fonts/*-LICENSE.txt; do   # OFL texts
         name=$(basename "$f" -LICENSE.txt)
         cp -L "$f" "$l/LICENSE.${name}.txt"

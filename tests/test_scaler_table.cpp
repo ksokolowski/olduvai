@@ -19,7 +19,7 @@
 #include "enhance/omniscale.hpp"
 #include "enhance/pixel_scalers.hpp"
 #include "enhance/upscale.hpp"
-#include "enhance/xbrz_scale.hpp"
+#include "enhance/xbrf_cpu.hpp"
 #include "presentation/menu/menu_model.hpp"
 
 using namespace olduvai::enhance;
@@ -71,8 +71,8 @@ TEST_CASE("scaler table: what describe_hd_scaler says is what upscale_rgba runs"
                 CHECK(got == nearest_scale(px, w, h, s));
             } else if (said == "OmniScale") {
                 CHECK(got == omniscale(px, w, h, s));
-            } else if (said == "xBRZ") {
-                CHECK(got == xbrz_scale(px, w, h, s));
+            } else if (said == "xBRF") {
+                CHECK(got == xbrf_for_cpu(px, w, h, s));
             } else if (said.rfind("Scale3x (", 0) == 0) {          // no 3x form
                 CHECK(s == 3);
                 CHECK(got == scale3x(px, w, h));
@@ -97,7 +97,7 @@ TEST_CASE("scaler table: scale 1 is a no-op, other factors replicate, unknown th
         CHECK(upscale_rgba(px, 9, 7, 1, profile) == px);
         // x5 and x6: the scalers that take the factor run it; the rest have no
         // such plan (hd_scale_for never asks them) and replicate.
-        const bool takes = profile == "xbrz" || profile == "omniscale";
+        const bool takes = profile == "xbrf" || profile == "omniscale";
         CHECK(max_hd_scale(profile) == (takes ? 6 : 4));
         for (const int f : {5, 6}) {
             CAPTURE(f);

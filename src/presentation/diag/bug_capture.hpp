@@ -57,6 +57,7 @@ struct DisplayInfo {
     int ws_margin = 0;               // derived peek margin, 0 = inactive
     int ws_native_w = 320;           // 320 + 2*margin
     int upscale_threads = 1;
+    std::string cpu_kernels;         // enhance::kernel_description()
 };
 
 // The generic part of DisplayInfo, read from the renderer and window (output

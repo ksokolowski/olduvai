@@ -24,6 +24,10 @@
 # build died there with an illegal instruction under QEMU.  NEON stays: the
 # target baseline already requires it.
 #
+# OLDUVAI_HWDIV_CPU_FLAGS: the same core WITH hardware divide, for the kernel
+# copies the engine picks at run time where the CPU has it (AT_HWCAP IDIVA;
+# src/enhance/cpu_kernels.hpp).  Only those files get it.
+#
 # Requires two paths, both outside the tree:
 #   -DOLDUVAI_ZIG_XTOOL=<dir with arm-linux-gnueabihf-g++/gcc/ar/ranlib wrappers>
 #   -DOLDUVAI_ZIG_SYSROOT=<prefix holding a cross-built SDL2 (usr/lib, usr/include)>
@@ -32,4 +36,5 @@ set(OLDUVAI_ZIG_TRIPLE    "arm-linux-gnueabihf.2.17")
 set(OLDUVAI_ZIG_PREFIX    "arm-linux-gnueabihf")
 set(OLDUVAI_ZIG_PROCESSOR "arm")
 set(OLDUVAI_ZIG_CPU       "cortex_a7-hwdiv_arm-hwdiv")
+set(OLDUVAI_HWDIV_CPU_FLAGS "-mcpu=cortex_a7")
 include("${CMAKE_CURRENT_LIST_DIR}/zig-linux.cmake")

@@ -35,7 +35,7 @@ bad() { echo "FAIL: $*"; fail=1; }
 for f in port.json README.md screenshot.png gameinfo.xml Olduvai.sh \
          olduvai/olduvai.aarch64 olduvai/olduvai.armhf olduvai/olduvai.gptk \
          olduvai/README.txt olduvai/licenses/LICENSE.olduvai.txt \
-         olduvai/licenses/LICENSE.xBRZ.txt olduvai/licenses/LICENSE.FluidSynth.txt \
+         olduvai/licenses/LICENSE.FluidSynth.txt \
          olduvai/licenses/LICENSE.NotoSans.txt olduvai/licenses/THIRD-PARTY-NOTICES.md \
          olduvai/fonts/NotoSans-Regular.ttf; do
     [ -s "$P/$f" ] || bad "missing $f"
@@ -64,15 +64,19 @@ def need(c, m):
 need(j["version"] == 4, "port.json version is not 4")
 need(j["name"] == "olduvai.zip", "port.json name")
 need(sorted(j["items"]) == ["Olduvai.sh", "olduvai"], "port.json items")
-need(a["title"] == "Olduvai", "title is not the engine's name")
+need(a["title"] == "Prehistorik (Olduvai)", "title")
+# The store's search reads title and desc only.
+need("Prehistorik" in a["desc"], "desc must name the game for search")
 need(a["rtr"] is False, "rtr must be false: the player brings the game")
 need(set(a["arch"]) == {"aarch64", "armhf"}, "arch")
 genres = {"action", "adventure", "arcade", "casino/card", "fps", "platformer",
           "puzzle", "racing", "rhythm", "rpg", "simulation", "sports",
           "strategy", "visual novel", "other"}
 need(a["genres"] and set(a["genres"]) <= genres, "genres not PortMaster's")
-for k in ("desc", "inst", "porter", "min_glibc"):
+for k in ("desc", "inst", "porter", "min_glibc", "store", "availability"):
     need(a.get(k), f"attr.{k} empty")
+need(a["availability"] == "paid", "availability")
+need(all(k in a["store"][0] for k in ("name", "gameurl", "developerurl")), "store entry")
 need("PREH.SQZ" in a["inst"] and "HISTORIK.EXE" in a["inst"],
      "inst must name both executable forms")
 need(re.fullmatch(r"[a-z0-9][a-z0-9._]*", "olduvai"), "portname")
@@ -81,10 +85,18 @@ g = ET.parse(f"{p}/gameinfo.xml").getroot().findall("game")
 need(len(g) == 1, "gameinfo.xml must hold one game")
 if g:
     need(g[0].findtext("path") == "./Olduvai.sh", "gameinfo path")
-    need(g[0].findtext("name") == "Olduvai", "gameinfo name")
+    need(g[0].findtext("name") == a["title"], "gameinfo name is not the title")
     img = g[0].findtext("image") or ""
     import os
-    need(os.path.isfile(os.path.join(p, img)), "gameinfo image does not ship")
+    # build_release.py places the root screenshot in the port folder.
+    need(img == "./olduvai/screenshot.png", "gameinfo image")
+    need(os.path.isfile(os.path.join(p, "screenshot.png")), "gameinfo image does not ship")
+    need(not os.path.exists(os.path.join(p, "olduvai", "screenshot.png")),
+         "a second screenshot in the port folder")
+# Both READMEs say where a player reports a problem.
+for r in ("README.md", "olduvai/README.txt"):
+    with open(f"{p}/{r}", encoding="utf-8") as f:
+        need("github.com/ksokolowski/olduvai/issues" in f.read(), f"{r} names no issues page")
 # The screenshot: PNG, 640x480 (the size PortMaster asks for).
 with open(f"{p}/screenshot.png", "rb") as f:
     head = f.read(24)

@@ -17,13 +17,14 @@ const std::vector<std::string>& supported_hd_profiles();
 // True iff `profile` is one of supported_hd_profiles().
 bool is_supported_hd_profile(const std::string& profile);
 
-// A saved or typed profile name in its current spelling: "xbr", the simple edge
-// blender this build no longer has, is now xBRZ.  Anything else is unchanged.
+// A saved or typed profile name in its current spelling: "xbr" (a simple edge
+// blender this build no longer has) and "xbrz" (the scaler xBRF replaced, with
+// the same pictures) are now xbrf.  Anything else is unchanged.
 std::string canonical_hd_profile(const std::string& profile);
 
 // The profile's scaler copies whole source pixels (palette and binary alpha
 // kept), so sprite transparency is re-stamped as a nearest upscale of the
-// source mask.  False for blending scalers (omniscale, xbrz), whose
+// source mask.  False for blending scalers (omniscale, xbrf), whose
 // anti-aliased edge is kept.  Every scaler must be classified here: a missing
 // palette-preserving one leaves a partial-alpha halo that no gameplay trace
 // catches.  Unknown profile: false.
@@ -35,13 +36,13 @@ bool profile_preserves_palette(const std::string& profile);
 std::string describe_hd_scaler(const std::string& profile, int scale);
 
 // The render scales the table runs: 2 to kMaxHdScale.  max_hd_scale() is the
-// largest a profile has a real scaler for: 6 for xBRZ and OmniScale (scalers
+// largest a profile has a real scaler for: 6 for xBRF and OmniScale (scalers
 // that take the factor), 4 for the rest (2x-based: chaining past x4
 // compounds artefacts).
 inline constexpr int kMaxHdScale = 6;
 int max_hd_scale(const std::string& profile);
 
-// The Options menu's name for a profile ("Off", "Scale2x/3x", "xBRZ"); empty
+// The Options menu's name for a profile ("Off", "Scale2x/3x", "xBRF"); empty
 // for an unknown one.  assets/data/menus.json carries the same names, and a test
 // holds the two together.
 std::string hd_profile_label(const std::string& profile);

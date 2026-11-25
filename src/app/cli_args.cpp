@@ -316,9 +316,9 @@ std::vector<Flag> flag_table(CliArgs& a, PlaySettings& ps,
          setting(ps.enhance_list, ps.cli.enhanced)},
         {"--hd-profile", nullptr, kEnhanced,
          "      --hd-profile <p>    HD upscaler profile: native|retro|smooth|\n"
-         "                          eagle|xbrz|mmpx|omniscale (default: omniscale).\n"
+         "                          eagle|xbrf|mmpx|omniscale (default: omniscale).\n"
          "                          At x3, smooth, eagle and mmpx all run Scale3x;\n"
-         "                          at x4 they run twice.  xbr is now xbrz.\n",
+         "                          at x4 they run twice.  xbr and xbrz read as xbrf.\n",
          setting(ps.hd_profile, ps.cli.hd)},
         {"--render-scale", nullptr, kEnhanced,
          "      --render-scale <n>  Integer render scale: 2 or 4 (default: 4).\n",

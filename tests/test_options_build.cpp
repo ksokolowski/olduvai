@@ -145,14 +145,17 @@ TEST_CASE("options_build: unknown --hd-profile is exit 2 and lists the set") {
     CHECK(bo.error.find("omniscale") != std::string::npos);   // the list
 }
 
-TEST_CASE("options_build: a saved xbr profile reads as xbrz") {
-    CliArgs a;
-    PlaySettings s;
-    s.hd_profile = "xbr";
-    GameOptions go;
-    const BuildOutcome bo = build_game_options(a, s, go);
-    CHECK(bo.ok);
-    CHECK(go.hd_profile == "xbrz");
+TEST_CASE("options_build: a saved xbr or xbrz profile reads as xbrf") {
+    for (const char* old : {"xbr", "xbrz"}) {
+        CAPTURE(old);
+        CliArgs a;
+        PlaySettings s;
+        s.hd_profile = old;
+        GameOptions go;
+        const BuildOutcome bo = build_game_options(a, s, go);
+        CHECK(bo.ok);
+        CHECK(go.hd_profile == "xbrf");
+    }
 }
 
 TEST_CASE("options_build: --transitions classic forces smooth-motion off") {

@@ -12,7 +12,7 @@
 #include "enhance/mmpx.hpp"
 #include "enhance/omniscale.hpp"
 #include "enhance/pixel_scalers.hpp"
-#include "enhance/xbrz_scale.hpp"
+#include "enhance/xbrf_cpu.hpp"
 
 namespace olduvai::enhance {
 
@@ -60,9 +60,9 @@ constexpr Scaler kScalers[] = {
       nearest(), nearest()}},
     {"eagle", "Eagle", true,
      {native2("Eagle", eagle_2x), no3x("Eagle"), twice("Eagle", eagle_2x), nearest(), nearest()}},
-    {"xbrz", "xBRZ", false,
-     {nativeN("xBRZ", xbrz_scale), nativeN("xBRZ", xbrz_scale), nativeN("xBRZ", xbrz_scale),
-      nativeN("xBRZ", xbrz_scale), nativeN("xBRZ", xbrz_scale)}},
+    {"xbrf", "xBRF", false,
+     {nativeN("xBRF", xbrf_for_cpu), nativeN("xBRF", xbrf_for_cpu), nativeN("xBRF", xbrf_for_cpu),
+      nativeN("xBRF", xbrf_for_cpu), nativeN("xBRF", xbrf_for_cpu)}},
     {"mmpx", "MMPX", true,
      {native2("MMPX", mmpx_2x), no3x("MMPX"), twice("MMPX", mmpx_2x), nearest(), nearest()}},
     {"omniscale", "OmniScale", false,
@@ -146,7 +146,7 @@ const std::vector<std::string>& supported_hd_profiles() {
 }
 
 std::string canonical_hd_profile(const std::string& profile) {
-    return profile == "xbr" ? "xbrz" : profile;
+    return profile == "xbr" || profile == "xbrz" ? "xbrf" : profile;
 }
 
 int max_hd_scale(const std::string& profile) {
@@ -167,7 +167,7 @@ bool is_supported_hd_profile(const std::string& profile) {
 bool profile_preserves_palette(const std::string& profile) {
     // Whole-pixel scalers carry only source colours, so the alpha mask is
     // re-stamped as a nearest upscale of the source; the blenders (omniscale,
-    // xbrz) keep their anti-aliased edge.
+    // xbrf) keep their anti-aliased edge.
     const Scaler* s = find_scaler(profile);
     return s && s->preserves_palette;
 }

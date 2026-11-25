@@ -18,6 +18,7 @@
 
 #include "core/build_id.hpp"
 #include "core/types.hpp"
+#include "enhance/cpu_kernels.hpp"
 #include "enhance/parallel_rows.hpp"
 #include "presentation/diag/debug_overlay.hpp"
 #include "presentation/image_out.hpp"
@@ -254,7 +255,8 @@ void md_display(std::ostream& f, const DisplayInfo& display) {
     }
     f << " |\n";
     f << "| Wide native width | " << display.ws_native_w << " |\n";
-    f << "| Upscale threads | " << display.upscale_threads << " |\n\n";
+    f << "| Upscale threads | " << display.upscale_threads << " |\n";
+    f << "| CPU kernels | " << display.cpu_kernels << " |\n\n";
 }
 
 void md_screenshots(std::ostream& f, bool has_presented, bool boss) {
@@ -466,6 +468,7 @@ DisplayInfo read_display_info(SDL_Renderer* ren, SDL_Window* win) {
     SDL_RenderGetLogicalSize(ren, &di.logical_w, &di.logical_h);
     if (win != nullptr) di.fullscreen = window_fullscreen(win);
     di.upscale_threads = enhance::parallel_row_threads();
+    di.cpu_kernels = enhance::kernel_description();
     return di;
 }
 

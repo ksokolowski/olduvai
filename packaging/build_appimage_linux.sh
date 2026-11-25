@@ -86,17 +86,8 @@ install -d "${appdir}/usr/bin/data"
 install -d "${appdir}/usr/bin/licenses"
 cp "${here}/LICENSE" "${appdir}/usr/bin/licenses/LICENSE.txt"
 cp "${here}/THIRD-PARTY-NOTICES.md" "${appdir}/usr/bin/licenses/"
-cp "${here}/third_party/nuked_opl3/LICENSE" "${appdir}/usr/bin/licenses/Nuked-OPL3-LICENSE.txt"
-# libmt32emu is vendored and statically linked (LGPL-2.1 §3 conversion to
-# GPL, same as Nuked-OPL3) — its text must ship with the binary.
-cp "${here}/third_party/mt32emu/COPYING.LESSER.txt" \
-   "${appdir}/usr/bin/licenses/libmt32emu-LICENSE.txt"
-cp "${here}/third_party/rtmidi/LICENSE" "${appdir}/usr/bin/licenses/RtMidi-LICENSE.txt"
-# FluidSynth (LGPL-2.1) and the gcem headers it builds with (Apache-2.0),
-# vendored and compiled in (third_party/fluidsynth/OLDUVAI-VENDORING.md).
-cp "${here}/third_party/fluidsynth/LICENSE" "${appdir}/usr/bin/licenses/FluidSynth-LICENSE.txt"
-cp "${here}/third_party/fluidsynth/gcem/LICENSE" "${appdir}/usr/bin/licenses/gcem-LICENSE.txt"
-cp "${here}/third_party/fluidsynth/gcem/NOTICE.txt" "${appdir}/usr/bin/licenses/gcem-NOTICE.txt"
+. "${here}/packaging/licenses.sh"
+copy_license_texts "${here}" "${appdir}/usr/bin/licenses" desktop
 
 # Desktop entry + icon (the app's own icon, not game content).  The desktop
 # file is named for the AppStream id, which its <launchable> must match.

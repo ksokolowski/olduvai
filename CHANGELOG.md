@@ -6,6 +6,27 @@ candidates for 1.0.0.
 
 ## Unreleased
 
+## 0.9.12 — 2026-11-25
+
+- **Changed: the xBRZ upscaler is now xBRF, Olduvai's own code**
+  (`--hd-profile xbrf`, *Options → Video → Upscaler: xBRF*; a saved `xbrz`
+  or `xbr` reads as `xbrf`).  Written in a clean room, it draws the same
+  pictures as xBRZ to the byte.  Zenju's xBRZ, which is GPL-3.0 only, is no
+  longer compiled in, so the binaries are GPL-3.0-or-later like the source.
+  It is also faster on the 32-bit handhelds: on the Powkiddy A12 a 320x200
+  page at x3 takes 41 ms instead of 58.
+- **Fixed: the licence notices of two upscalers ship with every package.**
+  OmniScale comes from SameBoy's shader and MMPX from its authors'
+  reference code, both MIT-licensed; their notices are now in
+  `THIRD-PARTY-NOTICES.md` and in every package's `licenses/` folder.
+- **Added: commercial licensing.**  Olduvai stays GPL for everyone; for use
+  under other terms, for example in a closed-source product, the README says
+  how to ask the author for a commercial licence.
+- **PortMaster: the port is listed as "Prehistorik (Olduvai)"**, so a
+  search for the game finds it, and its README says where to report a
+  problem: the bug report Select + left saves, the GitHub issues page, or
+  the Olduvai thread on the PortMaster Discord.
+
 ## 0.9.11 — 2026-10-21
 
 - **Fixed: the 32-bit handheld build runs on Cortex-A8 and A9 chips.**

@@ -66,9 +66,9 @@ check() {   # <name> <flags...>
 }
 
 check classic --render-scale 1 --window 640x400
-check enhanced --enhanced --hd-profile xbrz --render-scale 2 --aspect 4:3 \
+check enhanced --enhanced --hd-profile xbrf --render-scale 2 --aspect 4:3 \
     --window 640x480
-check widescreen --enhanced --hd-profile xbrz --render-scale 2 \
+check widescreen --enhanced --hd-profile xbrf --render-scale 2 \
     --aspect widescreen --window 712x400
 
 # A failed save says so: a file where the saves folder goes, so no

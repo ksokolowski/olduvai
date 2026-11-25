@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.21)
 project(olduvai
-    VERSION 0.9.11
+    VERSION 0.9.12
     DESCRIPTION "Native recreation of the Prehistorik (1991) engine"
     LANGUAGES CXX C)
 
@@ -195,11 +195,14 @@ add_library(olduvai_formats
     src/formats/voc.cpp
     src/formats/mdi.cpp
     src/enhance/parallel_rows.cpp
+    src/enhance/cpu_kernels.cpp
     src/enhance/mmpx.cpp
     src/enhance/omniscale.cpp
     src/enhance/pixel_scalers.cpp
-    src/enhance/xbrz_scale.cpp
-    third_party/xbrz/xbrz.cpp
+    src/enhance/xbrf_cpu.cpp
+    src/enhance/xbrf.cpp
+    src/enhance/xbrf_patterns.cpp
+    src/enhance/xbrf_hwdiv.cpp
     src/enhance/upscale.cpp
     src/enhance/incremental_upscale.cpp
     src/enhance/hd_asset_cache.cpp
@@ -227,23 +230,22 @@ add_library(olduvai_formats
     src/systems/fluid_bubbles.cpp
     ${CMAKE_BINARY_DIR}/generated/build_id.cpp
 )
-# omniscale and xBRZ are float arithmetic: keep a*b+c unfused so every platform rounds
+# omniscale and xBRF are float arithmetic: keep a*b+c unfused so every platform rounds
 # alike.  arm64 clang contracts to FMA by default and x86 GCC / MSVC do not;
 # that alone made two test_scaler_goldens cells differ between the Mac and CI.
+# xbrf_hwdiv.cpp is xBRF's second copy (src/enhance/cpu_kernels.hpp): on armhf
+# built with hardware divide and picked at run time where the CPU has it; the
+# toolchain file names the flags.  Elsewhere it is built as the first, so
+# test_upscale holds the two copies the same on every host.
 if(NOT MSVC)
-    set_source_files_properties(src/enhance/omniscale.cpp
+    set_source_files_properties(src/enhance/omniscale.cpp src/enhance/xbrf.cpp
         PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+    set(_olduvai_hwdiv_opts ${OLDUVAI_HWDIV_CPU_FLAGS} -ffp-contract=off)
+    set_source_files_properties(src/enhance/xbrf_hwdiv.cpp
+        PROPERTIES COMPILE_OPTIONS "${_olduvai_hwdiv_opts}")
 endif()
-# xBRZ is vendored upstream code: unfused for the same reason, and its own
-# warnings (GCC's -Wconversion on olduvai_formats, MSVC's /W4) are not ours to
-# fix, the policy olduvai_silence_vendored_target applies to the other vendored
-# sources.  Per source, because the file is compiled straight into olduvai_formats.
-if(MSVC)
-    set_source_files_properties(third_party/xbrz/xbrz.cpp
-        PROPERTIES COMPILE_OPTIONS "/w")
-else()
-    set_source_files_properties(third_party/xbrz/xbrz.cpp
-        PROPERTIES COMPILE_OPTIONS "-ffp-contract=off;-w")
+if(OLDUVAI_HWDIV_CPU_FLAGS)
+    target_compile_definitions(olduvai_formats PRIVATE OLDUVAI_HWDIV_KERNELS=1)
 endif()
 # The build ID (src/core/build_id.hpp): hash + commit time, or -dirty + build
 # time.  Regenerated on EVERY build by cmake/build_id.cmake — rewritten only
@@ -290,7 +292,6 @@ endif()
 
 target_include_directories(olduvai_formats PUBLIC src)
 target_include_directories(olduvai_formats SYSTEM PUBLIC third_party/stb)
-target_include_directories(olduvai_formats SYSTEM PRIVATE third_party/xbrz)
 
 # HD bake compression (OPTIONAL).  The upscaled cache stores palette art as
 # 32-bit RGBA — ~17 distinct colours in a 4 MB frame — so deflate takes the
@@ -1111,6 +1112,12 @@ endif()
 # condition, plus an interpreter) so a host without sh drops it as a unit
 # instead of registering 18 unlaunchable tests.
 if(SDL2_FOUND AND _olduvai_shell_tests)
+    # The licence texts every package carries (packaging/licenses.sh) against
+    # THIRD-PARTY-NOTICES.md, both naming styles.  No game files.
+    add_test(NAME licenses
+        COMMAND ${OLDUVAI_TEST_SH} "${CMAKE_SOURCE_DIR}/tests/licenses.sh"
+                "${CMAKE_SOURCE_DIR}")
+
     # The TrimUI port bundle.  Needs NEITHER SDL2 NOR game files — it builds its
     # own fixtures.  It sits inside this block only to inherit the interpreter
     # guard above, which is what keeps .sh tests launchable on Windows.

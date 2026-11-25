@@ -45,7 +45,7 @@ TEST_CASE("options: key_quit comes from the config like the other key_*") {
 
 TEST_CASE("options: config fills what the CLI left") {
     PlaySettings s;
-    Config c = {{"enhanced", "true"},   {"hd_profile", "xbrz"},
+    Config c = {{"enhanced", "true"},   {"hd_profile", "xbrf"},
                 {"render_scale", "2"},  {"aspect", "widescreen"},
                 {"vga_scan", "false"},  {"autofire", "fast"},
                 {"music_device", "opl"},{"game_dir", "/tmp/prehistorik"},
@@ -53,7 +53,7 @@ TEST_CASE("options: config fills what the CLI left") {
                 {"audio_rate", "44100"},{"bug_report_dir", "/tmp/bugs"}};
     merge_config(s, c);
     CHECK(s.enhanced == true);
-    CHECK(s.hd_profile == "xbrz");
+    CHECK(s.hd_profile == "xbrf");
     CHECK(s.render_scale == 2);
     CHECK(s.aspect == "widescreen");
     CHECK(s.vga_scan == false);
@@ -85,7 +85,7 @@ TEST_CASE("options: CLI flags beat config on every flagged key") {
     s.vga_scan = false;  s.cli.vga_scan = true;
     s.autofire = "slow"; s.cli.autofire = true;
     s.game_dir = "/cli"; s.cli.game_dir = true;
-    merge_config(s, {{"enhanced", "false"}, {"hd_profile", "xbrz"},
+    merge_config(s, {{"enhanced", "false"}, {"hd_profile", "xbrf"},
                      {"render_scale", "4"}, {"vga_scan", "true"},
                      {"autofire", "off"},   {"game_dir", "/cfg"}});
     CHECK(s.enhanced == true);
@@ -413,7 +413,7 @@ TEST_CASE("layers: --default-profile seeds below play.json") {
     const LayeredConfig lc = layer_config({{"render_scale", "2"}}, "", "hd-handheld");
     CHECK(lc.family == "handheld");
     CHECK(lc.merged.at("render_scale") == "2");       // play.json wins
-    CHECK(lc.merged.at("hd_profile") == "xbrz");      // the default fills the rest
+    CHECK(lc.merged.at("hd_profile") == "xbrf");      // the default fills the rest
     CHECK(lc.merged.at("smooth_subframes") == "2");
     CHECK(lc.warnings.empty());
 }
@@ -475,7 +475,7 @@ TEST_CASE("layers: CLI flags still beat every layer") {
     s.cli.scale = true;
     merge_config(s, layer_config({}, "", "hd-handheld").merged);
     CHECK(s.render_scale == 2);
-    CHECK(s.hd_profile == "xbrz");
+    CHECK(s.hd_profile == "xbrf");
 }
 
 TEST_CASE("layers: an unknown --default-profile warns and plays desktop defaults") {
@@ -569,7 +569,7 @@ TEST_CASE("profiles: the handheld pair's auto pins read the session panel") {
         CHECK(lc.merged.at("render_scale") == "2");
     }
     // the rest of the pair is fixed
-    CHECK(builtin_profile("hd-handheld").at("hd_profile") == "xbrz");
+    CHECK(builtin_profile("hd-handheld").at("hd_profile") == "xbrf");
     CHECK(layer_config({}, "", "dos-handheld").family == "handheld");
 }
 
@@ -620,7 +620,7 @@ TEST_CASE("save-config then merge: every CLI-stated setting round-trips") {
     s.render_scale = 2;              s.cli.scale = true;
     s.vga_scan = false;              s.cli.vga_scan = true;
     s.autofire = "medium";           s.cli.autofire = true;
-    s.hd_profile = "xbrz";            s.cli.hd = true;
+    s.hd_profile = "xbrf";            s.cli.hd = true;
     s.music_device = "gm-builtin";   s.cli.music_device = true;
     s.sfx_backend = "sb-dac";        s.cli.sfx_backend = true;
     s.display_mode = "cpu";          s.cli.display_mode = true;

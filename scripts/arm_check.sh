@@ -10,6 +10,8 @@
 # from --bins), then in a Debian arm64 container (Podman, or Docker):
 #   - armhf `--version` on QEMU's Cortex-A7 and Cortex-A9 models: the A9 has
 #     no hardware divide, so an A7-only binary dies there;
+#   - an Enhanced xBRF frame on both: the hardware-divide copy runs on the
+#     A7 only, and every variant draws the same frame;
 #   - all golden-trace scenarios of tests/golden_trace_*.sh: aarch64 native,
 #     armhf under qemu-arm as a Cortex-A9, each trace diffed against its
 #     golden (zero tolerance, as the desktop corpus).
@@ -30,7 +32,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --bins) BINS="$2"; shift 2 ;;
         --out)  OUT="$2"; shift 2 ;;
-        -h|--help) sed -n '4,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '4,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "arm_check: unknown option '$1'" >&2; exit 2 ;;
     esac
 done
@@ -96,6 +98,28 @@ for cpu in cortex-a7 cortex-a9; do
         echo "FAIL: armhf --version on $cpu: $v"; fail=1
     fi
 done
+# The hardware-divide xBRF copy (src/enhance/cpu_kernels.hpp): chosen on the
+# A7, not on the A9 or when forced off, and the same Enhanced frame each way.
+shots=""
+for k in "cortex-a7 hardware" "cortex-a7 baseline OLDUVAI_KERNELS=baseline" \
+         "cortex-a9 baseline"; do
+    read -r cpu want envs <<< "$k"
+    log=$(mktemp); png=$(mktemp --suffix=.png); cfg=$(mktemp -d)
+    # shellcheck disable=SC2086  # envs is a word list
+    env XDG_CONFIG_HOME="$cfg" OLDUVAI_PANEL=1024x600 $envs timeout 1200 \
+        qemu-arm -cpu "$cpu" /w/bins/olduvai.armhf --game-dir /w/game --play \
+        --level 1 --profile hd-handheld --window 1024x600 --hd-profile xbrf \
+        --render-scale 3 --replay /w/fx/deep_run_l1_in.jsonl --play-shot "$png" \
+        --play-shot-frame 300 --play-frames 310 > "$log" 2>&1
+    got=$(sed -n 's/^cpu: kernels //p' "$log")
+    h=$(sha256sum "$png" | cut -c1-16)
+    echo "  armhf xbrf on $cpu${envs:+ ($envs)}: $got, frame $h"
+    case "$got" in "$want"*) ;; *) echo "FAIL: expected $want kernels"; fail=1 ;; esac
+    shots="$shots $h"
+    rm -rf "$log" "$png" "$cfg"
+done
+[ "$(tr ' ' '\n' <<< "$shots" | sed '/^$/d' | sort -u | wc -l)" -eq 1 ] || {
+    echo "FAIL: the kernel variants drew different frames"; fail=1; }
 one() {   # <scenario line> <runner...>
     IFS=$'\t' read -r name level ss script golden frames flags envs <<< "$1"; shift
     sst=""; [ "$ss" != "-" ] && sst="--start-screen $ss"

@@ -42,6 +42,8 @@ STRIP="${LLVM_STRIP:-$(command -v llvm-strip || echo /opt/homebrew/opt/llvm/bin/
 [ -x "$STRIP" ] || { echo "build_knulli_release: needs llvm-strip (brew install llvm)" >&2; exit 2; }
 READELF="${LLVM_READELF:-$(command -v llvm-readelf || echo /opt/homebrew/opt/llvm/bin/llvm-readelf)}"
 [ -x "$READELF" ] || { echo "build_knulli_release: needs llvm-readelf (brew install llvm)" >&2; exit 2; }
+OBJDUMP="${LLVM_OBJDUMP:-$(command -v llvm-objdump || echo /opt/homebrew/opt/llvm/bin/llvm-objdump)}"
+[ -x "$OBJDUMP" ] || { echo "build_knulli_release: needs llvm-objdump (brew install llvm)" >&2; exit 2; }
 VER=$(awk '/^project\(olduvai/ {p = 1} p && $1 == "VERSION" {print $2; exit}' \
           "$SRC/CMakeLists.txt")
 [ -n "$VER" ] || { echo "build_knulli_release: no VERSION in $SRC/CMakeLists.txt" >&2; exit 1; }
@@ -69,6 +71,11 @@ build() {   # device arch sysroot xtool
     if printf '%s\n' "$syms" | grep -E " [0-9]+ (memset|memcpy|memmove)$" >/dev/null; then
         echo "build_knulli_release: olduvai.$arch exports its own memset/memcpy/memmove" >&2
         exit 1
+    fi
+    # armhf: hardware divides only in xBRF's copy picked at run time, and
+    # that copy calls none of the first's code (scripts/check_hwdiv.sh).
+    if [ "$arch" = armhf ]; then
+        OBJDUMP="$OBJDUMP" sh "$SRC/scripts/check_hwdiv.sh" "$b/olduvai" >/dev/null || exit 1
     fi
     rm -rf "${OUT:?}/${dev:?}"
     bash "$SRC/packaging/build_port_knulli.sh" --public --device "$dev" \

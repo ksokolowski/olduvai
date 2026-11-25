@@ -23,7 +23,7 @@ the rest.  No game data ships here, and CI makes sure it stays that way
 
 ## Status
 
-**Release candidate: 0.9.11.**  The whole game plays, on the desktop and on
+**Release candidate: 0.9.12.**  The whole game plays, on the desktop and on
 handhelds: seven levels, three boss fights, caves, secret rooms, the balloon
 flights and the ending.  No known bugs.  Every frame is checked against an
 independent reference implementation, in lockstep, with zero tolerance.
@@ -207,3 +207,7 @@ The complete position is in [LEGAL.md](LEGAL.md); in short:
 GPL-3.0-or-later: [LICENSE](LICENSE).  Third-party components:
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) (release binaries carry the
 texts in `licenses/`).
+
+Olduvai stays free software under the GPL for everyone.  To use it under
+other terms, for example in a closed-source or commercial product, ask the
+author about a commercial licence: krzysiek.sokolowski@gmail.com.
